@@ -43,15 +43,24 @@ def compute_expected_data(data, p, collective):
     return expected_res
 
 # Gets the distance of the peer of rank 'id' at the step-th step on a dimension-dimensional network, considering the next_direction
-def get_distance(id, step, next_direction, dimensions):
-    distances = [1, 1, 3, 5, 11, 21, 43, 85] # Jacobsthal sequence!! (https://oeis.org/search?q=1%2C+1%2C+3%2C+5%2C+11%2C+21&language=english&go=Search)
+def get_distance(id, step, dimensions):
+    distances = [1, 1, 3, 5, 11, 21, 43, 85] # Jacobsthal sequence!! (https://oeis.org/search?q=1%2C+1%2C+3%2C+5%2C+11%2C+21&language=english&go=Search)   
     dim = step % len(dimensions)
     step_relative_to_dim = step // len(dimensions)
-    return (next_direction[id][dim])*distances[step_relative_to_dim]
+    # Derive next_direction starting from id, step, dimensions
+    coord = get_coord_from_id(id, dimensions)
+    # In which direction did I start on the target dimension?
+    # If my coordinate on that dimension is even, then it started from positive
+    # otherwise from negative
+    if coord[dim] % 2 == 0:
+        next_direction = (-1)**step_relative_to_dim
+    else:
+        next_direction = -1 * ((-1)**step_relative_to_dim)
+    return next_direction*distances[step_relative_to_dim]
 
 # Gets the peer of rank 'id' at the step-th step on a dimension-dimensional network, considering the next_direction
-def get_peer(id, step, next_direction, dimensions):
-    distance = get_distance(id, step, next_direction, dimensions)
+def get_peer(id, step, dimensions):
+    distance = get_distance(id, step, dimensions)
     coord = get_coord_from_id(id, dimensions)
     target_dim =  step % len(dimensions) # TODO: Extend for the cases where we start from different dimensions (multiported)
     peer_coord = coord
@@ -65,13 +74,15 @@ def find_reducescatter_indexes(dimensions, starting_step, sender):
     for d in dimensions:
         p *= d
     steps = int(math.log2(p))
-    d = [1, 1, 3, 5, 11, 21, 43, 85, 171, 341]
+    dist = [1, 1, 3, 5, 11, 21, 43, 85, 171, 341]
     a = [-1]*p
+    # 
     for step in range(starting_step, steps):
+        step_relative_to_dimension = step // len(dimensions)
         # Direction is positive only when sender and step are both even, or when they are both odd.
         # In both cases their sum is going to be a positive number, and then the power will be a +1
         pos_or_neg = (-1)**(sender+step) 
-        dest = (sender + pos_or_neg*d[step]) % len(a) 
+        dest = (sender + pos_or_neg*dist[step_relative_to_dimension]) % p
         a[dest] = step
         sender = dest
         if step != steps - 1:
@@ -80,7 +91,7 @@ def find_reducescatter_indexes(dimensions, starting_step, sender):
                     # Direction is positive only when x and the next step (step+1) are both even, or when they are both odd.
                     # In both cases their sum is going to be a positive number, and then the power will be a +1
                     pos_or_neg = (-1)**(x+(step+1))
-                    dest = (x + pos_or_neg*d[step + 1]) % len(a)
+                    dest = (x + pos_or_neg*dist[step + 1]) % len(a)
                     a[dest] = step + 1
     a = np.array(a)
     a[a >= 0] = 1
@@ -114,29 +125,18 @@ def run_collectives(dimensions, data, collective):
     for d in dimensions:
         p *= d
 
-    next_direction = np.zeros((p, len(dimensions))) # For each dimension, each rank remembers on which direction it should send next time
     sum_of_distances = 0
     sum_of_distances_ref = 0
     bw_new = 0
     bw_ref = 0
     bw_ideal = 0
 
-    # Set starting directions
-    for i in range(0, p):
-        coord = get_coord_from_id(i, dimensions)
-        for c in range(0, len(coord)):
-            if coord[c] % 2 == 0:
-                next_direction[i][c] = 1
-            else:
-                next_direction[i][c] = -1
-
     for step in range(0, int(math.log2(p))):        
         data_c = copy.deepcopy(data)
         # Bit array to check that no one sends the same data to more than one node
         recv_from = np.zeros(p)
-        for rank in range(0, p):                   
-            peer = get_peer(rank, step, next_direction, dimensions)         
-            next_direction[rank][step % len(dimensions)] *= -1
+        for rank in range(0, p):             
+            peer = get_peer(rank, step, dimensions)         
             # Check that each node sends at most at one node
             if recv_from[peer]:
                 print("Double recv")
@@ -151,7 +151,7 @@ def run_collectives(dimensions, data, collective):
                 exit(-1)
 
         # Compute some stats
-        distance = abs(get_distance(0, step, next_direction, dimensions))
+        distance = abs(get_distance(0, step, dimensions))
         sum_of_distances += distance         
         bw_ideal += (1/2**(step+1)) 
         bw_new += (1/2**(step+1))*distance
@@ -161,10 +161,10 @@ def run_collectives(dimensions, data, collective):
     return (data, sum_of_distances, sum_of_distances_ref, bw_new, bw_ref, bw_ideal)
 
 def main():
-    #collective = "ALLREDUCE"
-    collective = "REDUCESCATTER"
-    #dimensions = [32, 32]
-    dimensions = [64]
+    collective = "ALLREDUCE"
+    #collective = "REDUCESCATTER"
+    dimensions = [32, 32]
+    #dimensions = [64]
     p = 1
     for d in dimensions:
         p *= d
