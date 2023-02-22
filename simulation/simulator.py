@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 import math
 import copy
 import math
 import numpy as np
+import random
 
 # Convert a rank id into a list of d-dimensional coordinates
 def get_coord_from_id(id, dimensions):
@@ -56,29 +58,28 @@ def get_peer(id, step, next_direction, dimensions):
     peer_coord[target_dim] = (peer_coord[target_dim] + distance) % dimensions[target_dim]
     return int(get_id_from_coord(peer_coord, dimensions))
 
-def find_reducescatter_indexes(p, starting_step, root):
-    # To have it more generic, I could just always assume root 0
-    # and then add the root later.    
+def find_reducescatter_indexes(dimensions, starting_step, sender):
+    # To have it more generic, I could just always assume sender 0
+    # and then add the sender later.    
+    p = 1
+    for d in dimensions:
+        p *= d
     steps = int(math.log2(p))
     d = [1, 1, 3, 5, 11, 21, 43, 85, 171, 341]
     a = [-1]*p
     for step in range(starting_step, steps):
-        if (root % 2 == 0 and step % 2 == 0) or \
-           (root % 2 != 0 and step % 2 != 0):
-            pos_or_neg = 1
-        else:
-            pos_or_neg = -1            
-        dest = (root + pos_or_neg*d[step]) % len(a) 
+        # Direction is positive only when sender and step are both even, or when they are both odd.
+        # In both cases their sum is going to be a positive number, and then the power will be a +1
+        pos_or_neg = (-1)**(sender+step) 
+        dest = (sender + pos_or_neg*d[step]) % len(a) 
         a[dest] = step
-        root = dest
+        sender = dest
         if step != steps - 1:
             for x in range(0, len(a)):
                 if a[x] <= step and a[x] != -1:
-                    if (x % 2 == 0 and (step + 1) % 2 == 0) or \
-                       (x % 2 != 0 and (step + 1) % 2 != 0):
-                        pos_or_neg = 1
-                    else:
-                        pos_or_neg = -1
+                    # Direction is positive only when x and the next step (step+1) are both even, or when they are both odd.
+                    # In both cases their sum is going to be a positive number, and then the power will be a +1
+                    pos_or_neg = (-1)**(x+(step+1))
                     dest = (x + pos_or_neg*d[step + 1]) % len(a)
                     a[dest] = step + 1
     a = np.array(a)
@@ -87,14 +88,13 @@ def find_reducescatter_indexes(p, starting_step, root):
     #print("Step " + str(starting_step) + ": " + str(a))
     return a
 
-def recv(receiver, sender, data_new, data_old, collective, step):
+def recv(dimensions, receiver, sender, data_new, data_old, collective, step):
     if collective == "ALLREDUCE":
         # Aggregate
         for k in range(0, len(data_new[receiver])):
             data_new[receiver][k] += data_old[sender][k]
     else: # REDUCESCATTER
-        p = len(data_new)
-        a = find_reducescatter_indexes(p, step, sender)
+        a = find_reducescatter_indexes(dimensions, step, sender)
         for k in range(0, len(data_new[receiver])):
             if a[k]:
                 actual_block = k
@@ -102,92 +102,100 @@ def recv(receiver, sender, data_new, data_old, collective, step):
 
 #find_reducescatter_indexes(1024, 0, 0)
 
-# Algo:
-# 1. I take the tuple representing the coordinates
-# 2. Each node proceeds one dimension at a time (in a synchronized way, e.g. x first, then y, then z)
-# 3. Once a dimension is decided, the decision is whether to go on the positive or negative direction. 
-#    Let us suppose that in the first step everyone picks the x dimension. Even nodes on that dimension
-#    will send towards the positive direction, odd nodes towards the negative direction.
 
-#collective = "ALLREDUCE"
-collective = "REDUCESCATTER"
+def run_collectives(dimensions, data, collective):
+    # Algo:
+    # 1. I take the tuple representing the coordinates
+    # 2. Each node proceeds one dimension at a time (in a synchronized way, e.g. x first, then y, then z)
+    # 3. Once a dimension is decided, the decision is whether to go on the positive or negative direction. 
+    #    Let us suppose that in the first step everyone picks the x dimension. Even nodes on that dimension
+    #    will send towards the positive direction, odd nodes towards the negative direction.
+    p = 1
+    for d in dimensions:
+        p *= d
 
-dimensions = [32, 32]
-#dimensions = [64]
-p = 1
-for d in dimensions:
-    p *= d
+    next_direction = np.zeros((p, len(dimensions))) # For each dimension, each rank remembers on which direction it should send next time
+    sum_of_distances = 0
+    sum_of_distances_ref = 0
+    bw_new = 0
+    bw_ref = 0
+    bw_ideal = 0
 
-data = np.zeros((p, p))
-next_direction = np.zeros((p, len(dimensions))) # For each dimension, each rank remembers on which direction it should send next time
-sum_of_distances = 0
-sum_of_distances_ref = 0
-bw_new = 0
-bw_ref = 0
-bw_ideal = 0
+    # Set starting directions
+    for i in range(0, p):
+        coord = get_coord_from_id(i, dimensions)
+        for c in range(0, len(coord)):
+            if coord[c] % 2 == 0:
+                next_direction[i][c] = 1
+            else:
+                next_direction[i][c] = -1
 
-# Set starting directions
-for i in range(0, p):
-    coord = get_coord_from_id(i, dimensions)
-    for c in range(0, len(coord)):
-        if coord[c] % 2 == 0:
-            next_direction[i][c] = 1
-        else:
-            next_direction[i][c] = -1
+    for step in range(0, int(math.log2(p))):        
+        data_c = copy.deepcopy(data)
+        # Bit array to check that no one sends the same data to more than one node
+        recv_from = np.zeros(p)
+        for rank in range(0, p):                   
+            peer = get_peer(rank, step, next_direction, dimensions)         
+            next_direction[rank][step % len(dimensions)] *= -1
+            # Check that each node sends at most at one node
+            if recv_from[peer]:
+                print("Double recv")
+                exit(-1)
+            #print("Step " + str(i) + ": " + str(j) + "->" + str(peer))
+            recv_from[peer] = 1
+            recv(dimensions, rank, peer, data_c, data, collective, step)
+        # Check that everyone sent something
+        for k in range(0, p):
+            if not recv_from[k]:
+                print("Nosent")
+                exit(-1)
 
-# Initialize random starting data
-for i in range(0, p):
-    for j in range(0, p):
-        data[i][j] = random.randint(0, 100)
+        # Compute some stats
+        distance = abs(get_distance(0, step, next_direction, dimensions))
+        sum_of_distances += distance         
+        bw_ideal += (1/2**(step+1)) 
+        bw_new += (1/2**(step+1))*distance
+        sum_of_distances_ref += 2**(step / len(dimensions))
+        bw_ref += (1/2**(step+1))*2**(step / len(dimensions))
+        data = copy.deepcopy(data_c)
+    return (data, sum_of_distances, sum_of_distances_ref, bw_new, bw_ref, bw_ideal)
 
-expected_res = compute_expected_data(data, p, collective)
+def main():
+    #collective = "ALLREDUCE"
+    collective = "REDUCESCATTER"
+    #dimensions = [32, 32]
+    dimensions = [64]
+    p = 1
+    for d in dimensions:
+        p *= d
 
-for step in range(0, int(math.log2(p))):        
-    data_c = copy.deepcopy(data)
-    # Bit array to check that no one sends the same data to more than one node
-    recv_from = np.zeros(p)
-    for rank in range(0, p):                   
-        peer = get_peer(rank, step, next_direction, dimensions)         
-        next_direction[rank][step % len(dimensions)] *= -1
-        # Check that each node sends at most at one node
-        if recv_from[peer]:
-            print("Double recv")
-            exit(-1)
-        #print("Step " + str(i) + ": " + str(j) + "->" + str(peer))
-        recv_from[peer] = 1
-        recv(rank, peer, data_c, data, collective, step)
-    # Check that everyone sent something
-    for k in range(0, p):
-        if not recv_from[k]:
-            print("Nosent")
-            exit(-1)
+    # Initialize random starting data
+    data = np.zeros((p, p))
+    for i in range(0, p):
+        for j in range(0, p):
+            data[i][j] = random.randint(0, 100)
+    expected_res = compute_expected_data(data, p, collective)
 
-    # Compute some stats
-    distance = abs(get_distance(0, step, next_direction, dimensions))
-    sum_of_distances += distance         
-    bw_ideal += (1/2**(step+1)) 
-    bw_new += (1/2**(step+1))*distance
-    sum_of_distances_ref += 2**(step / len(dimensions))
-    bw_ref += (1/2**(step+1))*2**(step / len(dimensions))
-    data = copy.deepcopy(data_c)
+    data, sum_of_distances, sum_of_distances_ref, bw_new, bw_ref, bw_ideal = run_collectives(dimensions, data, collective)
+    # Check correctness of the result
+    # For reduce scatter, clean the partially reduced data
+    if collective == "REDUCESCATTER":
+        for i in range(0, p):
+            for j in range(0, p):
+                if i != j:
+                    data[i][j] = 0
 
-# Check correctness of the result
-# For reduce scatter, clean the partially reduced data
-for i in range(0, p):
-    for j in range(0, p):
-        if i != j:
-            data[i][j] = 0
-fail = False
-for i in range(0, p):
-    for j in range(0, p):
-        if data[i][j] != expected_res[i][j]:
-            print("FAIL!")
-            exit(1)
+    for i in range(0, p):
+        for j in range(0, p):
+            if data[i][j] != expected_res[i][j]:
+                print("FAIL!")
+                #print(data)
+                #print(expected_res)
+                exit(1)
+    
+    print("Sum of distances: " + str(sum_of_distances) + " ref: " + str(sum_of_distances_ref))
+    print("Bw new: " + str(bw_new) + " bw ref: " + str(bw_ref) + " bw ideal: " + str(bw_ideal))
 
-#print(data)
-#print(expected_res)
-print("Sum of distances: " + str(sum_of_distances) + " ref: " + str(sum_of_distances_ref))
-print("Bw new: " + str(bw_new) + " bw ref: " + str(bw_ref) + " bw ideal: " + str(bw_ideal))
-
-
+if __name__ == "__main__":
+    main()
 
