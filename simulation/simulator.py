@@ -48,7 +48,7 @@ def compute_expected_data(data, p, collective):
 
 # Gets the distance of the peer of rank 'sender' at the step-th step on a dimension-dimensional network, considering the next_direction
 def get_peer_distance(sender, step, dimensions, collective):
-    distances = [1, 1, 3, 5, 11, 21, 43, 85, 171, 341] # Jacobsthal sequence!! (https://oeis.org/search?q=1%2C+1%2C+3%2C+5%2C+11%2C+21&language=english&go=Search)   
+    distances = [1, 1, 3, 5, 11, 21, 43, 85, 171, 341] # Jacobsthal sequence!! (https://oeis.org/search?q=1%2C+1%2C+3%2C+5%2C+11%2C+21&language=english&go=Search)
     dim = step % len(dimensions)
     step_relative_to_dim = step // len(dimensions)
     # Derive next_direction starting from sender, step, dimensions
@@ -74,6 +74,8 @@ def get_peer(sender, step, dimensions, collective):
     peer_coord[target_dim] = (peer_coord[target_dim] + distance) % dimensions[target_dim]
     return int(get_id_from_coord(peer_coord, dimensions))
 
+# Returns a list of indexes of the data to be sent in a reduce-scatter collective
+# by 'sender' at step 'step' on a torus with 'dimensions' dimensions.
 def find_reducescatter_indexes(sender, step, dimensions):
     p = 1
     for d in dimensions:
@@ -88,6 +90,8 @@ def find_reducescatter_indexes(sender, step, dimensions):
             l += find_reducescatter_indexes(peer, s + 1, dimensions) # ... plus all the nodes that those nodes reach.
         return l 
 
+# Returns a list of indexes of the data to be sent in an allgather collective
+# by 'sender' at step 'step' on a torus with 'dimensions' dimensions.
 def find_allgather_indexes(sender, step, dimensions):
     if step == 0: # Base case
         return [sender]
@@ -99,6 +103,7 @@ def find_allgather_indexes(sender, step, dimensions):
         l += find_allgather_indexes(peer, step - 1, dimensions)
         return l 
 
+# Moves data from sender to receiver
 def send(sender, step, dimensions, receiver, data_old, data_new, collective):
     if collective == "ALLREDUCE":
         # Aggregate
@@ -115,6 +120,7 @@ def send(sender, step, dimensions, receiver, data_old, data_new, collective):
         for k in a:
             data_new[receiver][k] = data_old[sender][k]
 
+# Run a collective 'collective' on the data 'data' on a torus with 'dimensions' dimensions.
 def run_collectives(dimensions, data, collective):
     # Algo:
     # 1. I take the tuple representing the coordinates
@@ -173,8 +179,8 @@ def main():
     #collective = "ALLREDUCE"
     #collective = "REDUCESCATTER"
     collective = "ALLGATHER"
-    dimensions = [8, 8, 8]
-    #dimensions = [8]
+    #dimensions = [8, 8, 8]
+    dimensions = [8, 8]
     p = 1
     for d in dimensions:
         p *= d
