@@ -131,3 +131,4 @@ dmypy.json
 # My files
 mpi/swing.o
 mpi/swing.so
+mpi/test
