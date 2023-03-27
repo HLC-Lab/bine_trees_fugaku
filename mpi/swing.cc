@@ -37,100 +37,108 @@ typedef enum{
 }Algo;
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
-                    dimensions_num = 1, latency_optimal_threshold = 1024;
+                    dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0;
 static Algo algo;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 
 void read_env(MPI_Comm comm){
-    char* env_str = getenv("LIBSWING_DISABLE_REDUCESCATTER");
+    char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
     if(env_str){
-        disable_reducescatter = atoi(env_str);
+        force_env_reload = atoi(env_str);
     }
 
-    env_str = getenv("LIBSWING_DISABLE_ALLGATHERV");
-    if(env_str){
-        disable_allgatherv = atoi(env_str);
-    }
-
-    env_str = getenv("LIBSWING_DISABLE_ALLGATHER");
-    if(env_str){
-        disable_allgather = atoi(env_str);
-    }
-
-    env_str = getenv("LIBSWING_DISABLE_ALLREDUCE");
-    if(env_str){
-        disable_allreduce = atoi(env_str);
-    }
-
-    env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
-    if(env_str){
-        latency_optimal_threshold = atoi(env_str);
-    }
-
-    env_str = getenv("LIBSWING_ALGO");
-    if(env_str){
-        if(strcmp(env_str, "SWING") == 0){
-            algo = ALGO_SWING;
-        }else if(strcmp(env_str, "RING") == 0){
-            algo = ALGO_RING;
-        }else if(strcmp(env_str, "RECDOUB") == 0){
-            algo = ALGO_RECDOUB;
+    if(!env_read || force_env_reload){
+        env_read = 1;
+        env_str = getenv("LIBSWING_DISABLE_REDUCESCATTER");
+        if(env_str){
+            disable_reducescatter = atoi(env_str);
         }
-    }
 
-    env_str = getenv("LIBSWING_DIMENSIONS");
-    if(env_str){
-        char* copy = (char*) malloc(sizeof(char)*(strlen(env_str) + 1));
-        strcpy(copy, env_str);
-        const char *delim = ",";
-        char* rest = NULL;
-        char *ptr = strtok_r(copy, delim, &rest);
-        uint i = 0;
-        while(ptr != NULL){
-            dimensions[i] = atoi(ptr);
-            ptr = strtok_r(NULL, delim, &rest);
-            ++i;
-        } 
-        free(copy);
-        dimensions_num = i;       
-    }else{
-        int size;
-        MPI_Comm_size(comm, &size);
-        dimensions[0] = size;
-    }
+        env_str = getenv("LIBSWING_DISABLE_ALLGATHERV");
+        if(env_str){
+            disable_allgatherv = atoi(env_str);
+        }
 
-#ifdef DEBUG
-    int rank;
-    MPI_Comm_rank(comm, &rank);
-    if(rank == 0){
-        printf("Libswing called. Environment:\n");
-        printf("------------------------------------\n");
-        printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
-        printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
-        printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
-        printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
-        printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
-        printf("LIBSWING_ALGO: %d\n", algo);
-        printf("LIBSWING_DIMENSIONS: ");
-        for(size_t i = 0; i < dimensions_num; i++){
-            printf("%d", dimensions[i]);
-            if(i < dimensions_num - 1){
-                printf(",");
+        env_str = getenv("LIBSWING_DISABLE_ALLGATHER");
+        if(env_str){
+            disable_allgather = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_DISABLE_ALLREDUCE");
+        if(env_str){
+            disable_allreduce = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
+        if(env_str){
+            latency_optimal_threshold = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "SWING") == 0){
+                algo = ALGO_SWING;
+            }else if(strcmp(env_str, "RING") == 0){
+                algo = ALGO_RING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                algo = ALGO_RECDOUB;
             }
         }
-        printf("\n");
-        printf("------------------------------------\n");
-    }
+
+        env_str = getenv("LIBSWING_DIMENSIONS");
+        if(env_str){
+            char* copy = (char*) malloc(sizeof(char)*(strlen(env_str) + 1));
+            strcpy(copy, env_str);
+            const char *delim = ",";
+            char* rest = NULL;
+            char *ptr = strtok_r(copy, delim, &rest);
+            uint i = 0;
+            while(ptr != NULL){
+                dimensions[i] = atoi(ptr);
+                ptr = strtok_r(NULL, delim, &rest);
+                ++i;
+            } 
+            free(copy);
+            dimensions_num = i;       
+        }else{
+            int size;
+            MPI_Comm_size(comm, &size);
+            dimensions[0] = size;
+        }
+
+#ifdef DEBUG
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+        if(rank == 0){
+            printf("Libswing called. Environment:\n");
+            printf("------------------------------------\n");
+            printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
+            printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
+            printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
+            printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
+            printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
+            printf("LIBSWING_ALGO: %d\n", algo);
+            printf("LIBSWING_DIMENSIONS: ");
+            for(size_t i = 0; i < dimensions_num; i++){
+                printf("%d", dimensions[i]);
+                if(i < dimensions_num - 1){
+                    printf(",");
+                }
+            }
+            printf("\n");
+            printf("------------------------------------\n");
+        }
 #endif
+    }
 }
 
-static int mod(int a, int b){
+static inline int mod(int a, int b){
     int r = a % b;
     return r < 0 ? r + b : r;
 }
 
 // Convert a rank id into a list of d-dimensional coordinates
-static void getCoordFromId(int id, int* coord){
+static inline void getCoordFromId(int id, int* coord){
     if(dimensions_num == 1){
         coord[0] = id;
     }else if(dimensions_num == 2){
@@ -144,7 +152,7 @@ static void getCoordFromId(int id, int* coord){
 }
 
 // Convert d-dimensional coordinates into a rank id
-static int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_num){
+static inline int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_num){
     if(dimensions_num == 1){
         return coord[0];
     }else if(dimensions_num == 2){
@@ -156,7 +164,7 @@ static int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_num){
     }
 }
 
-static void compute_peers(uint** peers, int size, int rank, int port){
+static inline void compute_peers(uint** peers, int size, int rank, int port, int num_steps){
     int coord[MAX_SUPPORTED_DIMENSIONS];
     bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
     int next_directions[MAX_SUPPORTED_DIMENSIONS];
@@ -164,7 +172,7 @@ static void compute_peers(uint** peers, int size, int rank, int port){
         // Compute default directions
         getCoordFromId(rank, coord);
         for(size_t i = 0; i < dimensions_num; i++){
-            next_directions[i] = -1^((coord[i] % 2) + (port % 2));
+            next_directions[i] = pow(-1, ((coord[i] % 2) + (port % 2))); // TODO: or XOR?
             terminated_dimensions_bitmap[i] = false;            
         }
         
@@ -172,7 +180,7 @@ static void compute_peers(uint** peers, int size, int rank, int port){
         uint terminated_dimensions = 0, o = 0;
         
         // Generate peers
-        for(size_t i = 0; i < ceil(log2(size)); ){
+        for(size_t i = 0; i < num_steps; ){
             getCoordFromId(rank, coord); // Regenerate rank coord
             o = 0;
             do{
@@ -215,10 +223,8 @@ static void computeBlocksBitmap(int sender, int step, char* blocks_bitmap, uint 
 }
 
 static void getBitmaps(int rank, int size, char** bitmaps, uint8_t* reached_step, uint num_steps, uint** peers){
-    // Bit vector that says if rank reached another node
-    memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
+    // Bit vector that says if rank reached another node    
     for(size_t step = 0; step < num_steps; step++){
-        memset(bitmaps[step], 0, sizeof(char)*size);
         int dest = peers[rank][step];
         bitmaps[step][dest] = 1; // I'll send its block
         computeBlocksBitmap(dest, step + 1, bitmaps[step], num_steps, peers); // ... plus those it will send in the next steps. 
@@ -244,16 +250,8 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
                     const int *blocks_displs, MPI_Comm comm, int size, int rank,  
                     MPI_Datatype sendtype, MPI_Datatype recvtype){
 #ifdef PERF_DEBUGGING
-    uint elems = 0;
-    for(size_t i = 0; i < size; i++){
-        if(send_bitmap[i]){
-	        elems += blocks_sizes[i];
-	    }
-    }
-    int res = MPI_Sendrecv(buf, elems, sendtype, dest, sendtag,
-		                   buf, elems, recvtype, source, recvtag,
-		                   comm, MPI_STATUS_IGNORE);
-#else
+    auto start = std::chrono::high_resolution_clock::now();
+#endif
     // Create datatype starting from bitmaps
     // Check how many blocks we have to send/recv
     uint blocks_to_send = 0, blocks_to_recv = 0;
@@ -274,21 +272,24 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
     MPI_Type_indexed(blocks_to_recv, array_of_blocklengths_r, array_of_displacements_r, recvtype, &indexed_recvtype);
     MPI_Type_commit(&indexed_sendtype);
     MPI_Type_commit(&indexed_recvtype);
+#ifdef PERF_DEBUGGING
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "Datatype preparation required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+#endif
     int res;
     if(rbuf){
         res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
-                               rbuf, 1, indexed_recvtype, source, recvtag,  
-                               comm, MPI_STATUS_IGNORE);
+                           rbuf, 1, indexed_recvtype, source, recvtag,  
+                           comm, MPI_STATUS_IGNORE);
     }else{
         // For allgather we can use buf instead of rbuf
         res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
-                               buf, 1, indexed_recvtype, source, recvtag,  
-                               comm, MPI_STATUS_IGNORE);
+                           buf, 1, indexed_recvtype, source, recvtag,  
+                           comm, MPI_STATUS_IGNORE);
     }
 
     MPI_Type_free(&indexed_sendtype);
     MPI_Type_free(&indexed_recvtype);
-#endif
     return res;
 }
 
@@ -342,7 +343,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 #endif
 
     DPRINTF("[%d] Computing peers\n", rank);
-    compute_peers(peers, size, rank, 0); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+    compute_peers(peers, size, rank, 0, num_steps); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
 
 #ifdef PERF_DEBUGGING
     end = std::chrono::high_resolution_clock::now();
@@ -351,6 +352,10 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 #endif
 
     DPRINTF("[%d] Getting bitmaps\n", rank);
+    memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
+    for(size_t i = 0; i < num_steps; i++){
+        memset(my_blocks_matrix[i], 0, sizeof(char)*size);
+    }
     getBitmaps(rank, size, my_blocks_matrix, reached_step, num_steps, peers);
 
 #ifdef PERF_DEBUGGING
@@ -367,6 +372,9 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     DPRINTF("[%d] swing_coll called on %d bytes\n", rank, total_size_bytes);
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){
+#ifdef PERF_DEBUGGING
+        start = std::chrono::high_resolution_clock::now();
+#endif
         DPRINTF("[%d] Starting step %d\n", rank, step);
         /*********************************************************************/
         /* Now find which blocks I will receive. These are the block I need, */
@@ -382,6 +390,10 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
             }
         }else{
             DPRINTF("[%d] Computing adjusted blocks\n", rank);            
+            memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
+            for(size_t i = 0; i < num_steps; i++){
+                memset(peer_blocks_matrix[i], 0, sizeof(char)*size);
+            }
             if(coll_type == SWING_REDUCE_SCATTER){
                 peer = peers[rank][step];                
                 getBitmaps(peer, size, peer_blocks_matrix, reached_step, num_steps, peers);
@@ -410,6 +422,8 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 #endif
 
 #ifdef PERF_DEBUGGING
+        end = std::chrono::high_resolution_clock::now();
+        std::cout << "[" << rank << "] Computing blocks at step " << step << " required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
         start = std::chrono::high_resolution_clock::now();
 #endif
 
@@ -443,9 +457,9 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     }
 
 #ifdef PERF_DEBUGGING
-        end = std::chrono::high_resolution_clock::now();
-        total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
-        std::cout << "sendrecv required: " << total << "ns\n";
+    end = std::chrono::high_resolution_clock::now();
+    total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
+    std::cout << "[" << rank << "] sendrecv required: " << total << "ns\n";
 #endif
     for(size_t step = 0; step < num_steps; step++){    
         free(my_blocks_matrix[step]);
