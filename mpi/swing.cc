@@ -517,7 +517,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
     read_env(comm);
     if(disable_reducescatter){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
-    }else if(algo == ALGO_SWING)
+    }else if(algo == ALGO_SWING){
         return MPI_Reduce_scatter_swing(sendbuf, recvbuf, recvcounts, datatype, op, comm);
     }else{
         assert("Only Swing supported for reducescatter." == 0);
