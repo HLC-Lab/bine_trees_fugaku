@@ -315,8 +315,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 
 #ifdef PERF_DEBUGGING
     auto start = std::chrono::high_resolution_clock::now();
-    auto total = std::chrono::high_resolution_clock::now();
-    total = 0;
+    long total = 0;
 #endif
 
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
