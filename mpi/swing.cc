@@ -211,7 +211,7 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
                     int dest, int source, int sendtag, int recvtag, 
                     void* buf, void* rbuf, const int *blocks_sizes, 
                     const int *blocks_displs, MPI_Comm comm, int size, int rank,  
-                    MPI_Datatype datatype){
+                    MPI_Datatype sendtype, MPI_Datatype recvtype){
     // Create datatype starting from bitmaps
     // Check how many blocks we have to send/recv 
     uint blocks_to_send = 0, blocks_to_recv = 0; 
@@ -227,22 +227,30 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
             ++blocks_to_recv;
         }
     }
-    MPI_Datatype send_type, recv_type;
-    MPI_Type_indexed(blocks_to_send, array_of_blocklengths_s, array_of_displacements_s, datatype, &send_type);
-    MPI_Type_indexed(blocks_to_recv, array_of_blocklengths_r, array_of_displacements_r, datatype, &recv_type);
-    MPI_Type_commit(&send_type);
-    MPI_Type_commit(&recv_type);
-    int res = MPI_Sendrecv(buf, 1, send_type, dest, sendtag,
-                           rbuf, 1, recv_type, source, recvtag,  // TODO: For allgather use buf instead of rbuf
-                           comm, MPI_STATUS_IGNORE);
+    MPI_Datatype indexed_sendtype, indexed_recvtype;
+    MPI_Type_indexed(blocks_to_send, array_of_blocklengths_s, array_of_displacements_s, sendtype, &indexed_sendtype);
+    MPI_Type_indexed(blocks_to_recv, array_of_blocklengths_r, array_of_displacements_r, recvtype, &indexed_recvtype);
+    MPI_Type_commit(&indexed_sendtype);
+    MPI_Type_commit(&indexed_recvtype);
+    int res;
+    if(rbuf){
+        res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
+                               rbuf, 1, indexed_recvtype, source, recvtag,  
+                               comm, MPI_STATUS_IGNORE);
+    }else{
+        // For allgather we can use buf instead of rbuf
+        res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
+                               buf, 1, indexed_recvtype, source, recvtag,  
+                               comm, MPI_STATUS_IGNORE);
+    }
 
-    MPI_Type_free(&send_type);
-    MPI_Type_free(&recv_type);
+    MPI_Type_free(&indexed_sendtype);
+    MPI_Type_free(&indexed_recvtype);
     return res;
 }
 
 static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
-                      MPI_Op op, MPI_Comm comm, int size, int rank,  MPI_Datatype datatype,  
+                      MPI_Op op, MPI_Comm comm, int size, int rank,  MPI_Datatype sendtype, MPI_Datatype recvtype,  
                       CollType coll_type){    
     int res, dtsize, tag;    
     char* blocks_bitmap_s;
@@ -253,7 +261,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     uint** peers;
     int *array_of_blocklengths_s, *array_of_displacements_s, *array_of_blocklengths_r, *array_of_displacements_r;
 
-    MPI_Type_size(datatype, &dtsize);
+    MPI_Type_size(sendtype, &dtsize);
     uint num_steps = ceil(log2(size));
 
     if(coll_type == SWING_REDUCE_SCATTER){
@@ -339,7 +347,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
                            array_of_blocklengths_r, array_of_displacements_r,
                            peer, peer, tag, tag, 
                            buf, rbuf, blocks_sizes, blocks_displs, 
-                           comm, size, rank, datatype);
+                           comm, size, rank, sendtype, recvtype);
         if(res != MPI_SUCCESS){
             return res;
         }
@@ -351,7 +359,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
                     void* rbuf_block = (void*) (((char*) rbuf) + dtsize*blocks_displs[i]);
                     void* buf_block = (void*) (((char*) buf) + dtsize*blocks_displs[i]);
                     DPRINTF("[%d] Step %d, aggregating %d elements, displ %d. Before: %f, rbuf block: %f\n", rank, step, blocks_sizes[i], blocks_displs[i], ((float*)buf_block)[0], ((float*)rbuf_block)[0]);
-                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], datatype, op);
+                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op);
                 }
             }
         }
@@ -386,26 +394,35 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     char* buf = (char*) malloc(buf_size*dtsize);    
     char* rbuf = (char*) malloc(buf_size*dtsize);
     memset(buf, 0, sizeof(char)*buf_size*dtsize);
-#ifdef DEBUG
-    for(size_t i = 0; i < buf_size; i++){
-        ((float*)rbuf)[i] = 42.0;
-    }
-#endif
     size_t my_displ_bytes = displs[rank]*dtsize;
     size_t my_count_bytes = recvcounts[rank]*dtsize;
     memcpy(buf, sendbuf, buf_size*dtsize);
-    swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, SWING_REDUCE_SCATTER);
+    res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER);
     // Copy the block in recvbuf
     memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
     free(buf);
     free(rbuf);
-    return 0;
+    return res;
 }
 
 
 static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int *recvcounts, 
                          const int *displs, MPI_Datatype recvtype, MPI_Comm comm){
-    return 0;
+    int res, size, rank, dtsize;    
+    MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Type_size(recvtype, &dtsize);
+    // Create a temporary buffer (to avoid overwriting sendbuf)
+    size_t buf_size = 0;
+    for(size_t i = 0; i < size; i++){
+        buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
+    }
+    char* buf = (char*) malloc(buf_size*dtsize);    
+    memcpy(((char*) buf) + displs[rank]*dtsize, sendbuf, recvcounts[rank]*dtsize);
+    res = swing_coll(buf, NULL, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
+    memcpy(recvbuf, buf, buf_size*dtsize);
+    free(buf);
+    return res;
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){

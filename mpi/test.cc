@@ -5,14 +5,14 @@
 
 int main(int argc, char** argv){
     int r, rank;
-    int count = 16;
+    int count = 1024;
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
 
     // Fill sendbuf with random data
     for(size_t i = 0; i < count; i++){
-        sendbuf[i] = 1; //rand() % 1024;
+        sendbuf[i] = rand() % 1024;
     }
 
     // Init
@@ -21,7 +21,7 @@ int main(int argc, char** argv){
 
     // Run first swing allreduce
     setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
-    setenv("LIBSWING_DISABLE_ALLGATHERV", "1", 1);
+    setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
     setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
     r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     if(r != MPI_SUCCESS){
