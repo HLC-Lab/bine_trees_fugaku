@@ -5,11 +5,16 @@
 #include <assert.h>
 #include <math.h>
 #include <limits.h>
+#include <string.h>
+#include <chrono>
+
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
 
-#define TAG_SWING_REDUCESCATTER (INT_MAX - 1)
-#define TAG_SWING_ALLGATHER (INT_MAX - 2)
+#define TAG_SWING_REDUCESCATTER ((0x1 << 15) - 1)
+#define TAG_SWING_ALLGATHER ((0x1 << 15) - 2)
+
+#define PERF_DEBUGGING // This breaks the correctness of the algorithm, should only be defined for debugging purposes
 
 //#define DEBUG
 
@@ -24,8 +29,15 @@ typedef enum{
     SWING_ALLGATHER
 }CollType;
 
+typedef enum{
+    ALGO_SWING = 0,
+    ALGO_RING,
+    ALGO_RECDOUB
+}Algo;
+
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024;
+static Algo algo;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 
 void read_env(MPI_Comm comm){
@@ -47,6 +59,17 @@ void read_env(MPI_Comm comm){
     env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
     if(env_str){
         latency_optimal_threshold = atoi(env_str);
+    }
+
+    env_str = getenv("LIBSWING_ALGO");
+    if(env_str){
+        if(strcmp(env_str, "SWING") == 0){
+            algo = ALGO_SWING;
+        }else if(strcmp(env_str, "RING") == 0){
+            algo = ALGO_RING;
+        }else if(strcmp(env_str, "RECDOUB") == 0){
+            algo = ALGO_RECDOUB;
+        }
     }
 
     env_str = getenv("LIBSWING_DIMENSIONS");
@@ -80,6 +103,7 @@ void read_env(MPI_Comm comm){
         printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
         printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
         printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
+        printf("LIBSWING_ALGO: %d\n", algo);
         printf("LIBSWING_DIMENSIONS: ");
         for(size_t i = 0; i < dimensions_num; i++){
             printf("%d", dimensions[i]);
@@ -212,9 +236,20 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
                     void* buf, void* rbuf, const int *blocks_sizes, 
                     const int *blocks_displs, MPI_Comm comm, int size, int rank,  
                     MPI_Datatype sendtype, MPI_Datatype recvtype){
+#ifdef PERF_DEBUGGING
+    uint elems = 0;
+    for(size_t i = 0; i < size; i++){
+        if(send_bitmap[i]){
+	        elems += blocks_sizes[i];
+	    }
+    }
+    int res = MPI_Sendrecv(buf, elems, sendtype, dest, sendtag,
+		                   buf, elems, recvtype, source, recvtag,
+		                   comm, MPI_STATUS_IGNORE);
+#else
     // Create datatype starting from bitmaps
-    // Check how many blocks we have to send/recv 
-    uint blocks_to_send = 0, blocks_to_recv = 0; 
+    // Check how many blocks we have to send/recv
+    uint blocks_to_send = 0, blocks_to_recv = 0;
     for(size_t i = 0; i < size; i++){
         if(send_bitmap[i]){
             array_of_blocklengths_s[blocks_to_send] = blocks_sizes[i];
@@ -246,6 +281,7 @@ static int sendrecv(char* send_bitmap, char* recv_bitmap,
 
     MPI_Type_free(&indexed_sendtype);
     MPI_Type_free(&indexed_recvtype);
+#endif
     return res;
 }
 
@@ -270,6 +306,10 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         tag = TAG_SWING_ALLGATHER;
     }
 
+#ifdef PERF_DEBUGGING
+    auto start = std::chrono::high_resolution_clock::now();
+#endif
+
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     peer_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
@@ -287,10 +327,29 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     for(uint i = 0; i < size; i++){
         peers[i] = (uint*) malloc(sizeof(uint)*num_steps);
     }
+#ifdef PERF_DEBUGGING
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "Mallocs required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+    start = std::chrono::high_resolution_clock::now();
+#endif
+
     DPRINTF("[%d] Computing peers\n", rank);
     compute_peers(peers, size, rank, 0); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+
+#ifdef PERF_DEBUGGING
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Computing peers required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+    start = std::chrono::high_resolution_clock::now();
+#endif
+
     DPRINTF("[%d] Getting bitmaps\n", rank);
     getBitmaps(rank, size, my_blocks_matrix, reached_step, num_steps, peers);
+
+#ifdef PERF_DEBUGGING
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Getting bitmaps required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+    start = std::chrono::high_resolution_clock::now();
+#endif
 
     // Compute total size of data
     size_t total_size_bytes = 0;
@@ -341,6 +400,11 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         }
         DPRINTF("\n");
 #endif
+
+#ifdef PERF_DEBUGGING
+        start = std::chrono::high_resolution_clock::now();
+#endif
+
         // Sendrecv
         int res = sendrecv(blocks_bitmap_s, blocks_bitmap_r, 
                            array_of_blocklengths_s, array_of_displacements_s,
@@ -351,6 +415,11 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         if(res != MPI_SUCCESS){
             return res;
         }
+
+#ifdef PERF_DEBUGGING
+        end = std::chrono::high_resolution_clock::now();
+        std::cout << "sendrecv required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+#endif
 
         // Aggregate    
         if(coll_type == SWING_REDUCE_SCATTER){
@@ -396,10 +465,14 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     memset(buf, 0, sizeof(char)*buf_size*dtsize);
     size_t my_displ_bytes = displs[rank]*dtsize;
     size_t my_count_bytes = recvcounts[rank]*dtsize;
+#ifdef PERF_DEBUGGING
     memcpy(buf, sendbuf, buf_size*dtsize);
+#endif
     res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER);
     // Copy the block in recvbuf
+#ifdef PERF_DEBUGGING
     memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
+#endif    
     free(buf);
     free(rbuf);
     return res;
@@ -418,38 +491,55 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
         buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
     }
     char* buf = (char*) malloc(buf_size*dtsize);    
+#ifdef PERF_DEBUGGING
     memcpy(((char*) buf) + displs[rank]*dtsize, sendbuf, recvcounts[rank]*dtsize);
+#endif
     res = swing_coll(buf, NULL, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
+#ifdef PERF_DEBUGGING
     memcpy(recvbuf, buf, buf_size*dtsize);
+#endif
     free(buf);
     return res;
+}
+
+static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
     if(disable_reducescatter){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
-    }else{
+    }else if(algo == ALGO_SWING)
         return MPI_Reduce_scatter_swing(sendbuf, recvbuf, recvcounts, datatype, op, comm);
+    }else{
+        assert("Only Swing supported for reducescatter." == 0);
     }
 }
 
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, 
                  MPI_Datatype recvtype, MPI_Comm comm){
-    int size;    
-    MPI_Comm_size(comm, &size);    
-    int* recvcounts = (int*) malloc(sizeof(int)*size);
-    int* displs = (int*) malloc(sizeof(int)*size);
-    size_t last = 0;
-    for(size_t i = 0; i < size; i++){
-        recvcounts[i] = recvcount;
-        displs[i] = last;
-        last += recvcount;
+    read_env(comm);
+    if(disable_allgather){
+        return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+    }else if(algo == ALGO_SWING){
+        int size;    
+        MPI_Comm_size(comm, &size);    
+        int* recvcounts = (int*) malloc(sizeof(int)*size);
+        int* displs = (int*) malloc(sizeof(int)*size);
+        size_t last = 0;
+        for(size_t i = 0; i < size; i++){
+            recvcounts[i] = recvcount;
+            displs[i] = last;
+            last += recvcount;
+        }
+        int res = MPI_Allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
+        free(recvcounts);
+        free(displs);
+        return res;
+    }else{
+        assert("Only Swing supported for Allgather." == 0);
     }
-    int res = MPI_Allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
-    free(recvcounts);
-    free(displs);
-    return res;
 }
 
 int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int *recvcounts, 
@@ -457,8 +547,10 @@ int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, vo
     read_env(comm);
     if(disable_allgatherv){
         return PMPI_Allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
-    }else{
+    }else if(algo == ALGO_SWING){
         return MPI_Allgatherv_swing(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
+    }else{
+        assert("Only Swing supported for Allgatherv." == 0);
     }
 }
 
@@ -466,7 +558,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     read_env(comm);
     if(disable_allreduce){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
-    }else{
+    }else if(algo == ALGO_SWING){
         int res, size, rank, dtsize;    
         MPI_Comm_size(comm, &size);
         MPI_Comm_rank(comm, &rank);
@@ -499,6 +591,8 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         free(recvcounts);
         free(displs);
         return res;
+    }else{
+        return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }
 }
 
