@@ -4,10 +4,28 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
+#include <limits.h>
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
 
-static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allreduce = 0, debug = 0, dimensions_num = 1;
+#define TAG_SWING_REDUCESCATTER (INT_MAX - 1)
+#define TAG_SWING_ALLGATHER (INT_MAX - 2)
+
+#define DEBUG
+
+#ifdef DEBUG
+#define DPRINTF(...) printf(__VA_ARGS__)
+#else
+#define DPRINTF(...) 
+#endif
+
+typedef enum{
+    SWING_REDUCE_SCATTER = 0,
+    SWING_ALLGATHER
+}CollType;
+
+static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allreduce = 0, 
+                    dimensions_num = 1, latency_optimal_threshold = 1024;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 
 void read_env(MPI_Comm comm){
@@ -26,9 +44,9 @@ void read_env(MPI_Comm comm){
         disable_allreduce = atoi(env_str);
     }
 
-    env_str = getenv("LIBSWING_DEBUG");
+    env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
     if(env_str){
-        debug = atoi(env_str);
+        latency_optimal_threshold = atoi(env_str);
     }
 
     env_str = getenv("LIBSWING_DIMENSIONS");
@@ -52,27 +70,27 @@ void read_env(MPI_Comm comm){
         dimensions[0] = size;
     }
 
-    if(debug){
-        int rank;
-        MPI_Comm_rank(comm, &rank);
-        if(rank == 0){
-            printf("Libswing called. Environment:\n");
-            printf("------------------------------------\n");
-            printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
-            printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
-            printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
-            printf("LIBSWING_DEBUG: %d\n", debug);
-            printf("LIBSWING_DIMENSIONS: ");
-            for(size_t i = 0; i < dimensions_num; i++){
-                printf("%d", dimensions[i]);
-                if(i < dimensions_num - 1){
-                    printf(",");
-                }
+#ifdef DEBUG
+    int rank;
+    MPI_Comm_rank(comm, &rank);
+    if(rank == 0){
+        printf("Libswing called. Environment:\n");
+        printf("------------------------------------\n");
+        printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
+        printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
+        printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
+        printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
+        printf("LIBSWING_DIMENSIONS: ");
+        for(size_t i = 0; i < dimensions_num; i++){
+            printf("%d", dimensions[i]);
+            if(i < dimensions_num - 1){
+                printf(",");
             }
-            printf("\n");
-            printf("------------------------------------\n");
         }
+        printf("\n");
+        printf("------------------------------------\n");
     }
+#endif
 }
 
 static int mod(int a, int b){
@@ -152,16 +170,211 @@ static void compute_peers(uint** peers, int size, int rank, int port){
     }
 }
 
-int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+static void computeBlocksBitmap(int sender, int step, char* blocks_bitmap, uint num_steps, uint** peers){
+    if (step >= num_steps){ // Base case
+        return;
+    }else{
+        for(size_t s = step; s < num_steps; s++){
+            int peer = peers[sender][s];
+            blocks_bitmap[peer] = 1;
+            computeBlocksBitmap(peer, s+1, blocks_bitmap, num_steps, peers);
+        }
+        return;
+    }    
+}
+
+static void getBitmaps(int rank, int size, char** bitmaps, uint8_t* reached_step, uint num_steps, uint** peers){
+    // Bit vector that says if rank reached another node
+    memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
+    for(size_t step = 0; step < num_steps; step++){
+        memset(bitmaps[step], 0, sizeof(char)*size);
+        int dest = peers[rank][step];
+        bitmaps[step][dest] = 1; // I'll send its block
+        computeBlocksBitmap(dest, step + 1, bitmaps[step], num_steps, peers); // ... plus those it will send in the next steps. 
+        bitmaps[step][rank] = 0; // I can never reach myself (this could happen sometimes in the non-power-of-2 case)
+        for(size_t i = 0; i < size; i++){
+            if(bitmaps[step][i]){
+                // Is there any peer I already reached before? If so, delete the earlier reach
+                if(reached_step[i] != num_steps){
+                    int prev_reached_step = reached_step[i];
+                    bitmaps[prev_reached_step][i] = 0;
+                }
+                reached_step[i] = step;
+            }
+        }     
+    }    
+}
+
+static int sendrecv(char* send_bitmap, char* recv_bitmap, 
+                    int* array_of_blocklengths_s, int* array_of_displacements_s,
+                    int* array_of_blocklengths_r, int* array_of_displacements_r,
+                    int dest, int source, int sendtag, int recvtag, 
+                    void* buf, void* rbuf, const int *blocks_sizes, 
+                    const int *blocks_displs, MPI_Comm comm, int size, int rank,  
+                    MPI_Datatype datatype){
+    // Create datatype starting from bitmaps
+    // Check how many blocks we have to send/recv 
+    uint blocks_to_send = 0, blocks_to_recv = 0; 
+    for(size_t i = 0; i < size; i++){
+        if(send_bitmap[i]){
+            array_of_blocklengths_s[blocks_to_send] = blocks_sizes[i];
+            array_of_displacements_s[blocks_to_send] = blocks_displs[i];
+            ++blocks_to_send;
+        }
+        if(recv_bitmap[i]){
+            array_of_blocklengths_r[blocks_to_recv] = blocks_sizes[i];
+            array_of_displacements_r[blocks_to_recv] = blocks_displs[i];
+            ++blocks_to_recv;
+        }
+    }
+    MPI_Datatype send_type, recv_type;
+    MPI_Type_indexed(blocks_to_send, array_of_blocklengths_s, array_of_displacements_s, datatype, &send_type);
+    MPI_Type_indexed(blocks_to_recv, array_of_blocklengths_r, array_of_displacements_r, datatype, &recv_type);
+    MPI_Type_commit(&send_type);
+    MPI_Type_commit(&recv_type);
+    int res = MPI_Sendrecv(buf, 1, send_type, dest, sendtag,
+                           rbuf, 1, recv_type, source, recvtag,  // TODO: For allgather use buf instead of rbuf
+                           comm, MPI_STATUS_IGNORE);
+
+    MPI_Type_free(&send_type);
+    MPI_Type_free(&recv_type);
+    return res;
+}
+
+static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
+                      MPI_Op op, MPI_Comm comm, int size, int rank,  MPI_Datatype datatype,  
+                      CollType coll_type){    
+    int res, dtsize, tag;    
+    char* blocks_bitmap_s;
+    char* blocks_bitmap_r;
+    char** my_blocks_matrix;
+    char** peer_blocks_matrix;
+    uint8_t* reached_step;
+    uint** peers;
+    int *array_of_blocklengths_s, *array_of_displacements_s, *array_of_blocklengths_r, *array_of_displacements_r;
+
+    MPI_Type_size(datatype, &dtsize);
+    uint num_steps = ceil(log2(size));
+
+    if(coll_type == SWING_REDUCE_SCATTER){
+        tag = TAG_SWING_REDUCESCATTER;
+    }else{
+        tag = TAG_SWING_ALLGATHER;
+    }
+
+    my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
+    peer_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
+    reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
+    array_of_blocklengths_s = (int*) malloc(sizeof(int)*size);
+    array_of_displacements_s = (int*) malloc(sizeof(int)*size);
+    array_of_blocklengths_r = (int*) malloc(sizeof(int)*size);
+    array_of_displacements_r = (int*) malloc(sizeof(int)*size);
+    for(size_t step = 0; step < num_steps; step++){    
+        my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+        peer_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+    }  
+
+    // Compute the peers
+    peers = (uint**) malloc(sizeof(uint*)*size);
+    for(uint i = 0; i < size; i++){
+        peers[i] = (uint*) malloc(sizeof(uint)*num_steps);
+    }
+    DPRINTF("[%d] Computing peers\n", rank);
+    compute_peers(peers, size, rank, 0); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+    DPRINTF("[%d] Getting bitmaps\n", rank);
+    getBitmaps(rank, size, my_blocks_matrix, reached_step, num_steps, peers);
+
+    // Compute total size of data
+    size_t total_size_bytes = 0;
+    for(size_t i = 0; i < size; i++){
+        total_size_bytes += dtsize*blocks_sizes[i]; // TODO: Check for custom datatypes
+    }
+    DPRINTF("[%d] swing_coll called on %d bytes\n", rank, total_size_bytes);
+    // Iterate over steps
+    for(size_t step = 0; step < num_steps; step++){
+        DPRINTF("[%d] Starting step %d\n", rank, step);
+        /*********************************************************************/
+        /* Now find which blocks I will receive. These are the block I need, */
+        /* plus all of those I'll send starting from next step.              */
+        /*********************************************************************/
+        uint32_t peer;
+        // Find which blocks I must send and recv.
+        if(total_size_bytes <= latency_optimal_threshold){
+            // For latency optimal, I send/recv all the data
+            for(size_t i = 0; i < size; i++){
+                blocks_bitmap_s[i] = 1;
+                blocks_bitmap_r[i] = 1;
+            }
+        }else{
+            DPRINTF("[%d] Computing adjusted blocks\n", rank);            
+            if(coll_type == SWING_REDUCE_SCATTER){
+                peer = peers[rank][step];                
+                getBitmaps(peer, size, peer_blocks_matrix, reached_step, num_steps, peers);
+                blocks_bitmap_s = my_blocks_matrix[step];
+                blocks_bitmap_r = peer_blocks_matrix[step];
+            }else{
+                uint reversed_step = int(num_steps - step - 1);
+                peer = peers[rank][reversed_step];
+                getBitmaps(peer, size, peer_blocks_matrix, reached_step, num_steps, peers);
+                blocks_bitmap_s = peer_blocks_matrix[reversed_step];
+                blocks_bitmap_r = my_blocks_matrix[reversed_step];
+            }
+        }
+#ifdef DEBUG
+        DPRINTF("[%d] Blocks Bitmap (Send) at step %d: ", rank, step);
+        for(size_t i=0; i < size; i++){
+            DPRINTF("%d ", blocks_bitmap_s[i]);
+        }
+        DPRINTF("\n");
+
+        DPRINTF("[%d] Blocks Bitmap (Recv) at step %d: ", rank, step);
+        for(size_t i=0; i < size; i++){
+            DPRINTF("%d ", blocks_bitmap_r[i]);
+        }
+        DPRINTF("\n");
+#endif
+        // Sendrecv
+        int res = sendrecv(blocks_bitmap_s, blocks_bitmap_r, 
+                           array_of_blocklengths_s, array_of_displacements_s,
+                           array_of_blocklengths_r, array_of_displacements_r,
+                           peer, peer, tag, tag, 
+                           buf, rbuf, blocks_sizes, blocks_displs, 
+                           comm, size, rank, datatype);
+        if(res != MPI_SUCCESS){
+            return res;
+        }
+
+        // Aggregate    
+        if(coll_type == SWING_REDUCE_SCATTER){
+            for(size_t i = 0; i < size; i++){
+                if(blocks_bitmap_r[i]){
+                    void* rbuf_block = (void*) (((char*) rbuf) + dtsize*blocks_displs[i]);
+                    void* buf_block = (void*) (((char*) buf) + dtsize*blocks_displs[i]);
+                    DPRINTF("[%d] Step %d, aggregating %d elements, displ %d. Before: %f, rbuf block: %f\n", rank, step, blocks_sizes[i], blocks_displs[i], ((float*)buf_block)[0], ((float*)rbuf_block)[0]);
+                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], datatype, op);
+                }
+            }
+        }
+    }
+    for(size_t step = 0; step < num_steps; step++){    
+        free(my_blocks_matrix[step]);
+        free(peer_blocks_matrix[step]);
+    }
+    free(my_blocks_matrix);
+    free(peer_blocks_matrix);
+    free(reached_step);
+    free(array_of_blocklengths_s);
+    free(array_of_displacements_s);
+    free(array_of_blocklengths_r);
+    free(array_of_displacements_r);
+    return 0;
+}
+
+static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int res, size, rank, dtsize;    
     MPI_Comm_size(comm, &size);
     MPI_Comm_rank(comm, &rank);
     MPI_Type_size(datatype, &dtsize);
-    uint** peers = (uint**) malloc(sizeof(uint*)*size);
-    for(uint rank = 0; rank < size; rank++){
-        peers[rank] = (uint*) malloc(sizeof(uint)*ceil(log2(size)));
-    }
-    compute_peers(peers, size, rank, 0); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
 
     // Create a temporary buffer (to avoid overwriting sendbuf)
     size_t buf_size = 0;
@@ -170,18 +383,27 @@ int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const int recvc
         displs[i] = buf_size;
         buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
     }
-    char* buf = (char*) malloc(dtsize*buf_size);
-    memcpy(buf, sendbuf, buf_size);
-
-
+    char* buf = (char*) malloc(buf_size*dtsize);    
+    char* rbuf = (char*) malloc(buf_size*dtsize);
+    memset(buf, 0, sizeof(char)*buf_size*dtsize);
+#ifdef DEBUG
+    for(size_t i = 0; i < buf_size; i++){
+        ((float*)rbuf)[i] = 42.0;
+    }
+#endif
+    size_t my_displ_bytes = displs[rank]*dtsize;
+    size_t my_count_bytes = recvcounts[rank]*dtsize;
+    memcpy(buf, sendbuf, buf_size*dtsize);
+    swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, SWING_REDUCE_SCATTER);
     // Copy the block in recvbuf
-    memcpy(recvbuf, buf + displs[rank], recvcounts[rank]);
+    memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
     free(buf);
+    free(rbuf);
     return 0;
 }
 
 
-int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int *recvcounts, 
+static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int *recvcounts, 
                          const int *displs, MPI_Datatype recvtype, MPI_Comm comm){
     return 0;
 }
@@ -238,7 +460,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         for(size_t i = 0; i < size; i++){
             recvcounts[i] = ceil(count / size);
             if(i == size - 1){
-                recvcounts[i] = count - ((count / size)*(size - 1)); // TODO: Can be unbalanced, there are better ways to partition
+                recvcounts[i] = count - ((count / size)*(size - 1));
             } 
             displs[i] = last;
             last += recvcounts[i];
