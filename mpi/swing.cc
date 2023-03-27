@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 #include <chrono>
+#include <iostream>
 
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
@@ -35,7 +36,7 @@ typedef enum{
     ALGO_RECDOUB
 }Algo;
 
-static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allreduce = 0, 
+static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024;
 static Algo algo;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
@@ -49,6 +50,11 @@ void read_env(MPI_Comm comm){
     env_str = getenv("LIBSWING_DISABLE_ALLGATHERV");
     if(env_str){
         disable_allgatherv = atoi(env_str);
+    }
+
+    env_str = getenv("LIBSWING_DISABLE_ALLGATHER");
+    if(env_str){
+        disable_allgather = atoi(env_str);
     }
 
     env_str = getenv("LIBSWING_DISABLE_ALLREDUCE");
@@ -101,6 +107,7 @@ void read_env(MPI_Comm comm){
         printf("------------------------------------\n");
         printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
         printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
+        printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
         printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
         printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
         printf("LIBSWING_ALGO: %d\n", algo);
@@ -503,7 +510,7 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
 }
 
 static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-    
+    return 0;
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
