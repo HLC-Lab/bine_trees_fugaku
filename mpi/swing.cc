@@ -315,6 +315,8 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 
 #ifdef PERF_DEBUGGING
     auto start = std::chrono::high_resolution_clock::now();
+    auto total = std::chrono::high_resolution_clock::now();
+    total = 0;
 #endif
 
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
@@ -425,7 +427,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 
 #ifdef PERF_DEBUGGING
         end = std::chrono::high_resolution_clock::now();
-        std::cout << "sendrecv required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+        total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
 #endif
 
         // Aggregate    
@@ -440,6 +442,12 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
             }
         }
     }
+
+#ifdef PERF_DEBUGGING
+        end = std::chrono::high_resolution_clock::now();
+        total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
+        std::cout << "sendrecv required: " << total << "ns\n";
+#endif
     for(size_t step = 0; step < num_steps; step++){    
         free(my_blocks_matrix[step]);
         free(peer_blocks_matrix[step]);
