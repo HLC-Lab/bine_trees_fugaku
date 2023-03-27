@@ -11,7 +11,7 @@
 #define TAG_SWING_REDUCESCATTER (INT_MAX - 1)
 #define TAG_SWING_ALLGATHER (INT_MAX - 2)
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
