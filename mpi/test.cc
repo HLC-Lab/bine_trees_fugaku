@@ -9,7 +9,7 @@ int main(int argc, char** argv){
     int r, rank;
     int count = 131072;
     int warmup = 5;
-    int iterations = 10;
+    int iterations = 1000;
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
@@ -23,37 +23,22 @@ int main(int argc, char** argv){
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    // Run first swing allreduce
-    setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
-    setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
-    setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
-    for(int i = warmup; i >= 0; i--){
-      r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-    }
-    auto start = std::chrono::high_resolution_clock::now();
-    for(size_t i = 0; i < iterations; i++){
-      r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    if(r != MPI_SUCCESS){
-        fprintf(stderr, "Allreduce failed with error %d\n", r);
-        return r;
-    }else{
-        std::cout << "Swing terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
-    }
-
-    // Then run the original MPI allreduce
+    // Run the original MPI allreduce
+    setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
+    setenv("LIBSWING_ALGO", "DEFAULT", 1);
     setenv("LIBSWING_DISABLE_REDUCESCATTER", "1", 1);
     setenv("LIBSWING_DISABLE_ALLGATHERV", "1", 1);
     setenv("LIBSWING_DISABLE_ALLREDUCE", "1", 1);
     for(int i = warmup; i >= 0; i--){
-      r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
-    start = std::chrono::high_resolution_clock::now();
+    setenv("LIBSWING_FORCE_ENV_RELOAD", "0", 1);
+
+    auto start = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < iterations; i++){
-      r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
-    end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::high_resolution_clock::now();
     if(r != MPI_SUCCESS){
         fprintf(stderr, "Allreduce failed with error %d\n", r);
         return r;
@@ -61,20 +46,43 @@ int main(int argc, char** argv){
         std::cout << "Default terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
     }
 
-    // Fini
-    MPI_Finalize();    
+    const char* algos[2] = {"SWING", "RING"};
+    for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
+        // Run first swing allreduce
+        setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
+        setenv("LIBSWING_ALGO", algos[algo], 1);
+        setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
+        setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
+        setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
+        for(int i = warmup; i >= 0; i--){
+            r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        }
+        start = std::chrono::high_resolution_clock::now();
+        for(size_t i = 0; i < iterations; i++){
+            r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        }
+        end = std::chrono::high_resolution_clock::now();
+        if(r != MPI_SUCCESS){
+            fprintf(stderr, "Allreduce failed with error %d\n", r);
+            return r;
+        }else{
+            std::cout << algos[algo] << " terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
+        }
 
-    // Then validate
-    bool valid = true;
-    for(size_t i = 0; i < count; i++){
-        if(recvbuf[i] != recvbuf_v[i]){
-            fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
-            valid = false;
+        // Then validate
+        bool valid = true;
+        for(size_t i = 0; i < count; i++){
+            if(recvbuf[i] != recvbuf_v[i]){
+                fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
+                valid = false;
+            }
+        }
+
+        if(valid){
+            printf("Validation succeeded.\n");
         }
     }
-
-    if(valid){
-        printf("Validation succeeded.\n");
-    }
+    // Fini
+    MPI_Finalize();    
     return 0;
 }

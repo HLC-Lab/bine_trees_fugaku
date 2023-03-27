@@ -8,6 +8,7 @@
 #include <string.h>
 #include <chrono>
 #include <iostream>
+#include <vector>
 
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
@@ -31,7 +32,8 @@ typedef enum{
 }CollType;
 
 typedef enum{
-    ALGO_SWING = 0,
+    ALGO_DEFAULT = 0,
+    ALGO_SWING,
     ALGO_RING,
     ALGO_RECDOUB
 }Algo;
@@ -76,7 +78,9 @@ void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_ALGO");
         if(env_str){
-            if(strcmp(env_str, "SWING") == 0){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                algo = ALGO_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
                 algo = ALGO_SWING;
             }else if(strcmp(env_str, "RING") == 0){
                 algo = ALGO_RING;
@@ -531,12 +535,103 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
 }
 
 static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int rank;
+    int r = MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if(r != MPI_SUCCESS)
+        return r;
+    int size;
+    r = MPI_Comm_size(MPI_COMM_WORLD, &size);
+    if(r != MPI_SUCCESS)
+        return r;
+    int dtsize;
+    r = MPI_Type_size(datatype, &dtsize);
+    if(r != MPI_SUCCESS)
+        return r;
+
+    const size_t segment_size = count / size;
+    std::vector<size_t> segment_sizes(size, segment_size);
+
+    const size_t residual = count % size;
+    for (size_t i = 0; i < residual; ++i) {
+        segment_sizes[i]++;
+    }
+
+    // Compute where each chunk ends.
+    std::vector<size_t> segment_ends(size);
+    segment_ends[0] = segment_sizes[0];
+    for (size_t i = 1; i < segment_ends.size(); ++i) {
+        segment_ends[i] = segment_sizes[i] + segment_ends[i - 1];
+    }
+
+    // The last segment should end at the very end of the buffer.
+    assert(segment_ends[size - 1] == count);
+
+     // Copy your data to the output buffer to avoid modifying the input buffer.
+    memcpy(recvbuf, sendbuf, count*dtsize);
+
+    // Allocate a temporary buffer to store incoming data.
+    // We know that segment_sizes[0] is going to be the largest buffer size,
+    // because if there are any overflow elements at least one will be added to
+    // the first segment.
+    char* buffer = (char*) malloc(segment_sizes[0]*dtsize);
+
+    // Receive from your left neighbor with wrap-around.
+    const size_t recv_from = (rank - 1 + size) % size;
+
+    // Send to your right neighbor with wrap-around.
+    const size_t send_to = (rank + 1) % size;
+
+    MPI_Status recv_status;
+    MPI_Request recv_req;
+
+    // Now start ring. At every step, for every rank, we iterate through
+    // segments with wraparound and send and recv from our neighbors and reduce
+    // locally. At the i'th iteration, sends segment (rank - i) and receives
+    // segment (rank - i - 1).
+    for (int i = 0; i < size - 1; i++) {
+        int recv_chunk = (rank - i - 1 + size) % size;
+        int send_chunk = (rank - i + size) % size;
+        char* segment_send = &(((char*)recvbuf)[dtsize*segment_ends[send_chunk] - dtsize*segment_sizes[send_chunk]]);
+
+        MPI_Irecv(buffer, segment_sizes[recv_chunk],
+                datatype, recv_from, 0, MPI_COMM_WORLD, &recv_req);
+
+        MPI_Send(segment_send, segment_sizes[send_chunk],
+                MPI_FLOAT, send_to, 0, MPI_COMM_WORLD);
+
+        char *segment_update = &(((char*)recvbuf)[dtsize*segment_ends[recv_chunk] - dtsize*segment_sizes[recv_chunk]]);
+
+        // Wait for recv to complete before reduction
+        MPI_Wait(&recv_req, &recv_status);
+        MPI_Reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
+    }
+
+    // Now start pipelined ring allgather. At every step, for every rank, we
+    // iterate through segments with wraparound and send and recv from our
+    // neighbors. At the i'th iteration, rank r, sends segment (rank + 1 - i)
+    // and receives segment (rank - i).
+    for (size_t i = 0; i < size_t(size - 1); ++i) {
+        int send_chunk = (rank - i + 1 + size) % size;
+        int recv_chunk = (rank - i + size) % size;
+        // Segment to send - at every iteration we send segment (r+1-i)
+        char* segment_send = &(((char*)recvbuf)[dtsize*segment_ends[send_chunk] - dtsize*segment_sizes[send_chunk]]);
+
+        // Segment to recv - at every iteration we receive segment (r-i)
+        char* segment_recv = &(((char*)recvbuf)[dtsize*segment_ends[recv_chunk] - dtsize*segment_sizes[recv_chunk]]);
+        MPI_Sendrecv(segment_send, segment_sizes[send_chunk],
+                datatype, send_to, 0, segment_recv,
+                segment_sizes[recv_chunk], datatype, recv_from,
+                0, MPI_COMM_WORLD, &recv_status);
+    }
+
+    // Free temporary memory.
+    free(buffer);    
     return 0;
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(disable_reducescatter){
+    if(disable_reducescatter || algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
     }else if(algo == ALGO_SWING){
         return MPI_Reduce_scatter_swing(sendbuf, recvbuf, recvcounts, datatype, op, comm);
@@ -548,7 +643,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, 
                  MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(disable_allgather){
+    if(disable_allgather || algo == ALGO_DEFAULT){
         return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
     }else if(algo == ALGO_SWING){
         int size;    
@@ -573,7 +668,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
 int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, const int *recvcounts, 
                    const int *displs, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(disable_allgatherv){
+    if(disable_allgatherv || algo == ALGO_DEFAULT){
         return PMPI_Allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
     }else if(algo == ALGO_SWING){
         return MPI_Allgatherv_swing(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
@@ -584,7 +679,7 @@ int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, vo
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(disable_allreduce){
+    if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_SWING){
         int res, size, rank, dtsize;    
