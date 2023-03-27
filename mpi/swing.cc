@@ -28,7 +28,8 @@
 
 typedef enum{
     SWING_REDUCE_SCATTER = 0,
-    SWING_ALLGATHER
+    SWING_ALLGATHER,
+    SWING_ALLREDUCE
 }CollType;
 
 typedef enum{
@@ -323,13 +324,24 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     long total = 0;
 #endif
 
+
+    // Compute total size of data
+    size_t total_size_bytes = 0, total_elements = 0;
+    for(size_t i = 0; i < size; i++){
+        total_elements += blocks_sizes[i];        
+    }
+    total_size_bytes = dtsize*total_elements; // TODO: Check for custom datatypes
+    int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (total_elements < size); // TODO Adjust for tori
+
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     peer_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
-    array_of_blocklengths_s = (int*) malloc(sizeof(int)*size);
-    array_of_displacements_s = (int*) malloc(sizeof(int)*size);
-    array_of_blocklengths_r = (int*) malloc(sizeof(int)*size);
-    array_of_displacements_r = (int*) malloc(sizeof(int)*size);
+    if(!latency_optimal || coll_type != SWING_ALLREDUCE){
+        array_of_blocklengths_s = (int*) malloc(sizeof(int)*size);
+        array_of_displacements_s = (int*) malloc(sizeof(int)*size);
+        array_of_blocklengths_r = (int*) malloc(sizeof(int)*size);
+        array_of_displacements_r = (int*) malloc(sizeof(int)*size);
+    }
     for(size_t step = 0; step < num_steps; step++){    
         my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
         peer_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
@@ -368,12 +380,6 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     start = std::chrono::high_resolution_clock::now();
 #endif
 
-    // Compute total size of data
-    size_t total_size_bytes = 0;
-    for(size_t i = 0; i < size; i++){
-        total_size_bytes += dtsize*blocks_sizes[i]; // TODO: Check for custom datatypes
-    }
-    DPRINTF("[%d] swing_coll called on %d bytes\n", rank, total_size_bytes);
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){
 #ifdef PERF_DEBUGGING
@@ -385,13 +391,19 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         /* plus all of those I'll send starting from next step.              */
         /*********************************************************************/
         uint32_t peer;
+        uint reversed_step = int(num_steps - step - 1);
         // Find which blocks I must send and recv.
-        if(total_size_bytes <= latency_optimal_threshold){
+        if(latency_optimal && coll_type == SWING_ALLREDUCE){
+            peer = peers[rank][step];   
             // For latency optimal, I send/recv all the data
-            for(size_t i = 0; i < size; i++){
-                blocks_bitmap_s[i] = 1;
-                blocks_bitmap_r[i] = 1;
+            res = MPI_Sendrecv(buf, total_elements, sendtype, peer, tag,
+                               rbuf, total_elements, recvtype, peer, tag,  
+                               comm, MPI_STATUS_IGNORE);
+            if(res != MPI_SUCCESS){
+                return res;
             }
+            // Aggregate    
+            MPI_Reduce_local(rbuf, buf, total_elements, sendtype, op);
         }else{
             DPRINTF("[%d] Computing adjusted blocks\n", rank);            
             memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
@@ -404,57 +416,57 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
                 blocks_bitmap_s = my_blocks_matrix[step];
                 blocks_bitmap_r = peer_blocks_matrix[step];
             }else{
-                uint reversed_step = int(num_steps - step - 1);
                 peer = peers[rank][reversed_step];
                 getBitmaps(peer, size, peer_blocks_matrix, reached_step, num_steps, peers);
                 blocks_bitmap_s = peer_blocks_matrix[reversed_step];
                 blocks_bitmap_r = my_blocks_matrix[reversed_step];
             }
-        }
+
 #ifdef DEBUG
-        DPRINTF("[%d] Blocks Bitmap (Send) at step %d: ", rank, step);
-        for(size_t i=0; i < size; i++){
-            DPRINTF("%d ", blocks_bitmap_s[i]);
-        }
-        DPRINTF("\n");
+            DPRINTF("[%d] Blocks Bitmap (Send) at step %d: ", rank, step);
+            for(size_t i=0; i < size; i++){
+                DPRINTF("%d ", blocks_bitmap_s[i]);
+            }
+            DPRINTF("\n");
 
-        DPRINTF("[%d] Blocks Bitmap (Recv) at step %d: ", rank, step);
-        for(size_t i=0; i < size; i++){
-            DPRINTF("%d ", blocks_bitmap_r[i]);
-        }
-        DPRINTF("\n");
+            DPRINTF("[%d] Blocks Bitmap (Recv) at step %d: ", rank, step);
+            for(size_t i=0; i < size; i++){
+                DPRINTF("%d ", blocks_bitmap_r[i]);
+            }
+            DPRINTF("\n");
 #endif
 
 #ifdef PERF_DEBUGGING
-        end = std::chrono::high_resolution_clock::now();
-        std::cout << "[" << rank << "] Computing blocks at step " << step << " required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
-        start = std::chrono::high_resolution_clock::now();
+            end = std::chrono::high_resolution_clock::now();
+            std::cout << "[" << rank << "] Computing blocks at step " << step << " required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
+            start = std::chrono::high_resolution_clock::now();
 #endif
 
-        // Sendrecv
-        int res = sendrecv(blocks_bitmap_s, blocks_bitmap_r, 
-                           array_of_blocklengths_s, array_of_displacements_s,
-                           array_of_blocklengths_r, array_of_displacements_r,
-                           peer, peer, tag, tag, 
-                           buf, rbuf, blocks_sizes, blocks_displs, 
-                           comm, size, rank, sendtype, recvtype);
-        if(res != MPI_SUCCESS){
-            return res;
-        }
+            // Sendrecv
+            int res = sendrecv(blocks_bitmap_s, blocks_bitmap_r, 
+                            array_of_blocklengths_s, array_of_displacements_s,
+                            array_of_blocklengths_r, array_of_displacements_r,
+                            peer, peer, tag, tag, 
+                            buf, rbuf, blocks_sizes, blocks_displs, 
+                            comm, size, rank, sendtype, recvtype);
+            if(res != MPI_SUCCESS){
+                return res;
+            }
 
 #ifdef PERF_DEBUGGING
-        end = std::chrono::high_resolution_clock::now();
-        total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
+            end = std::chrono::high_resolution_clock::now();
+            total += std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
 #endif
-
-        // Aggregate    
-        if(coll_type == SWING_REDUCE_SCATTER){
-            for(size_t i = 0; i < size; i++){
-                if(blocks_bitmap_r[i]){
-                    void* rbuf_block = (void*) (((char*) rbuf) + dtsize*blocks_displs[i]);
-                    void* buf_block = (void*) (((char*) buf) + dtsize*blocks_displs[i]);
-                    DPRINTF("[%d] Step %d, aggregating %d elements, displ %d. Before: %f, rbuf block: %f\n", rank, step, blocks_sizes[i], blocks_displs[i], ((float*)buf_block)[0], ((float*)rbuf_block)[0]);
-                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op);
+        
+            // Aggregate    
+            if(coll_type == SWING_REDUCE_SCATTER){
+                for(size_t i = 0; i < size; i++){
+                    if(blocks_bitmap_r[i]){
+                        void* rbuf_block = (void*) (((char*) rbuf) + dtsize*blocks_displs[i]);
+                        void* buf_block = (void*) (((char*) buf) + dtsize*blocks_displs[i]);
+                        DPRINTF("[%d] Step %d, aggregating %d elements, displ %d. Before: %f, rbuf block: %f\n", rank, step, blocks_sizes[i], blocks_displs[i], ((float*)buf_block)[0], ((float*)rbuf_block)[0]);
+                        MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op);
+                    }
                 }
             }
         }
@@ -472,10 +484,12 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     free(my_blocks_matrix);
     free(peer_blocks_matrix);
     free(reached_step);
-    free(array_of_blocklengths_s);
-    free(array_of_displacements_s);
-    free(array_of_blocklengths_r);
-    free(array_of_displacements_r);
+    if(!latency_optimal){
+        free(array_of_blocklengths_s);
+        free(array_of_displacements_s);
+        free(array_of_blocklengths_r);
+        free(array_of_displacements_r);
+    }
     return 0;
 }
 
@@ -492,19 +506,46 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
         displs[i] = buf_size;
         buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
     }
+
+    size_t total_size_bytes = buf_size*dtsize, total_elements = buf_size;
     char* buf = (char*) malloc(buf_size*dtsize);    
     char* rbuf = (char*) malloc(buf_size*dtsize);
     memset(buf, 0, sizeof(char)*buf_size*dtsize);
     size_t my_displ_bytes = displs[rank]*dtsize;
     size_t my_count_bytes = recvcounts[rank]*dtsize;
-#ifndef PERF_DEBUGGING
-    memcpy(buf, sendbuf, buf_size*dtsize);
-#endif
+    memcpy(buf, sendbuf, total_size_bytes);
     res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER);
     // Copy the block in recvbuf
-#ifndef PERF_DEBUGGING
     memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
-#endif    
+    free(buf);
+    free(rbuf);
+    return res;
+}
+
+static int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int res, size, rank, dtsize;    
+    MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Type_size(datatype, &dtsize);
+
+    // Create a temporary buffer (to avoid overwriting sendbuf)
+    size_t buf_size = 0;
+    int* displs = (int*) malloc(sizeof(int)*size);
+    for(size_t i = 0; i < size; i++){
+        displs[i] = buf_size;
+        buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
+    }
+
+    size_t total_size_bytes = buf_size*dtsize, total_elements = buf_size;
+    char* buf = (char*) malloc(buf_size*dtsize);    
+    char* rbuf = (char*) malloc(buf_size*dtsize);
+    memset(buf, 0, sizeof(char)*buf_size*dtsize);
+    size_t my_displ_bytes = displs[rank]*dtsize;
+    size_t my_count_bytes = recvcounts[rank]*dtsize;
+    memcpy(buf, sendbuf, total_size_bytes);
+    res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_ALLREDUCE);
+    // Copy the block in recvbuf
+    memcpy(recvbuf, buf, total_size_bytes);
     free(buf);
     free(rbuf);
     return res;
@@ -697,17 +738,18 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             displs[i] = last;
             last += recvcounts[i];
         }
+        
 
-        char* intermediate_buf = (char*) recvbuf + displs[rank];
-        if(disable_reducescatter){
-            res = PMPI_Reduce_scatter(sendbuf, intermediate_buf, recvcounts, datatype, op, comm);
+
+        // Compute total size of data
+        size_t total_size_bytes = last*dtsize, total_elements = last;
+        int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (total_elements < size); // TODO Adjust for tori
+        if(latency_optimal){
+            res = MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, recvcounts, datatype, op, comm); // Misleading, should call the function in a different way
         }else{
+            char* intermediate_buf = (char*) recvbuf + displs[rank];
             res = MPI_Reduce_scatter_swing(sendbuf, intermediate_buf, recvcounts, datatype, op, comm);
-        }
-        if(res == MPI_SUCCESS){        
-            if(disable_allgatherv){
-                res = PMPI_Allgatherv(intermediate_buf, recvcounts[rank], datatype, recvbuf, recvcounts, displs, datatype, comm);
-            }else{
+            if(res == MPI_SUCCESS){        
                 res = MPI_Allgatherv_swing(intermediate_buf, recvcounts[rank], datatype, recvbuf, recvcounts, displs, datatype, comm);
             }
         }
