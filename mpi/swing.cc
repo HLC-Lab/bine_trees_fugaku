@@ -15,7 +15,7 @@
 #define TAG_SWING_REDUCESCATTER ((0x1 << 15) - 1)
 #define TAG_SWING_ALLGATHER ((0x1 << 15) - 2)
 
-#define PERF_DEBUGGING // This breaks the correctness of the algorithm, should only be defined for debugging purposes
+//#define PERF_DEBUGGING // This breaks the correctness of the algorithm, should only be defined for debugging purposes
 
 //#define DEBUG
 
@@ -479,12 +479,12 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     memset(buf, 0, sizeof(char)*buf_size*dtsize);
     size_t my_displ_bytes = displs[rank]*dtsize;
     size_t my_count_bytes = recvcounts[rank]*dtsize;
-#ifdef PERF_DEBUGGING
+#ifndef PERF_DEBUGGING
     memcpy(buf, sendbuf, buf_size*dtsize);
 #endif
     res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER);
     // Copy the block in recvbuf
-#ifdef PERF_DEBUGGING
+#ifndef PERF_DEBUGGING
     memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
 #endif    
     free(buf);
@@ -505,11 +505,11 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
         buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
     }
     char* buf = (char*) malloc(buf_size*dtsize);    
-#ifdef PERF_DEBUGGING
+#ifndef PERF_DEBUGGING
     memcpy(((char*) buf) + displs[rank]*dtsize, sendbuf, recvcounts[rank]*dtsize);
 #endif
     res = swing_coll(buf, NULL, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
-#ifdef PERF_DEBUGGING
+#ifndef PERF_DEBUGGING
     memcpy(recvbuf, buf, buf_size*dtsize);
 #endif
     free(buf);
