@@ -16,7 +16,7 @@
 #define TAG_SWING_REDUCESCATTER ((0x1 << 15) - 1)
 #define TAG_SWING_ALLGATHER ((0x1 << 15) - 2)
 
-//#define PERF_DEBUGGING // This breaks the correctness of the algorithm, should only be defined for debugging purposes
+//#define PERF_DEBUGGING 
 
 //#define DEBUG
 
@@ -207,15 +207,20 @@ static inline int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_n
     }
 }
 
+// With this we are ok up to 2^20 nodes, add other terms if needed.
+static int rhos[20] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
+
 static inline void compute_peers(uint** peers, int size, int rank, int port, int num_steps){
     int coord[MAX_SUPPORTED_DIMENSIONS];
     bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
-    int next_directions[MAX_SUPPORTED_DIMENSIONS];
+    int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    for(size_t i = 0; i < dimensions_num; i++){
+        num_steps_per_dim[i] = ceil(log2(dimensions[i])) - 1;
+    }
     for(uint rank = 0; rank < size; rank++){
         // Compute default directions
         getCoordFromId(rank, coord);
         for(size_t i = 0; i < dimensions_num; i++){
-            next_directions[i] = pow(-1, ((coord[i] % 2) + (port % 2))); // TODO: or XOR?
             terminated_dimensions_bitmap[i] = false;            
         }
         
@@ -223,30 +228,40 @@ static inline void compute_peers(uint** peers, int size, int rank, int port, int
         uint terminated_dimensions = 0, o = 0;
         
         // Generate peers
-        for(size_t i = 0; i < num_steps; ){
-            getCoordFromId(rank, coord); // Regenerate rank coord
-            o = 0;
-            do{
-                target_dim = (port + i + o) % (dimensions_num);            
-                o++;
-            }while(terminated_dimensions_bitmap[target_dim]);
-            relative_step = (i + terminated_dimensions) / dimensions_num;        
-            distance = (1 - pow(-2, relative_step + 1)) / 3;
-            if(coord[target_dim] % 2){ // Flip the sign for odd nodes
+        for(size_t i = 0; i < num_steps; ){            
+            if(dimensions_num > 1){
+                getCoordFromId(rank, coord); // Regenerate rank coord
+                o = 0;
+                do{
+                    target_dim = (port + i + o) % (dimensions_num);            
+                    o++;
+                }while(terminated_dimensions_bitmap[target_dim]);
+                relative_step = (i + terminated_dimensions) / dimensions_num;        
+            }else{
+                target_dim = 0;
+                relative_step = i;
+                coord[0] = rank;
+            }
+            
+            distance = rhos[relative_step];
+            if(coord[target_dim] & 1){ // Flip the sign for odd nodes
                 distance *= -1;
             }
             if(port >= dimensions_num){ // Mirrored collectives
                 distance *= -1;
             }
 
-            if(relative_step >= ceil(log2(dimensions[target_dim]))){
+            if(relative_step > num_steps_per_dim[target_dim]){
                 terminated_dimensions_bitmap[target_dim] = true;
                 terminated_dimensions++;
             }else{
                 coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
-                peers[rank][i] = getIdFromCoord(coord, dimensions, dimensions_num);
+                if(dimensions_num > 1){
+                    peers[rank][i] = getIdFromCoord(coord, dimensions, dimensions_num);
+                }else{
+                    peers[rank][i] = coord[0];
+                }
                 i += 1;
-                next_directions[target_dim] *= -1;
             }        
         }        
     }
@@ -391,8 +406,6 @@ static int sendrecv_bbb(char* send_bitmap, char* recv_bitmap,
         }
     }
 
-    char* start;
-    size_t len;
     for(size_t i = 0; i < size; i++){
         if(send_bitmap[i]){
             res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize_s, blocks_sizes[i], sendtype, dest, sendtag, comm, &(requests_s[num_requests_s]));
@@ -578,12 +591,6 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         tag = TAG_SWING_ALLGATHER;
     }
 
-#ifdef PERF_DEBUGGING
-    auto start = std::chrono::high_resolution_clock::now();
-    long total = 0;
-#endif
-
-
     // Compute total size of data
     size_t total_size_bytes = 0, total_elements = 0;
     for(size_t i = 0; i < size; i++){
@@ -634,8 +641,17 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     }
 
     DPRINTF("[%d] Computing peers\n", rank);
+#ifdef PERF_DEBUGGING
+    auto start = std::chrono::high_resolution_clock::now();
+    long total = 0;
+#endif
     // TODO: This takes a while, we could optimize it
     compute_peers(peers, size, rank, 0, num_steps); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+#ifdef PERF_DEBUGGING
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "compute_peers took: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count()  << "ns\n";
+#endif
+
 
     DPRINTF("[%d] Getting bitmaps\n", rank);
     getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers);
