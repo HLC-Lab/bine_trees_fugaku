@@ -941,7 +941,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         if(latency_optimal){
             res = MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, recvcounts, datatype, op, comm); // Misleading, should call the function in a different way
         }else{
-            char* intermediate_buf = (char*) recvbuf + displs[rank];
+            char* intermediate_buf = ((char*) recvbuf) + displs[rank]*dtsize;
             res = MPI_Reduce_scatter_swing(sendbuf, intermediate_buf, recvcounts, datatype, op, comm);
             if(res == MPI_SUCCESS){        
                 res = MPI_Allgatherv_swing(intermediate_buf, recvcounts[rank], datatype, recvbuf, recvcounts, displs, datatype, comm);
