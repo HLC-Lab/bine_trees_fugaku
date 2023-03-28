@@ -625,7 +625,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         }
     }
     reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
-    if(coll_type != SWING_ALLREDUCE || srtype == SENDRECV_DT){
+    if(srtype == SENDRECV_DT){
         array_of_blocklengths_s = (int*) malloc(sizeof(int)*size);
         array_of_displacements_s = (int*) malloc(sizeof(int)*size);
         array_of_blocklengths_r = (int*) malloc(sizeof(int)*size);
@@ -798,7 +798,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     free(my_blocks_matrix);
     free(peer_blocks_matrix);
     free(reached_step);
-    if(coll_type != SWING_ALLREDUCE || srtype == SENDRECV_DT){
+    if(srtype == SENDRECV_DT){
         free(array_of_blocklengths_s);
         free(array_of_displacements_s);
         free(array_of_blocklengths_r);
