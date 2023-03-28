@@ -42,6 +42,8 @@ typedef enum{
 typedef enum{
     SENDRECV_DT = 0, // Datatypes
     SENDRECV_BBB, // Block-by-block
+    SENDRECV_CONT, // Contiguous
+    SENDRECV_IDEAL, // Ideal case (just for performance debugging reasons, produces wrong results, never use it in practice)
 }SendRecv;
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
@@ -105,6 +107,10 @@ void read_env(MPI_Comm comm){
                 srtype = SENDRECV_DT;
             }else if(strcmp(env_str, "BBB") == 0){
                 srtype = SENDRECV_BBB;
+            }else if(strcmp(env_str, "CONT") == 0){
+                srtype = SENDRECV_CONT;
+            }else if(strcmp(env_str, "IDEAL") == 0){
+                srtype = SENDRECV_IDEAL;
             }else{
                 fprintf(stderr, "Unknown LIBSWING_SENDRECV_TYPE\n");
                 exit(-1);
@@ -304,16 +310,9 @@ static int sendrecv_dt(char* send_bitmap, char* recv_bitmap,
     std::cout << "Datatype preparation required: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() << "ns\n";
 #endif
     int res;
-    if(coll_type == SWING_REDUCE_SCATTER){
-        res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
-                           rbuf, 1, indexed_recvtype, source, recvtag,  
-                           comm, MPI_STATUS_IGNORE);
-    }else{
-        // For allgather we can use buf instead of rbuf
-        res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
-                           buf, 1, indexed_recvtype, source, recvtag,  
-                           comm, MPI_STATUS_IGNORE);
-    }
+    res = MPI_Sendrecv(buf, 1, indexed_sendtype, dest, sendtag,
+                        rbuf, 1, indexed_recvtype, source, recvtag,  
+                        comm, MPI_STATUS_IGNORE);
 
     MPI_Type_free(&indexed_sendtype);
     MPI_Type_free(&indexed_recvtype);
@@ -350,48 +349,137 @@ static int sendrecv_bbb(char* send_bitmap, char* recv_bitmap,
     MPI_Type_size(recvtype, &dtsize_r);
     uint blocks_to_send = 0, blocks_to_recv = 0;
     int res;
-    int num_requests = 0;
+    int num_requests_s = 0, num_requests_r = 0;
     for(size_t i = 0; i < size; i++){
-        num_requests += (send_bitmap[i] + recv_bitmap[i]);
+        num_requests_s += send_bitmap[i];
+        num_requests_r += recv_bitmap[i];
     }
-    MPI_Request* requests = (MPI_Request*) malloc(sizeof(MPI_Request)*num_requests);
-    int next_req = 0;
+    MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*num_requests_s);
+    MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*num_requests_r);
+    //memset(requests_s, 0, sizeof(MPI_Request)*num_requests_s);
+    //memset(requests_r, 0, sizeof(MPI_Request)*num_requests_r);
+    int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*num_requests_r);
+    int next_req_s = 0, next_req_r = 0;
     for(size_t i = 0; i < size; i++){
         if(send_bitmap[i]){
-            res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize_s, blocks_sizes[i], sendtype, dest, sendtag, comm, &(requests[next_req]));
-            ++next_req;
+            res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize_s, blocks_sizes[i], sendtype, dest, sendtag, comm, &(requests_s[next_req_s]));
+            ++next_req_s;
             if(res != MPI_SUCCESS){
                 return res;
             }
         }
         if(recv_bitmap[i]){
-            if(coll_type == SWING_REDUCE_SCATTER){
-                res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*dtsize_r, blocks_sizes[i], recvtype, dest, recvtag, comm, &(requests[next_req]));
-            }else{
-                res = MPI_Irecv(((char*) buf) + blocks_displs[i]*dtsize_r, blocks_sizes[i], recvtype, dest, recvtag, comm, &(requests[next_req]));
-            }
-            ++next_req;
+            res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*dtsize_r, blocks_sizes[i], recvtype, dest, recvtag, comm, &(requests_r[next_req_r]));
+            req_idx_to_block_idx[next_req_r] = i;
+            ++next_req_r;
             if(res != MPI_SUCCESS){
                 return res;
             }
         }
     }
-    res = MPI_Waitall(next_req, requests, MPI_STATUSES_IGNORE);
+
+    //assert(next_req_s == num_requests_s);
+    //assert(next_req_r == num_requests_r);
+
+    // Aggregate 
+    if(coll_type == SWING_REDUCE_SCATTER){
+        int index;
+        int completed = 0;
+        do{
+            MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
+            int block_idx = req_idx_to_block_idx[index];
+            void* rbuf_block = (void*) (((char*) rbuf) + dtsize_s*blocks_displs[block_idx]);
+            void* buf_block = (void*) (((char*) buf) + dtsize_s*blocks_displs[block_idx]);
+            MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op);
+            completed++;
+        }while(completed != num_requests_r);
+    }else{
+        res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
+        if(res != MPI_SUCCESS){
+            return res;
+        }        
+    }
+    res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
     if(res != MPI_SUCCESS){
         return res;
     }
-    // Aggregate TODO: Could aggregate block by block when they arrive    
-    if(coll_type == SWING_REDUCE_SCATTER){
-        for(size_t i = 0; i < size; i++){
-            if(recv_bitmap[i]){
-                void* rbuf_block = (void*) (((char*) rbuf) + dtsize_s*blocks_displs[i]);
-                void* buf_block = (void*) (((char*) buf) + dtsize_s*blocks_displs[i]);
-                MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op);
-            }
+    free(requests_s);
+    free(requests_r);
+    free(req_idx_to_block_idx);
+    return res;
+}
+
+
+static int sendrecv_cont(char* send_bitmap, char* recv_bitmap, 
+                    int dest, int source, int sendtag, int recvtag, 
+                    void* buf, void* rbuf, void* tmpbuf, const int *blocks_sizes, 
+                    const int *blocks_displs, MPI_Comm comm, int size, int rank,  
+                    MPI_Datatype sendtype, MPI_Datatype recvtype, MPI_Op op, CollType coll_type){
+#ifdef PERF_DEBUGGING
+    auto start = std::chrono::high_resolution_clock::now();
+#endif
+    // Create datatype starting from bitmaps
+    // Check how many blocks we have to send/recv
+    int dtsize_s, dtsize_r;
+    MPI_Type_size(sendtype, &dtsize_s);
+    MPI_Type_size(recvtype, &dtsize_r);
+    int res;
+
+    // Copy blocks to send to contiguous memory
+    size_t next_good_offset = 0, count_s = 0, count_r = 0;
+    for(size_t i = 0; i < size; i++){
+        if(send_bitmap[i]){
+            size_t block_size_bytes = (blocks_sizes[i])*dtsize_s;
+            size_t block_displ_bytes = (blocks_displs[i])*dtsize_s;
+            memcpy(((char*) tmpbuf) + next_good_offset, ((char*) buf) + block_displ_bytes, block_size_bytes);
+            next_good_offset += block_size_bytes;
+            count_s += blocks_sizes[i];
+        }
+        if(recv_bitmap[i]){
+            count_r += blocks_sizes[i];
         }
     }
-    free(requests);
+
+    res = MPI_Sendrecv(tmpbuf, count_s, sendtype, dest, sendtag,
+                  rbuf, count_r, recvtype, source, recvtag,  
+                  comm, MPI_STATUS_IGNORE);
+    if(res != MPI_SUCCESS){
+        return res;
+    }
+
+    // Aggregate recvd blocks (or move them to appropriate locations) -- to buf
+    size_t next_rbuf_offset = 0;
+    for(size_t i = 0; i < size; i++){
+        size_t block_size_bytes = (blocks_sizes[i])*dtsize_r;
+        size_t block_displ_bytes = (blocks_displs[i])*dtsize_r;
+        if(recv_bitmap[i]){
+            char* recvd_block_ptr = ((char*) rbuf) + next_rbuf_offset;
+            char* buf_block_ptr = ((char*) buf) + block_displ_bytes;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                MPI_Reduce_local(recvd_block_ptr, buf_block_ptr, blocks_sizes[i], sendtype, op);
+            }else{
+                memcpy(buf_block_ptr, recvd_block_ptr, block_size_bytes);
+            }
+            next_rbuf_offset += block_size_bytes;
+        }
+    }
     return res;
+}
+
+// Just to be used for performance debugging reasons
+static int sendrecv_ideal(char* send_bitmap, char* recv_bitmap, 
+                    int dest, int source, int sendtag, int recvtag, 
+                    void* buf, void* rbuf, const int *blocks_sizes, 
+                    const int *blocks_displs, MPI_Comm comm, int size, int rank,  
+                    MPI_Datatype sendtype, MPI_Datatype recvtype, MPI_Op op, CollType coll_type){
+    size_t count_s = 0, count_r = 0;
+    for(size_t i = 0; i < size; i++){
+        if(send_bitmap[i]){count_s += blocks_sizes[i];}
+        if(recv_bitmap[i]){count_r += blocks_sizes[i];}
+    }
+    return MPI_Sendrecv(buf, count_s, sendtype, dest, sendtag,
+                        rbuf, count_r, recvtype, source, recvtag,  
+                        comm, MPI_STATUS_IGNORE);
 }
 
 static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
@@ -441,8 +529,11 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     for(size_t step = 0; step < num_steps; step++){    
         my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
         peer_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
-    }  
-
+    }
+    char* tmpbuf;  
+    if(srtype == SENDRECV_CONT){
+        tmpbuf = (char*) malloc(sizeof(char)*total_size_bytes);
+    }
     // Compute the peers
     peers = (uint**) malloc(sizeof(uint*)*size);
     for(uint i = 0; i < size; i++){
@@ -547,8 +638,18 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
                                   peer, peer, tag, tag, 
                                   buf, rbuf, blocks_sizes, blocks_displs, 
                                   comm, size, rank, sendtype, recvtype, op, coll_type);
-            }else{
+            }else if(srtype == SENDRECV_BBB){
                 res  = sendrecv_bbb(blocks_bitmap_s, blocks_bitmap_r, 
+                                  peer, peer, tag, tag, 
+                                  buf, rbuf, blocks_sizes, blocks_displs, 
+                                  comm, size, rank, sendtype, recvtype, op, coll_type);
+            }else if(srtype == SENDRECV_CONT){
+                res  = sendrecv_cont(blocks_bitmap_s, blocks_bitmap_r, 
+                                  peer, peer, tag, tag, 
+                                  buf, rbuf, tmpbuf, blocks_sizes, blocks_displs, 
+                                  comm, size, rank, sendtype, recvtype, op, coll_type);
+            }else{
+                res  = sendrecv_ideal(blocks_bitmap_s, blocks_bitmap_r, 
                                   peer, peer, tag, tag, 
                                   buf, rbuf, blocks_sizes, blocks_displs, 
                                   comm, size, rank, sendtype, recvtype, op, coll_type);
@@ -580,6 +681,9 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         free(array_of_displacements_s);
         free(array_of_blocklengths_r);
         free(array_of_displacements_r);
+    }
+    if(srtype == SENDRECV_CONT){
+        free(tmpbuf);
     }
     return 0;
 }
@@ -654,15 +758,14 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
     for(size_t i = 0; i < size; i++){
         buf_size += recvcounts[i]; // TODO: If custom datatypes, manage appropriately        
     }
-    char* buf = (char*) malloc(buf_size*dtsize);    
-#ifndef PERF_DEBUGGING
-    memcpy(((char*) buf) + displs[rank]*dtsize, sendbuf, recvcounts[rank]*dtsize);
-#endif
-    res = swing_coll(buf, NULL, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
-#ifndef PERF_DEBUGGING
-    memcpy(recvbuf, buf, buf_size*dtsize);
-#endif
-    free(buf);
+    memcpy(((char*) recvbuf) + displs[rank]*dtsize, sendbuf, recvcounts[rank]*dtsize);
+    if(srtype == SENDRECV_CONT){
+        char* tmpbuf = (char*) malloc(buf_size*dtsize);
+        res = swing_coll(recvbuf, tmpbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
+        free(tmpbuf);
+    }else{
+        res = swing_coll(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER);
+    }
     return res;
 }
 

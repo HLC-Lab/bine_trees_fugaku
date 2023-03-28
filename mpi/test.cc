@@ -75,6 +75,7 @@ int main(int argc, char** argv){
             if(recvbuf[i] != recvbuf_v[i]){
                 fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
                 valid = false;
+                return 1;
             }
         }
 
