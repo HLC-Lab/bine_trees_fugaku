@@ -54,7 +54,7 @@ static Algo algo = ALGO_SWING;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 
-void read_env(MPI_Comm comm){
+static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
     if(env_str){
         force_env_reload = atoi(env_str);
@@ -211,14 +211,15 @@ static inline int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_n
 // With this we are ok up to 2^20 nodes, add other terms if needed.
 static int rhos[20] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 
-static inline void compute_peers(uint** peers, int size, int rank, int port, int num_steps){
+static inline void compute_peers(uint** peers, int port, int num_steps, uint start_rank, uint num_ranks){
     int coord[MAX_SUPPORTED_DIMENSIONS];
     bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
     int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
     for(size_t i = 0; i < dimensions_num; i++){
         num_steps_per_dim[i] = ceil(log2(dimensions[i])) - 1;
     }
-    for(uint rank = 0; rank < size; rank++){
+    
+    for(uint rank = start_rank; rank < start_rank + num_ranks; rank++){
         // Compute default directions
         getCoordFromId(rank, coord);
         for(size_t i = 0; i < dimensions_num; i++){
@@ -245,17 +246,12 @@ static inline void compute_peers(uint** peers, int size, int rank, int port, int
             }
             
             distance = rhos[relative_step];
-            if(coord[target_dim] & 1){ // Flip the sign for odd nodes
-                distance *= -1;
-            }
-            if(port >= dimensions_num){ // Mirrored collectives
-                distance *= -1;
-            }
+            // Flip the sign for odd nodes
+            if(coord[target_dim] & 1){distance *= -1;}
+            // Mirrored collectives
+            if(port >= dimensions_num){distance *= -1;}
 
-            if(relative_step > num_steps_per_dim[target_dim]){
-                terminated_dimensions_bitmap[target_dim] = true;
-                terminated_dimensions++;
-            }else{
+            if(relative_step <= num_steps_per_dim[target_dim]){
                 coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
                 if(dimensions_num > 1){
                     peers[rank][i] = getIdFromCoord(coord, dimensions, dimensions_num);
@@ -263,6 +259,9 @@ static inline void compute_peers(uint** peers, int size, int rank, int port, int
                     peers[rank][i] = coord[0];
                 }
                 i += 1;
+            }else{
+                terminated_dimensions_bitmap[target_dim] = true;
+                terminated_dimensions++;                
             }        
         }        
     }
@@ -645,8 +644,8 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     auto start = std::chrono::high_resolution_clock::now();
     long total = 0;
 #endif
-    // TODO: This takes a while, we could optimize it
-    compute_peers(peers, size, rank, 0, num_steps); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+    // TODO: This takes a while, we could optimize it    
+    compute_peers(peers, 0, num_steps, 0, size); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
 #ifdef PERF_DEBUGGING
     auto end = std::chrono::high_resolution_clock::now();
     std::cout << "compute_peers took: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count()  << "ns\n";
@@ -839,24 +838,24 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     return res;
 }
 
-static int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){    
     int res, size, rank, dtsize;    
     MPI_Comm_size(comm, &size);
     MPI_Comm_rank(comm, &rank);
     MPI_Type_size(datatype, &dtsize);
 
     // Create a temporary buffer (to avoid overwriting sendbuf)
-    size_t total_size_bytes = count*dtsize;
+    size_t total_size_bytes = count*dtsize;        
     char* rbuf = (char*) malloc(count*dtsize);
     memcpy(recvbuf, sendbuf, total_size_bytes);    
+
     int num_steps = ceil(log2(size));
     
     uint** peers = (uint**) malloc(sizeof(uint*)*size);
-    for(uint i = 0; i < size; i++){
-        peers[i] = (uint*) malloc(sizeof(uint)*num_steps);
-    }
-    DPRINTF("[%d] Computing peers\n", rank);
-    compute_peers(peers, size, rank, 0, num_steps); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+    peers[rank] = (uint*) malloc(sizeof(uint)*num_steps); // It's stupid but avoids changing too much stuff
+    DPRINTF("[%d] Computing peers\n", rank);   
+    // Here I need to compute only my peers       
+    compute_peers(peers, 0, num_steps, rank, 1); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
     
     for(size_t step = 0; step < num_steps; step++){
         DPRINTF("[%d] Starting step %d\n", rank, step);        
@@ -868,12 +867,9 @@ static int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, i
         if(res != MPI_SUCCESS){return res;}
         // Aggregate    
         MPI_Reduce_local(rbuf, recvbuf, count, datatype, op);
-    }
-    
+    }    
     free(rbuf);
-    for(uint i = 0; i < size; i++){
-        free(peers[i]);
-    }
+    free(peers[rank]);
     free(peers);
     return res;
 }
@@ -1054,9 +1050,9 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         MPI_Type_size(datatype, &dtsize);        
         // Compute total size of data
         size_t total_size_bytes = count*dtsize;
-        int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori
+        int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
         if(latency_optimal){
-            return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm); // Misleading, should call the function in a different way
+            return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm); // Misleading, should call the function in a different way            
         }else{
             int rank, res;
             MPI_Comm_rank(comm, &rank);
