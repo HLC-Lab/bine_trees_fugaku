@@ -846,8 +846,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
 
     // Create a temporary buffer (to avoid overwriting sendbuf)
     size_t total_size_bytes = count*dtsize;        
-    char* rbuf = (char*) malloc(count*dtsize);
-    memcpy(recvbuf, sendbuf, total_size_bytes);    
+    char* rbuf;
 
     int num_steps = ceil(log2(size));
     
@@ -860,13 +859,26 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     for(size_t step = 0; step < num_steps; step++){
         DPRINTF("[%d] Starting step %d\n", rank, step);        
         uint32_t peer = peers[rank][step];   
-        // For latency optimal, I send/recv all the data
-        res = MPI_Sendrecv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE,
-                           rbuf, count, datatype, peer, TAG_SWING_ALLREDUCE,  
-                           comm, MPI_STATUS_IGNORE);
-        if(res != MPI_SUCCESS){return res;}
-        // Aggregate    
-        MPI_Reduce_local(rbuf, recvbuf, count, datatype, op);
+        if(step == 0){
+            MPI_Request requests[2];
+            res = MPI_Isend(sendbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[0]));
+            if(res != MPI_SUCCESS){return res;}
+            res = MPI_Irecv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[1]));
+            if(res != MPI_SUCCESS){return res;}
+            // While data is transmitted, we allocate buffer for the next steps
+            rbuf = (char*) malloc(count*dtsize);
+            res = MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
+            if(res != MPI_SUCCESS){return res;}
+            MPI_Reduce_local(sendbuf, recvbuf, count, datatype, op);
+        }else{
+            // For latency optimal, I send/recv all the data
+            res = MPI_Sendrecv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE,
+                            rbuf, count, datatype, peer, TAG_SWING_ALLREDUCE,  
+                            comm, MPI_STATUS_IGNORE);
+            if(res != MPI_SUCCESS){return res;}
+            // Aggregate    
+            MPI_Reduce_local(rbuf, recvbuf, count, datatype, op);
+        }
     }    
     free(rbuf);
     free(peers[rank]);
