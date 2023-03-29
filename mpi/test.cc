@@ -7,9 +7,15 @@
 
 int main(int argc, char** argv){
     int r, rank;
-    int count = 32;
+#ifdef PROFILE
+    int count = 65536;
+    int warmup = 0;
+    int iterations = 100000;
+#else
+    int count = 65536;
     int warmup = 0;
     int iterations = 1;
+#endif
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
@@ -34,7 +40,7 @@ int main(int argc, char** argv){
     for(int i = warmup; i >= 0; i--){
         r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
-    setenv("LIBSWING_FORCE_ENV_RELOAD", "0", 1);
+    unsetenv("LIBSWING_FORCE_ENV_RELOAD");
 
     start = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < iterations; i++){
@@ -64,6 +70,7 @@ int main(int argc, char** argv){
         for(int i = warmup; i >= 0; i--){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         }
+        unsetenv("LIBSWING_FORCE_ENV_RELOAD");
         start = std::chrono::high_resolution_clock::now();
         for(size_t i = 0; i < iterations; i++){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);

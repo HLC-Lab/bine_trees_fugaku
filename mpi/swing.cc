@@ -59,7 +59,9 @@ static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
     if(env_str){
-        force_env_reload = atoi(env_str);
+        force_env_reload = 1;
+    }else{
+        force_env_reload = 0;
     }
 
     if(!env_read || force_env_reload){
@@ -186,10 +188,14 @@ static inline void read_env(MPI_Comm comm){
     }
 }
 
+//#define mod(a,b)({(a + 3*b) % b;})
+
+
 static inline int mod(int a, int b){
     int r = a % b;
     return r < 0 ? r + b : r;
 }
+
 
 // Convert a rank id into a list of d-dimensional coordinates
 static inline void getCoordFromId(int id, int* coord){

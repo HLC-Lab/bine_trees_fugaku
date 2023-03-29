@@ -1,4 +1,4 @@
-NODES=32
+NODES=4
 rm -f gmon.out-*
 export GMON_OUT_PREFIX=gmon.out-
 mpirun -x GMON_OUT_PREFIX -np ${NODES} ./test_profile &> log.txt
