@@ -295,9 +295,26 @@ static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reache
         // How much should I "shift" it to the left or right
         for(size_t step = 0; step < num_steps; step++){
             DPRINTF("[%d] Computing bitmap for rank %d by shifting its own by %d positions\n", reference_rank, rank, diff);
-            for(size_t i = 0; i < size; i++){
-                // Elem in pos i in reference_bitmap, should be in pos i+diff in bitmaps
-                bitmaps[step][mod(i+diff, size)] = reference_bitmap[step][i];
+            // Elem in pos i in reference_bitmap, should be in pos i+diff in bitmaps
+            /*
+            for(size_t i = 0; i < size; i++){                
+                bitmaps[step][mod(i + diff, size)] = reference_bitmap[step][i];
+            }
+            */
+            if(diff > 0){
+                for(int i = 0; i + diff < size; i++){             
+                    bitmaps[step][i + diff] = reference_bitmap[step][i];
+                }
+                for(int i = size - diff; i < size; i++){                
+                    bitmaps[step][i + diff - size] = reference_bitmap[step][i];
+                }
+            }else{
+                for(int i = 0; i + diff < 0; i++){                
+                    bitmaps[step][i + diff + size] = reference_bitmap[step][i];
+                }
+                for(int i = -diff; i < size; i++){                
+                    bitmaps[step][i + diff] = reference_bitmap[step][i];
+                }
             }
 #ifdef DEBUG
             DPRINTF("[%d] Intermediate bitmap: ", reference_rank);
@@ -311,8 +328,10 @@ static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reache
                 DPRINTF("[%d] And by flipping it\n", reference_rank);
                 // Reflect the array
                 for (int i = 1; i < size / 2; i++) {
-                    int start_pos = (rank + i) % size;
-                    int end_pos = mod((rank - i), size);
+                    //int start_pos = (rank + i) % size;
+                    //int end_pos = mod((rank - i), size);
+                    int start_pos = (rank + i) >= size?rank+i-size:rank+i;
+                    int end_pos = rank-i < 0?rank-i+size:rank-i;
                     int temp = bitmaps[step][start_pos];
                     bitmaps[step][start_pos] = bitmaps[step][end_pos];
                     bitmaps[step][end_pos] = temp;
