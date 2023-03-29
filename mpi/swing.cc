@@ -188,8 +188,7 @@ static inline void read_env(MPI_Comm comm){
     }
 }
 
-//#define mod(a,b)({(a + 3*b) % b;})
-
+//#define mod(a,b)({(a + 3*b) & (b-1);})
 
 static inline int mod(int a, int b){
     int r = a % b;
@@ -987,6 +986,10 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         }
 
         // Overlap here
+        if(step != num_steps - 1){
+            size_t block_step_next = (coll_type == SWING_REDUCE_SCATTER)?step + 1:(num_steps - step - 1 - 1);            
+            __builtin_prefetch(my_blocks_matrix[block_step_next], 0, 0);
+        }
         // End overlap
 
         if(coll_type == SWING_REDUCE_SCATTER){
