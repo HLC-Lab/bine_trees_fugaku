@@ -1290,8 +1290,9 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             int* recvcounts = (int*) malloc(sizeof(int)*size);
             int* displs = (int*) malloc(sizeof(int)*size);
             size_t last = 0;
+            size_t normcount = ceil(count / size);
             for(size_t i = 0; i < size; i++){
-                recvcounts[i] = ceil(count / size);
+                recvcounts[i] = normcount;
                 if(i == size - 1){
                     recvcounts[i] = count - ((count / size)*(size - 1));
                 } 
