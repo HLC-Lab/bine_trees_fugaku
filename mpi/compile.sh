@@ -19,6 +19,7 @@ if [ ! -f "swing.so" ]; then
 fi
 
 ${MPI_COMPILER} ${FLAGS} test.cc -o test ${FLAGS}
+${MPI_COMPILER} ${FLAGS} bench.cc swing.o -o bench ${FLAGS}
 
 
 # Profiling compilation
