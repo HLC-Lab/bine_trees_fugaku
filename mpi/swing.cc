@@ -898,12 +898,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                            MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type){
     int dtsize, tag, res;  
-    char* blocks_bitmap_s;
-    char* blocks_bitmap_r;
-    char* blocks_bitmap_s_next;
-    char* blocks_bitmap_r_next;
     char** my_blocks_matrix;
-    char** peer_blocks_matrix;
     uint8_t* reached_step;
     uint** peers;
     MPI_Type_size(sendtype, &dtsize);
@@ -921,16 +916,12 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         total_elements += blocks_sizes[i];        
     }
     total_size_bytes = dtsize*total_elements; // TODO: Check for custom datatypes
-    blocks_bitmap_s_next = NULL;
-    blocks_bitmap_r_next = NULL;
     int extra_start, extra_count, aggregate_later_count = 0;
     int* aggregate_later = NULL;
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
-    peer_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
     for(size_t step = 0; step < num_steps; step++){    
         my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
-        peer_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
     }
     char* tmpbuf;  
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
@@ -1012,10 +1003,8 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 
     for(size_t step = 0; step < num_steps; step++){    
         free(my_blocks_matrix[step]);
-        free(peer_blocks_matrix[step]);
     }
     free(my_blocks_matrix);
-    free(peer_blocks_matrix);
     free(reached_step);
     free(requests_s);
     free(requests_r);
