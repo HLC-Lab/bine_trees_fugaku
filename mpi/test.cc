@@ -7,9 +7,9 @@
 
 int main(int argc, char** argv){
     int r, rank;
-    int count = 131072;
+    int count = 65536;
     int warmup = 5;
-    int iterations = 1000;
+    int iterations = 10000;
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
@@ -22,7 +22,9 @@ int main(int argc, char** argv){
     // Init
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
+    auto start = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::high_resolution_clock::now();
+#ifndef PROFILE
     // Run the original MPI allreduce
     setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
     setenv("LIBSWING_ALGO", "DEFAULT", 1);
@@ -34,19 +36,24 @@ int main(int argc, char** argv){
     }
     setenv("LIBSWING_FORCE_ENV_RELOAD", "0", 1);
 
-    auto start = std::chrono::high_resolution_clock::now();
+    start = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < iterations; i++){
         r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
-    auto end = std::chrono::high_resolution_clock::now();
+    end = std::chrono::high_resolution_clock::now();
     if(r != MPI_SUCCESS){
         fprintf(stderr, "Allreduce failed with error %d\n", r);
         return r;
     }else{
         std::cout << "Default terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
     }
+#endif
 
+#ifdef PROFILE
+    const char* algos[1] = {"SWING"};
+#else
     const char* algos[2] = {"SWING", "RING"};
+#endif
     for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
         // Run first swing allreduce
         setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
@@ -69,6 +76,7 @@ int main(int argc, char** argv){
             std::cout << algos[algo] << " terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
         }
 
+#ifndef PROFILE
         // Then validate
         bool valid = true;
         for(size_t i = 0; i < count; i++){
@@ -82,6 +90,7 @@ int main(int argc, char** argv){
         if(valid){
             printf("Validation succeeded.\n");
         }
+#endif
     }
     // Fini
     MPI_Finalize();    

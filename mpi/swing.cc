@@ -49,7 +49,8 @@ typedef enum{
 }SendRecv;
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
-                    dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0;
+                    dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
+                    fast_bitmaps = 1;
 static Algo algo = ALGO_SWING;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
@@ -91,6 +92,11 @@ static inline void read_env(MPI_Comm comm){
         env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
         if(env_str){
             latency_optimal_threshold = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_FAST_BITMAPS");
+        if(env_str){
+            fast_bitmaps = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_ALGO");
@@ -160,6 +166,7 @@ static inline void read_env(MPI_Comm comm){
             printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
             printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
             printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
+            printf("LIBSWING_FAST_BITMAPS: %d\n", fast_bitmaps);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_SENDRECV_TYPE: %d\n", srtype);            
             printf("LIBSWING_DIMENSIONS: ");
@@ -280,35 +287,77 @@ static void computeBlocksBitmap(int sender, int step, char* blocks_bitmap, uint 
     }    
 }
 
-static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reached_step, uint num_steps, uint** peers){
-    memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
-    for(size_t i = 0; i < num_steps; i++){
-        memset(bitmaps[i], 0, sizeof(char)*size);
-    }
-    // Bit vector that says if rank reached another node    
-    for(size_t step = 0; step < num_steps; step++){
-        int dest = peers[rank][step];
-        bitmaps[step][dest] = 1; // I'll send its block
-        computeBlocksBitmap(dest, step + 1, bitmaps[step], num_steps, peers); // ... plus those it will send in the next steps. 
-        bitmaps[step][rank] = 0; // I can never reach myself (this could happen sometimes in the non-power-of-2 case)
-        for(size_t i = 0; i < size; i++){
-            if(bitmaps[step][i]){
-                // Is there any peer I already reached before? If so, delete the earlier reach
-                if(reached_step[i] != num_steps){
-                    int prev_reached_step = reached_step[i];
-                    bitmaps[prev_reached_step][i] = 0;
-                }
-                reached_step[i] = step;
+static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reached_step, uint num_steps, uint** peers,
+                             int reference_rank, char** reference_bitmap){
+    if(reference_bitmap && fast_bitmaps){
+        // Compute from reference bitmap rather than doing it from scratch
+        int diff = rank - reference_rank;        
+        // How much should I "shift" it to the left or right
+        for(size_t step = 0; step < num_steps; step++){
+            DPRINTF("[%d] Computing bitmap for rank %d by shifting its own by %d positions\n", reference_rank, rank, diff);
+            for(size_t i = 0; i < size; i++){
+                // Elem in pos i in reference_bitmap, should be in pos i+diff in bitmaps
+                bitmaps[step][mod(i+diff, size)] = reference_bitmap[step][i];
             }
-        }     
-    }    
+#ifdef DEBUG
+            DPRINTF("[%d] Intermediate bitmap: ", reference_rank);
+            for(size_t i = 0; i < size; i++){
+                DPRINTF("%d ", bitmaps[step][i]);
+            }
+            DPRINTF("\n");
+#endif
+            // If referance_rank is odd and rank even, or vice versa, we need to mirror it
+            if(diff & 1){ // TODO: Always true since even talk only with odds and vice versa?
+                DPRINTF("[%d] And by flipping it\n", reference_rank);
+                // Reflect the array
+                for (int i = 1; i < size / 2; i++) {
+                    int start_pos = (rank + i) % size;
+                    int end_pos = mod((rank - i), size);
+                    int temp = bitmaps[step][start_pos];
+                    bitmaps[step][start_pos] = bitmaps[step][end_pos];
+                    bitmaps[step][end_pos] = temp;
+                }
+#ifdef DEBUG
+                DPRINTF("[%d] Final bitmap: ", reference_rank);
+                for(size_t i = 0; i < size; i++){
+                    DPRINTF("%d ", bitmaps[step][i]);
+                }
+                DPRINTF("\n");
+#endif
+            }
+        }
+
+    }else{
+        memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
+        for(size_t i = 0; i < num_steps; i++){
+            memset(bitmaps[i], 0, sizeof(char)*size);
+        }
+        // Bit vector that says if rank reached another node    
+        for(size_t step = 0; step < num_steps; step++){
+            int dest = peers[rank][step];
+            bitmaps[step][dest] = 1; // I'll send its block
+            computeBlocksBitmap(dest, step + 1, bitmaps[step], num_steps, peers); // ... plus those it will send in the next steps. 
+            bitmaps[step][rank] = 0; // I can never reach myself (this could happen sometimes in the non-power-of-2 case)
+            for(size_t i = 0; i < size; i++){
+                if(bitmaps[step][i]){
+                    // Is there any peer I already reached before? If so, delete the earlier reach
+                    if(reached_step[i] != num_steps){
+                        int prev_reached_step = reached_step[i];
+                        bitmaps[prev_reached_step][i] = 0;
+                    }
+                    reached_step[i] = step;
+                }
+            }     
+        }    
+    }
 }
 
 static void getBitmaps(int rank, int size, uint8_t* reached_step, uint num_steps, uint** peers, 
                        CollType coll_type, uint block_step, char** my_blocks_matrix, char** peer_blocks_matrix, 
                        char** bitmap_s, char** bitmap_r){
     uint32_t peer = peers[rank][block_step];
-    getBitmapsMatrix(peer, size, peer_blocks_matrix, reached_step, num_steps, peers);
+    getBitmapsMatrix(peer, size, peer_blocks_matrix, reached_step, num_steps, peers,
+                    rank, my_blocks_matrix);
     if(coll_type == SWING_REDUCE_SCATTER){
         *bitmap_s = my_blocks_matrix[block_step];
         *bitmap_r = peer_blocks_matrix[block_step];
@@ -669,7 +718,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 
 
     DPRINTF("[%d] Getting bitmaps\n", rank);
-    getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers);
+    getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL);
 
     if(srtype == SENDRECV_BBBO){
         size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?0:(num_steps - 1);            
