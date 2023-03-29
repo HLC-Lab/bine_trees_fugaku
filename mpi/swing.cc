@@ -18,6 +18,7 @@
 #define TAG_SWING_ALLREDUCE 0x7FFD
 
 //#define PERF_DEBUGGING 
+#define ACTIVE_WAIT
 
 //#define DEBUG
 
@@ -996,8 +997,16 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         if(coll_type == SWING_REDUCE_SCATTER){
             int index, completed = 0;
             for(size_t i = 0; i < num_requests_r; i++){
+#ifdef ACTIVE_WAIT
+                int flag = 0;
+                do{
+                    MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
+                }while(!flag);
+
+#else
                 res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
                 if(res != MPI_SUCCESS){return res;}
+#endif                
                 int block_idx = req_idx_to_block_idx[index];
                 size_t displ_bytes = dtsize*blocks_displs[block_idx];
                 void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
@@ -1005,11 +1014,31 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                 MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op); 
             }
         }else{
+#ifdef ACTIVE_WAIT
+            int index;
+            for(size_t i = 0; i < num_requests_r; i++){
+                int flag = 0;
+                do{
+                    MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
+                }while(!flag);
+            }
+#else                            
             res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
             if(res != MPI_SUCCESS){return res;}        
+#endif
         }
+#ifdef ACTIVE_WAIT
+        int index;
+        for(size_t i = 0; i < num_requests_s; i++){
+            int flag = 0;
+            do{
+                MPI_Testany(num_requests_s, requests_s, &index, &flag, MPI_STATUS_IGNORE);
+            }while(!flag);
+        }
+#else                            
         res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
         if(res != MPI_SUCCESS){return res;}        
+#endif
     }
 
     for(size_t step = 0; step < num_steps; step++){    
