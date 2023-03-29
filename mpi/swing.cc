@@ -13,9 +13,9 @@
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
 
-#define TAG_SWING_REDUCESCATTER ((0x1 << 15) - 1)
-#define TAG_SWING_ALLGATHER ((0x1 << 15) - 2)
-#define TAG_SWING_ALLREDUCE ((0x1 << 15) - 3)
+#define TAG_SWING_REDUCESCATTER 0x7FFF
+#define TAG_SWING_ALLGATHER 0x7FFE
+#define TAG_SWING_ALLREDUCE 0x7FFD
 
 //#define PERF_DEBUGGING 
 
@@ -915,20 +915,11 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         tag = TAG_SWING_ALLGATHER;
     }
 
-    // Compute total size of data
-    size_t total_size_bytes = 0, total_elements = 0;
-    for(size_t i = 0; i < size; i++){
-        total_elements += blocks_sizes[i];        
-    }
-    total_size_bytes = dtsize*total_elements; // TODO: Check for custom datatypes
-    int extra_start, extra_count, aggregate_later_count = 0;
-    int* aggregate_later = NULL;
     my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
     reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
     for(size_t step = 0; step < num_steps; step++){    
         my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
     }
-    char* tmpbuf;  
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);;
     int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
@@ -963,11 +954,21 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
             //assert(bitmaps[step][i] == reference_bitmap[step][mod(2*rank - size - diff - i, size)]);
 
             size_t send_index, recv_index;
+
+            // peer - size + rank - i >= size  ==> peer + rank - i >= 2*size. At most we can have i=0, and thus peer + rank >= 2* size. However this can never be true since peer + rank < 2*size
+            // peer - size + rank - i < 0      ==> peer + rank - i < size. At most we can have i=size-1, and thus peer + rank - size + 1 < size ==> peer + rank + 1 < 2*size, which might indeed happen.
+            // To see if we can simply sum sum when it's negative, we have to check that:
+            // peer - size + rank - i >= -size ==> peer + rank - i >= 0, which might not be true, so we have to loop and add
+            //int other = mod(peer - size + rank - i, size); 
+            int other = peer - size + rank - i;
+            while(other < 0){other += size;}
             if(coll_type == SWING_REDUCE_SCATTER){
                 send_index = i;
-                recv_index = mod(2*peer - size - diff - i, size);
+                //recv_index = mod(2*peer - size - diff - i, size);
+                recv_index = other;
             }else{
-                send_index = mod(2*peer - size - diff - i, size);
+                //send_index = mod(2*peer - size - diff - i, size);
+                send_index = other;
                 recv_index = i;
             }
             if(my_blocks_matrix[block_step][send_index]){
@@ -994,7 +995,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 
         if(coll_type == SWING_REDUCE_SCATTER){
             int index, completed = 0;
-            do{
+            for(size_t i = 0; i < num_requests_r; i++){
                 res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
                 if(res != MPI_SUCCESS){return res;}
                 int block_idx = req_idx_to_block_idx[index];
@@ -1002,8 +1003,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                 void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
                 void* buf_block = (void*) (((char*) buf) + displ_bytes);            
                 MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op); 
-                completed++;
-            }while(completed != num_requests_r);
+            }
         }else{
             res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
             if(res != MPI_SUCCESS){return res;}        
