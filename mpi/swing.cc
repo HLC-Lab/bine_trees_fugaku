@@ -1008,6 +1008,8 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
             res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
             if(res != MPI_SUCCESS){return res;}        
         }
+        res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
+        if(res != MPI_SUCCESS){return res;}        
     }
 
     for(size_t step = 0; step < num_steps; step++){    
