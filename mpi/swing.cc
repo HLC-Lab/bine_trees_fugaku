@@ -288,64 +288,59 @@ static void computeBlocksBitmap(int sender, int step, char* blocks_bitmap, uint 
 }
 
 static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reached_step, uint num_steps, uint** peers,
-                             int reference_rank, char** reference_bitmap){
+                             int reference_rank, char** reference_bitmap, int step){
     if(reference_bitmap && fast_bitmaps){
         // Compute from reference bitmap rather than doing it from scratch
         int diff = rank - reference_rank;        
         // How much should I "shift" it to the left or right
-        for(size_t step = 0; step < num_steps; step++){
-            DPRINTF("[%d] Computing bitmap for rank %d by shifting its own by %d positions\n", reference_rank, rank, diff);
-            // Elem in pos i in reference_bitmap, should be in pos i+diff in bitmaps
-            /*
-            for(size_t i = 0; i < size; i++){                
-                bitmaps[step][mod(i + diff, size)] = reference_bitmap[step][i];
+        DPRINTF("[%d] Computing bitmap for rank %d by shifting its own by %d positions\n", reference_rank, rank, diff);
+        // Elem in pos i in reference_bitmap, should be in pos i+diff in bitmaps
+        /*
+        for(size_t i = 0; i < size; i++){                
+            bitmaps[step][mod(i + diff, size)] = reference_bitmap[step][i];
+        }
+        */
+        if(diff > 0){
+            for(int i = 0; i + diff < size; i++){             
+                bitmaps[step][i + diff] = reference_bitmap[step][i];
             }
-            */
-            if(diff > 0){
-                for(int i = 0; i + diff < size; i++){             
-                    bitmaps[step][i + diff] = reference_bitmap[step][i];
-                }
-                for(int i = size - diff; i < size; i++){                
-                    bitmaps[step][i + diff - size] = reference_bitmap[step][i];
-                }
-            }else{
-                for(int i = 0; i + diff < 0; i++){                
-                    bitmaps[step][i + diff + size] = reference_bitmap[step][i];
-                }
-                for(int i = -diff; i < size; i++){                
-                    bitmaps[step][i + diff] = reference_bitmap[step][i];
-                }
+            for(int i = size - diff; i < size; i++){                
+                bitmaps[step][i + diff - size] = reference_bitmap[step][i];
             }
-#ifdef DEBUG
-            DPRINTF("[%d] Intermediate bitmap: ", reference_rank);
-            for(size_t i = 0; i < size; i++){
-                DPRINTF("%d ", bitmaps[step][i]);
+        }else{
+            for(int i = 0; i + diff < 0; i++){                
+                bitmaps[step][i + diff + size] = reference_bitmap[step][i];
             }
-            DPRINTF("\n");
-#endif
-            // If referance_rank is odd and rank even, or vice versa, we need to mirror it
-            if(diff & 1){ // TODO: Always true since even talk only with odds and vice versa?
-                DPRINTF("[%d] And by flipping it\n", reference_rank);
-                // Reflect the array
-                for (int i = 1; i < size / 2; i++) {
-                    //int start_pos = (rank + i) % size;
-                    //int end_pos = mod((rank - i), size);
-                    int start_pos = (rank + i) >= size?rank+i-size:rank+i;
-                    int end_pos = rank-i < 0?rank-i+size:rank-i;
-                    int temp = bitmaps[step][start_pos];
-                    bitmaps[step][start_pos] = bitmaps[step][end_pos];
-                    bitmaps[step][end_pos] = temp;
-                }
-#ifdef DEBUG
-                DPRINTF("[%d] Final bitmap: ", reference_rank);
-                for(size_t i = 0; i < size; i++){
-                    DPRINTF("%d ", bitmaps[step][i]);
-                }
-                DPRINTF("\n");
-#endif
+            for(int i = -diff; i < size; i++){                
+                bitmaps[step][i + diff] = reference_bitmap[step][i];
             }
         }
-
+#ifdef DEBUG
+        DPRINTF("[%d] Intermediate bitmap: ", reference_rank);
+        for(size_t i = 0; i < size; i++){
+            DPRINTF("%d ", bitmaps[step][i]);
+        }
+        DPRINTF("\n");
+#endif
+        // If referance_rank is odd and rank even, or vice versa, we need to mirror it (Always true since even talk only with odds and vice versa)
+        DPRINTF("[%d] And by flipping it\n", reference_rank);
+        // Reflect the array
+        for (int i = 1; i < size / 2; i++) {
+            //int start_pos = (rank + i) % size;
+            //int end_pos = mod((rank - i), size);
+            int start_pos = (rank + i) >= size?rank+i-size:rank+i;
+            int end_pos = rank-i < 0?rank-i+size:rank-i;
+            int temp = bitmaps[step][start_pos];
+            bitmaps[step][start_pos] = bitmaps[step][end_pos];
+            bitmaps[step][end_pos] = temp;
+        }
+#ifdef DEBUG
+        DPRINTF("[%d] Final bitmap: ", reference_rank);
+        for(size_t i = 0; i < size; i++){
+            DPRINTF("%d ", bitmaps[step][i]);
+        }
+        DPRINTF("\n");
+#endif
     }else{
         memset(reached_step, num_steps, sizeof(uint8_t)*size); // Init with num_steps to denote it didn't reach
         for(size_t i = 0; i < num_steps; i++){
@@ -376,7 +371,7 @@ static void getBitmaps(int rank, int size, uint8_t* reached_step, uint num_steps
                        char** bitmap_s, char** bitmap_r){
     uint32_t peer = peers[rank][block_step];
     getBitmapsMatrix(peer, size, peer_blocks_matrix, reached_step, num_steps, peers,
-                    rank, my_blocks_matrix);
+                    rank, my_blocks_matrix, block_step);
     if(coll_type == SWING_REDUCE_SCATTER){
         *bitmap_s = my_blocks_matrix[block_step];
         *bitmap_r = peer_blocks_matrix[block_step];
@@ -737,7 +732,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
 
 
     DPRINTF("[%d] Getting bitmaps\n", rank);
-    getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL);
+    getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
 
     if(srtype == SENDRECV_BBBO){
         size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?0:(num_steps - 1);            
