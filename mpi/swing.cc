@@ -337,6 +337,13 @@ static void getBitmapsMatrix(int rank, int size, char** bitmaps, uint8_t* reache
             bitmaps[step][start_pos] = bitmaps[step][end_pos];
             bitmaps[step][end_pos] = temp;
         }
+
+        /*
+        for(size_t i = 0; i < size/2; i++){     
+            // First elem is 2*rank - size - diff, from there go backward     
+            printf("[%d] (rank %d) Checking if %d -> %d\n", reference_rank, rank, mod(2*rank - size - diff - i, size), i);
+            assert(bitmaps[step][i] == reference_bitmap[step][mod(2*rank - size - diff - i, size)]);
+        }*/
 #ifdef DEBUG
         DPRINTF("[%d] Final bitmap: ", reference_rank);
         for(size_t i = 0; i < size; i++){
@@ -943,10 +950,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
     DPRINTF("[%d] Getting bitmaps\n", rank);
     getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
 
-    size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?0:(num_steps - 1);            
-    getBitmaps(rank, size, reached_step, num_steps, peers, 
-                coll_type, block_step, my_blocks_matrix, peer_blocks_matrix, 
-                &blocks_bitmap_s, &blocks_bitmap_r);
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){
         DPRINTF("[%d] Starting step %d\n", rank, step);
@@ -956,13 +959,29 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 
         // Sendrecv + aggregate
         int num_requests_s = 0, num_requests_r = 0;
+        int diff = peer - rank;
         for(size_t i = 0; i < size; i++){
-            if(blocks_bitmap_s[i]){
+            // Instead of computing the peer's bitmaps, I considering them as shifted versions of my bitmap.
+            // If dist is the distance between me and my peer, I should just shift my bitmap by dist positions, and then reverse it along the x-axis
+            // with respect to my peer. However, I can avoid doing that and just play with indexes
+            //assert(bitmaps[step][i] == reference_bitmap[step][mod(2*rank - size - diff - i, size)]);
+
+            size_t send_index, recv_index;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                send_index = i;
+                recv_index = mod(2*peer - size - diff - i, size);
+            }else{
+                send_index = mod(2*peer - size - diff - i, size);
+                recv_index = i;
+            }
+            if(my_blocks_matrix[block_step][send_index]){
+                DPRINTF("[%d] Sending block %d to %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
                 res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize, blocks_sizes[i], sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
                 if(res != MPI_SUCCESS){return res;}
                 ++num_requests_s;                
             }
-            if(blocks_bitmap_r[i]){
+            if(my_blocks_matrix[block_step][recv_index]){
+                DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
                 res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*dtsize, blocks_sizes[i], recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
                 if(res != MPI_SUCCESS){return res;}
                 req_idx_to_block_idx[num_requests_r] = i;
@@ -971,15 +990,11 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         }
 
         // Overlap here
-        if(step < num_steps - 1){
-            size_t block_step_next = (coll_type == SWING_REDUCE_SCATTER)?step+1:(num_steps - step - 1 - 1);            
-            getBitmaps(rank, size, reached_step, num_steps, peers, coll_type, block_step_next, my_blocks_matrix, peer_blocks_matrix, &blocks_bitmap_s, &blocks_bitmap_r);
-        }
+        // End overlap
 
         if(coll_type == SWING_REDUCE_SCATTER){
             int index, completed = 0;
             do{
-                printf("[%d] Waiting any of %d reqs\n", rank, num_requests_r);
                 res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
                 if(res != MPI_SUCCESS){return res;}
                 int block_idx = req_idx_to_block_idx[index];

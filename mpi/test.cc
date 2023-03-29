@@ -8,7 +8,7 @@
 int main(int argc, char** argv){
     int r, rank;
     int count = 32;
-    int warmup = 5;
+    int warmup = 0;
     int iterations = 1;
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
