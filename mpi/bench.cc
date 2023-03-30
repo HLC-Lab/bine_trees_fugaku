@@ -40,13 +40,19 @@ int main(int argc, char** argv){
             printf("Rank%ldTime(us) ", r);
         }
         printf("\n");
+        double avg_iteration = 0.0;
         for(i = 0; i < iterations; i++){
             printf("%d ", count);
+            double avg_ranks = 0.0;
             for(r = 0; r < comm_size; r++){
                printf("%f ", samples_all[r*iterations + i]);
+               avg_ranks += samples_all[r*iterations + i];
             }
+            avg_iterations += avg_ranks / comm_size;
             printf("\n");
         }
+        avg_iteration /= iterations;
+        printf("Average runtime: %f\n", avg_iterations);
     }
     MPI_Finalize();
     free(sendbuf);
