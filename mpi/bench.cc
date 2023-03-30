@@ -48,7 +48,7 @@ int main(int argc, char** argv){
                printf("%f ", samples_all[r*iterations + i]);
                avg_ranks += samples_all[r*iterations + i];
             }
-            avg_iterations += avg_ranks / comm_size;
+            avg_iteration += avg_ranks / comm_size;
             printf("\n");
         }
         avg_iteration /= iterations;
