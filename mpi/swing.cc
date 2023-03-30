@@ -937,6 +937,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
             count += blocks_sizes[i];
         }
         MPI_Win_create(buf, count*dtsize, dtsize, MPI_INFO_NULL, comm, &win);
+        MPI_Win_fence(0, win);
     }
 
     if(!cache || cached_p != size){
