@@ -18,7 +18,7 @@
 #define TAG_SWING_ALLREDUCE 0x7FFD
 
 //#define PERF_DEBUGGING 
-#define ACTIVE_WAIT
+//#define ACTIVE_WAIT
 
 //#define DEBUG
 
@@ -52,7 +52,9 @@ typedef enum{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1;
+                    fast_bitmaps = 1, cache = 0, cached_p = 0;
+static char** cached_my_blocks_matrix = NULL;
+static uint** cached_peers = NULL;
 static Algo algo = ALGO_SWING;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
@@ -102,7 +104,12 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             fast_bitmaps = atoi(env_str);
         }
-
+        
+        env_str = getenv("LIBSWING_CACHE");
+        if(env_str){
+            cache = atoi(env_str);
+        }
+        
         env_str = getenv("LIBSWING_ALGO");
         if(env_str){
             if(strcmp(env_str, "DEFAULT") == 0){
@@ -173,6 +180,7 @@ static inline void read_env(MPI_Comm comm){
             printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
             printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
             printf("LIBSWING_FAST_BITMAPS: %d\n", fast_bitmaps);
+            printf("LIBSWING_CACHE: %d\n", cache);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_SENDRECV_TYPE: %d\n", srtype);            
             printf("LIBSWING_DIMENSIONS: ");
@@ -905,8 +913,8 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                            CollType coll_type){
     int dtsize, tag, res;  
     char** my_blocks_matrix;
-    uint8_t* reached_step;
     uint** peers;
+    uint8_t* reached_step;    
     MPI_Type_size(sendtype, &dtsize);
     uint num_steps = ceil(log2(size));
 
@@ -916,27 +924,46 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         tag = TAG_SWING_ALLGATHER;
     }
 
-    my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);
-    reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
-    for(size_t step = 0; step < num_steps; step++){    
-        my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+    if(!cache || cached_p != size){
+        // Delete previous cache if available (different p)
+        if(cache && cached_peers){
+            for(size_t step = 0; step < num_steps; step++){    
+                free(cached_my_blocks_matrix[step]);
+            }
+            free(cached_my_blocks_matrix);
+            for(uint i = 0; i < size; i++){
+                free(cached_peers[i]);
+            }
+            free(cached_peers);            
+        }
+        reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
+        my_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);    
+        for(size_t step = 0; step < num_steps; step++){    
+            my_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+        }
+        // Compute the peers
+        peers = (uint**) malloc(sizeof(uint*)*size);
+        for(uint i = 0; i < size; i++){
+            peers[i] = (uint*) malloc(sizeof(uint)*num_steps);
+        }
+        DPRINTF("[%d] Computing peers\n", rank);
+        compute_peers(peers, 0, num_steps, 0, size); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
+        DPRINTF("[%d] Getting bitmaps\n", rank);
+        getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
+        free(reached_step);
+        if(cache){
+            cached_p = size;
+            cached_peers = peers;
+            cached_my_blocks_matrix = my_blocks_matrix;
+        }
+    }else{
+        my_blocks_matrix = cached_my_blocks_matrix;
+        peers = cached_peers;
     }
+
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);;
     int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
-
-    // Compute the peers
-    peers = (uint**) malloc(sizeof(uint*)*size);
-    for(uint i = 0; i < size; i++){
-        peers[i] = (uint*) malloc(sizeof(uint)*num_steps);
-    }
-
-    DPRINTF("[%d] Computing peers\n", rank);
-    compute_peers(peers, 0, num_steps, 0, size); // TODO: For now we assume it is single-ported (and we pass port 0), extending should be trivial
-
-
-    DPRINTF("[%d] Getting bitmaps\n", rank);
-    getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
 
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){
@@ -1041,11 +1068,16 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 #endif
     }
 
-    for(size_t step = 0; step < num_steps; step++){    
-        free(my_blocks_matrix[step]);
+    if(!cache){
+        for(size_t step = 0; step < num_steps; step++){    
+            free(my_blocks_matrix[step]);
+        }
+        free(my_blocks_matrix);
+        for(uint i = 0; i < size; i++){
+            free(peers[i]);
+        }
+        free(peers);
     }
-    free(my_blocks_matrix);
-    free(reached_step);
     free(requests_s);
     free(requests_r);
     free(req_idx_to_block_idx);

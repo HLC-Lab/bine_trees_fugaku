@@ -24,7 +24,7 @@ int main(int argc, char** argv){
         samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
     }
     for(i = -10; i < iterations; i++){
-        usleep(1);
+        //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
         double start_time = MPI_Wtime();
         MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
