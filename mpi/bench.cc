@@ -52,7 +52,7 @@ int main(int argc, char** argv){
             printf("\n");
         }
         avg_iteration /= iterations;
-        printf("Average runtime: %f\n", avg_iterations);
+        printf("Average runtime: %f\n", avg_iteration);
     }
     MPI_Finalize();
     free(sendbuf);
