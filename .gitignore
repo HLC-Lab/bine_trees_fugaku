@@ -128,9 +128,9 @@ dmypy.json
 .pyre/
 
 # My files
-lib/swing.o
-lib/swing_profile.o
-lib/swing.so
+lib/libswing.o
+lib/libswing_profile.o
+lib/libswing.so
 lib/test
 lib/test_profile
 bench/bench

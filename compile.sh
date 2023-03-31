@@ -1,18 +1,18 @@
+source conf.sh
+
 GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
 NC=$(tput sgr0)
 
-MPI_COMPILER=mpic++
-
 # Normal compilation
 FLAGS="-O3 -g"
-${MPI_COMPILER} ${FLAGS} -c -fPIC ./lib/swing.cc -o ./lib/swing.o ${FLAGS}
+${MPI_COMPILER} ${FLAGS} -c -fPIC ./lib/libswing.cc -o ./lib/libswing.o ${FLAGS}
 if [ ! -f "./lib/libswing.o" ]; then
     echo "${RED}[Error] libswing.o compilation failed, please check error messages above.${NC}"
     exit 1
 fi
 
-${MPI_COMPILER} ${FLAGS} -shared -pthread -o ./lib/swing.so ./lib/swing.o ${FLAGS}
+${MPI_COMPILER} ${FLAGS} -shared -pthread -o ./lib/libswing.so ./lib/libswing.o ${FLAGS}
 if [ ! -f "./lib/libswing.so" ]; then
     echo "${RED}[Error] libswing.so compilation failed, please check error messages above.${NC}"
     exit 1
