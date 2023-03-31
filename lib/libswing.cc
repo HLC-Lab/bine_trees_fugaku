@@ -52,7 +52,7 @@ typedef enum{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1, cache = 0, cached_p = 0, rdma = 0;
+                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0;
 static char** cached_my_blocks_matrix = NULL;
 static uint** cached_peers = NULL;
 static Algo algo = ALGO_SWING;

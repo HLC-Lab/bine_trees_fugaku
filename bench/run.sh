@@ -18,6 +18,8 @@ TIMESTAMP=$(TZ=":Europe/Rome" date +%Y_%m_%d_%H_%M_%S)
 OUT_FOLDER=${OUT_PATH}/${TIMESTAMP}
 mkdir -p ${OUT_FOLDER}
 
+SWING_FLAGS=""
+
 for p in "${NODES[@]}"
 do
     case $SYSTEM in
@@ -34,11 +36,24 @@ do
         elif [ $n -le 1048576 ]
         then
             iterations=10000
-        else
+        elif [ $n -le 8388608 ]
+        then
             iterations=1000
+        else
+            iterations=10
         fi
         echo -n "Running on "${collective}" nodes with count="${n}"..."
-        ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}.csv
+        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
+        for SWINGTYPE in "BBB" "BBBN"
+        do
+            # Run bandwidth optimal
+            LIBSWING_LATENCY_OPTIMAL_THRESHOLD=0 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_${SWINGTYPE}.csv
+            # If msg small enough, run latency optimal
+            if [ $n -le 1048576 ]
+            then
+                LIBSWING_LATENCY_OPTIMAL_THRESHOLD=99999999 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_${SWINGTYPE}.csv
+            fi
+        done
         echo " ${GREEN}[Done]${NC}"
     done
 done
