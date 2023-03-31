@@ -14,7 +14,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -129,6 +128,10 @@ dmypy.json
 .pyre/
 
 # My files
-mpi/swing.o
-mpi/swing.so
-mpi/test
+lib/swing.o
+lib/swing_profile.o
+lib/swing.so
+lib/test
+lib/test_profile
+bench/bench
+bench/get_coord_daint

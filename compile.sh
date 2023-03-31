@@ -1,0 +1,35 @@
+GREEN=$(tput setaf 2)
+RED=$(tput setaf 1)
+NC=$(tput sgr0)
+
+MPI_COMPILER=mpic++
+
+# Normal compilation
+FLAGS="-O3 -g"
+${MPI_COMPILER} ${FLAGS} -c -fPIC ./lib/swing.cc -o ./lib/swing.o ${FLAGS}
+if [ ! -f "./lib/libswing.o" ]; then
+    echo "${RED}[Error] libswing.o compilation failed, please check error messages above.${NC}"
+    exit 1
+fi
+
+${MPI_COMPILER} ${FLAGS} -shared -pthread -o ./lib/swing.so ./lib/swing.o ${FLAGS}
+if [ ! -f "./lib/libswing.so" ]; then
+    echo "${RED}[Error] libswing.so compilation failed, please check error messages above.${NC}"
+    exit 1
+fi
+
+${MPI_COMPILER} ${FLAGS} ./lib/test.cc -o ./lib/test ${FLAGS}
+
+# Profiling compilation
+FLAGS_PROFILE="-O0 -g -pg -DPROFILE" # To profile
+${MPI_COMPILER} ${FLAGS_PROFILE} -c -fPIC ./lib/libswing.cc -o ./lib/libswing_profile.o ${FLAGS_PROFILE}
+if [ ! -f "./lib/libswing_profile.o" ]; then
+    echo "${RED}[Error] swing_profile.o compilation failed, please check error messages above.${NC}"
+    exit 1
+fi
+${MPI_COMPILER} ${FLAGS_PROFILE} ./lib/test.cc ./lib/libswing_profile.o -o ./lib/test_profile ${FLAGS_PROFILE}
+
+
+# Bench
+${MPI_COMPILER} ${FLAGS} ./bench/bench.cc ./lib/swing.o -o ./bench/bench ${FLAGS}
+${MPI_COMPILER} ${FLAGS} ./bench/get_coord_daint.c -o ./bench/get_coord_daint

@@ -13,7 +13,7 @@ int main(int argc, char** argv){
     int iterations = 100000;
 #else
     int count = 65536;
-    int warmup = 0;
+    int warmup = 5;
     int iterations = 1;
 #endif
     float* sendbuf = (float*) malloc(sizeof(float)*count);
