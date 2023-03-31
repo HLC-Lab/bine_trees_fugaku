@@ -2,7 +2,7 @@
 #include <unistd.h>
 
 int main(int argc, char** argv){
-    char* coordfile = "/proc/cray_xt/cname";
+    const char* coordfile = "/proc/cray_xt/cname";
     FILE * f = fopen(coordfile, "r");
     if (f==NULL) { printf("Error opening %s\n", coordfile); return 0; }
     /* cabinet, row, chassis, slot, node */

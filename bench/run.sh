@@ -1,5 +1,7 @@
 #!/bin/bash
-source ../conf.sh
+pushd ..
+source conf.sh
+popd
 
 GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
