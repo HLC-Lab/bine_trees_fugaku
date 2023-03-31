@@ -1,16 +1,61 @@
 import numpy as np
 import seaborn as sns
+import csv
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+
+paths = {}
 
 def main():
+    # Load paths
+    with open("../data/description.csv", mode='r') as infile:
+        reader = csv.reader(infile)    
+        global paths
+        paths = {(rows[0],rows[1]):"../data/" + rows[2] for rows in reader}
+
     arch = "daint"
-    timestamp = ""
-    p = 10
-    n = 1024
-    filename = "../data/" + arch + "/" + timestamp + "/" + str(p) + "/" + str(n) + ".csv"
-    if os.path.exists(filename):
-        
+    p = 4
 
+    df = pd.DataFrame()
+    for n in [1, 8, 64, 512, 2048, 16384, 131072, 1048576, 8388608, 67108864]:
+        def_bw = 0
+        for algo in ["default", "lat_BBB", "bw_BBB", "lat_BBBN", "bw_BBBN"]:        
+            k = (arch,str(p))
+            if k in paths:
+                vpath = paths[k]
+            filename = vpath + "/" + str(p) + "_" + str(n) + "_" + algo + ".csv"
+            if os.path.exists(filename):
+                data_real = pd.read_csv(filename, sep=" ")                    
+                if len(data_real) == 0:
+                    continue
+                data_real = data_real.loc[:, ~data_real.columns.str.contains('^Unnamed')]
+                colnames_ranks = []
+                for r in range(p):
+                    colnames_ranks += ["Rank" + str(r) + "Time(us)"]
+                data_real["Time (us)"] = data_real[colnames_ranks].max(axis=1)
+                data_real["System"] = arch
+                data_real["Nodes"] = p
+                data_real["Size (B)"] = n*4
+                data_real["Bandwidth (Gb/s)"] = ((data_real["Size (B)"]*8) / (data_real["Time (us)"]*1000.0)).astype(float)
+                data_real["Algo"] = algo
+                if algo == "default":
+                    def_bw = data_real["Bandwidth (Gb/s)"].mean()
+                data_real["Normalized Bandwidth"] = data_real["Bandwidth (Gb/s)"]/def_bw
+                df = pd.concat([df, data_real])
+    df.reset_index(drop=True, inplace=True)
+    df["Time (ms)"] = df["Time (us)"] / 1000.0
 
+    rows = 1
+    cols = 1
+    fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
+
+    ax = sns.boxplot(data=df, \
+                     x="Size (B)", y="Normalized Bandwidth", hue="Algo", ax=axes)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.75)
+    fig.savefig("out/" + arch + "_" + str(p) + ".pdf", format='pdf', dpi=100)
+    plt.clf()
 
 if __name__ == "__main__":
     main()

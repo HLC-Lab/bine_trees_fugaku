@@ -20,7 +20,9 @@ TIMESTAMP=$(TZ=":Europe/Rome" date +%Y_%m_%d_%H_%M_%S)
 OUT_FOLDER=${OUT_PATH}/${TIMESTAMP}
 mkdir -p ${OUT_FOLDER}
 
-SWING_FLAGS=""
+echo ${SYSTEM},${NODES[-1]},${OUT_FOLDER} >> ../data/description.csv
+
+# TODO: On Piz Daint, also change routing
 
 for p in "${NODES[@]}"
 do
