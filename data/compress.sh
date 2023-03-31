@@ -1,4 +1,6 @@
 #!/bin/bash
+source conf/conf.sh
+
 DECOMPRESS=false
 
 while getopts d flag
