@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="daint"
+SYSTEM="einstein"
 
 case $SYSTEM in
   daint)
@@ -12,6 +12,10 @@ case $SYSTEM in
 
   deep-est)
     source conf/deep-est.sh
+    ;;
+  
+  einstein)
+    source conf/einstein.sh
     ;;
 
   *)

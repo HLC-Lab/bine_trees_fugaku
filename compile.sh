@@ -31,5 +31,5 @@ ${MPI_COMPILER} ${FLAGS_PROFILE} ./lib/test.cc ./lib/libswing_profile.o -o ./lib
 
 
 # Bench
-${MPI_COMPILER} ${FLAGS} ./bench/bench.cc ./lib/swing.o -o ./bench/bench ${FLAGS}
+${MPI_COMPILER} ${FLAGS} ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${FLAGS}
 ${MPI_COMPILER} ${FLAGS} ./bench/get_coord_daint.c -o ./bench/get_coord_daint

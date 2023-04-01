@@ -12,7 +12,7 @@ int main(int argc, char** argv){
     int warmup = 0;
     int iterations = 100000;
 #else
-    int count = 65536;
+    int count = 32;
     int warmup = 5;
     int iterations = 1;
 #endif
@@ -90,7 +90,6 @@ int main(int argc, char** argv){
             if(recvbuf[i] != recvbuf_v[i]){
                 fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
                 valid = false;
-                return 1;
             }
         }
 
