@@ -1499,14 +1499,22 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     free(reached_step);
                 }
                 blocks_remapping = (uint*) malloc(sizeof(uint)*size);                
-                blocks_remapping[0] = 0; // Zero never sends to itself so it is not remapped
-                uint next = 1;
+                // Setting everything to 'size' to indicate it has not been set yet
+                for(size_t j = 0; j < size; j++){
+                    blocks_remapping[j] = size;
+                }
+                uint next = 0;
                 for(size_t step = 0; step < num_steps; step++){
                     for(size_t j = 0; j < size; j++){
                         if(zero_blocks_matrix[step][j]){
                             blocks_remapping[j] = next;
                             ++next;
                         }
+                    }
+                }
+                for(size_t j = 0; j < size; j++){
+                    if(blocks_remapping[j] == size){
+                        blocks_remapping[j] = next; // This was never set
                     }
                 }
                 if(rank){
