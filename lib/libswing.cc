@@ -1015,8 +1015,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                 }
             }
         }
-        assert(contiguous_end_offset_s - contiguous_start_offset_s == contiguous_count_s);
-        assert(contiguous_end_offset_r - contiguous_start_offset_r == contiguous_count_r);
+
         // Overlap here
         if(step != num_steps - 1){
             size_t block_step_next = (coll_type == SWING_REDUCE_SCATTER)?step + 1:(num_steps - step - 1 - 1);            
@@ -1025,6 +1024,8 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         // End overlap
 
         if(blocks_remapping){
+            assert(contiguous_end_offset_s - contiguous_start_offset_s == contiguous_count_s);
+            assert(contiguous_end_offset_r - contiguous_start_offset_r == contiguous_count_r);
             MPI_Sendrecv(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype,
                          peer, tag,
                          ((char*) rbuf) + contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype,
