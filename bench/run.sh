@@ -20,12 +20,11 @@ TIMESTAMP=$(TZ=":Europe/Rome" date +%Y_%m_%d_%H_%M_%S)
 OUT_FOLDER=${OUT_PATH}/${TIMESTAMP}
 mkdir -p ${OUT_FOLDER}
 
-echo ${SYSTEM},${NODES[-1]},${OUT_FOLDER} >> ../data/description.csv
-
 # TODO: On Piz Daint, also change routing
 
 for p in "${NODES[@]}"
 do
+    echo ${SYSTEM},${p},${OUT_FOLDER} >> ../data/description.csv
     case $SYSTEM in
     daint)
         ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./get_coord_daint > ${OUT_FOLDER}/coord_${p}.txt
@@ -65,5 +64,5 @@ done
 echo "Compressing "${OUT_FOLDER}" ..."
 pushd ${OUT_PATH}
 tar vcfJ ${TIMESTAMP}.tar.xz ${TIMESTAMP}
-#rm -rf ${TIMESTAMP}
+rm -rf ${TIMESTAMP}
 popd
