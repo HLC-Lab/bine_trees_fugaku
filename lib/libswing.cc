@@ -1243,6 +1243,7 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
     return res;
 }
 
+// Code copied from MPICH repo (https://github.com/pmodels/mpich/tree/bb7f0a9f61dbee66c67073f9c68fa28b6f443e0a/src/mpi/coll/allreduce)
 static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int comm_size, rank;
     int mpi_errno = MPI_SUCCESS;
@@ -1350,6 +1351,7 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
     goto fn_exit;
 }
 
+// Code copied from MPICH repo (https://github.com/pmodels/mpich/tree/bb7f0a9f61dbee66c67073f9c68fa28b6f443e0a/src/mpi/coll/allreduce)
 static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int comm_size, rank;
     int mpi_errno = MPI_SUCCESS;

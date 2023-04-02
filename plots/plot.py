@@ -20,28 +20,31 @@ sizes[1048576] = "4MiB"
 sizes[8388608] = "32MiB"
 sizes[67108864] = "256MiB"
 
-def main():
-    # Load paths
-    with open("../data/description.csv", mode='r') as infile:
-        reader = csv.reader(infile)    
-        global paths
-        paths = {(rows[0],rows[1]):"../data/" + rows[2] for rows in reader}
+algo_names = {}
+algo_names["default"] = "Default"
+algo_names["lat_BBBN"] = "Swing (L)"
+algo_names["bw_BBBN"] = "Swing (B)"
+algo_names["lat_CONT"] = "Swing (L) - C"
+algo_names["bw_CONT"] = "Swing (B) - C"
+algo_names["recdoub_l"] = "RecDoub (L)"
+algo_names["recdoub_b"] = "RecDoub (B)"
 
-    arch = "daint"
-    p = 30
 
+def plot(arch, p):
     df = pd.DataFrame()
     for n in [1, 8, 64, 512, 2048, 16384, 131072, 1048576, 8388608, 67108864]:
         def_bw = 0
         #for algo in ["default", "lat_BBB", "bw_BBB", "lat_BBBN", "bw_BBBN"]:        
-        for algo in ["default", "lat_BBBN", "bw_BBBN"]:
-            k = (arch,str(p))
+        for algo in ["default", "lat_BBBN", "bw_BBBN"]:            
+            k = (arch, str(p))
             if k in paths:
                 vpath = paths[k]
+            else:
+                continue
             filename = vpath + "/" + str(p) + "_" + str(n) + "_" + algo + ".csv"
             if os.path.exists(filename):
                 data_real = pd.read_csv(filename, sep=" ")                    
-                if len(data_real) == 0:
+                if len(data_real) == 0:                    
                     continue
                 data_real = data_real.loc[:, ~data_real.columns.str.contains('^Unnamed')]
                 colnames_ranks = []
@@ -53,7 +56,7 @@ def main():
                 data_real["Size (B)"] = n*4
                 data_real["Size"] = sizes[n]
                 data_real["Bandwidth (Gb/s)"] = 2*((data_real["Size (B)"]*8) / (data_real["Time (us)"]*1000.0)).astype(float)
-                data_real["Algo"] = algo
+                data_real["Algo"] = algo_names[algo]
                 if algo == "default":
                     def_bw = data_real["Bandwidth (Gb/s)"].mean()
                 data_real["Normalized Bandwidth"] = data_real["Bandwidth (Gb/s)"]/def_bw
@@ -64,25 +67,42 @@ def main():
     rows = 1
     cols = 1
     fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
-
-    '''    
-    ax = sns.lineplot(data=df, \
-                      x="Size", y="Bandwidth (Gb/s)", hue="Algo", style="Algo", sort=False,
-                      markers=True, dashes=True, ax=axes)
-    plt.xscale('log')
-    '''
     ax = sns.boxplot(data=df, \
                      x="Size", y="Normalized Bandwidth", hue="Algo", showmeans=True, 
                      meanprops={
                        "markerfacecolor":"white", 
                        "markeredgecolor":"black",
-                      "markersize":"10"}, ax=axes)
-
-    
+                      "markersize":"10"}, ax=axes)    
     plt.tight_layout()
     plt.subplots_adjust(top=0.75)
-    fig.savefig("out/" + arch + "_" + str(p) + ".pdf", format='pdf', dpi=100)
+    fig.savefig("out/" + arch + "_" + str(p) + "_box.pdf", format='pdf', dpi=100)
     plt.clf()
+
+
+    fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
+    ax = sns.lineplot(data=df, \
+                      x="Size", y="Bandwidth (Gb/s)", hue="Algo", style="Algo", sort=False,
+                      markers=True, dashes=True, ax=axes)
+    plt.xscale('log')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.75)
+    fig.savefig("out/" + arch + "_" + str(p) + "_line.pdf", format='pdf', dpi=100)
+    plt.clf()
+
+ps = {}
+ps["daint"] = [18, 30, 32]
+
+def main():
+    # Load paths
+    with open("../data/description.csv", mode='r') as infile:
+        reader = csv.reader(infile)    
+        global paths
+        paths = {(rows[0],rows[1]):"../data/" + rows[2] for rows in reader}
+
+    for arch in ["daint"]:
+        for p in ps[arch]:
+            plot(arch, p)
+
 
 if __name__ == "__main__":
     main()

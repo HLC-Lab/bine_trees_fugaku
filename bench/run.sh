@@ -8,10 +8,12 @@ RED=$(tput setaf 1)
 NC=$(tput sgr0)
 
 NODES=""
-while getopts n: flag
+EXTRA=""
+while getopts n:e: flag
 do
     case "${flag}" in
         n) NODES=($(echo "${OPTARG}" | tr ',' '\n'));;
+        e) EXTRA="_"${OPTARG};;
     esac
 done
 
@@ -21,10 +23,9 @@ OUT_FOLDER=${OUT_PATH}/${TIMESTAMP}
 mkdir -p ${OUT_FOLDER}
 
 # TODO: On Piz Daint, also change routing
-
 for p in "${NODES[@]}"
 do
-    echo ${SYSTEM},${p},${OUT_FOLDER} >> ../data/description.csv
+    echo ${SYSTEM}${EXTRA},${p},${OUT_FOLDER} >> ../data/description.csv
     case $SYSTEM in
     daint)
         ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./get_coord_daint > ${OUT_FOLDER}/coord_${p}.txt
