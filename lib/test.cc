@@ -12,7 +12,7 @@ int main(int argc, char** argv){
     int warmup = 0;
     int iterations = 100000;
 #else
-    int count = 32;
+    int count = 16384;
     int warmup = 5;
     int iterations = 1;
 #endif
@@ -58,9 +58,10 @@ int main(int argc, char** argv){
 #ifdef PROFILE
     const char* algos[1] = {"SWING"};
 #else
-    const char* algos[2] = {"SWING", "RING"};
+    const char* algos[3] = {"SWING", "RING", "RECDOUB"};
 #endif
     for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
+        std::cout << "Running " << algos[algo] << std::endl;
         // Run first swing allreduce
         setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
         setenv("LIBSWING_ALGO", algos[algo], 1);
@@ -90,6 +91,7 @@ int main(int argc, char** argv){
             if(recvbuf[i] != recvbuf_v[i]){
                 fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
                 valid = false;
+                return 1;
             }
         }
 
