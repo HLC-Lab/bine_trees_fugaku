@@ -53,8 +53,9 @@ typedef enum{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0, remap_blocks = 0;
+                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0;
 static char** cached_my_blocks_matrix = NULL;
+static uint* cached_blocks_remapping = NULL;
 static uint** cached_peers = NULL;
 static Algo algo = ALGO_SWING;
 static SendRecv srtype = SENDRECV_DT;
@@ -114,11 +115,6 @@ static inline void read_env(MPI_Comm comm){
         env_str = getenv("LIBSWING_RDMA");
         if(env_str){
             rdma = atoi(env_str);
-        }
-
-        env_str = getenv("LIBSWING_REMAP_BLOCKS");
-        if(env_str){
-            remap_blocks = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_ALGO");
@@ -193,7 +189,6 @@ static inline void read_env(MPI_Comm comm){
             printf("LIBSWING_FAST_BITMAPS: %d\n", fast_bitmaps);
             printf("LIBSWING_CACHE: %d\n", cache);
             printf("LIBSWING_RDMA: %d\n", rdma);
-            printf("LIBSWING_REMAP_BLOCKS: %d\n", remap_blocks);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_SENDRECV_TYPE: %d\n", srtype);            
             printf("LIBSWING_DIMENSIONS: ");
@@ -828,6 +823,124 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     return 0;
 }
 
+
+static int swing_coll_cont(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
+                           MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                           CollType coll_type, uint** peers, char** my_blocks_matrix, uint* blocks_remapping){
+    int dtsize, tag, res;  
+    MPI_Type_size(sendtype, &dtsize);
+    uint num_steps = ceil(log2(size));
+
+    if(coll_type == SWING_REDUCE_SCATTER){
+        tag = TAG_SWING_REDUCESCATTER;
+    }else{
+        tag = TAG_SWING_ALLGATHER;
+    }
+
+    MPI_Win win = MPI_WIN_NULL;
+    if(rdma){
+        int count = 0;
+        for(size_t i = 0; i < size; i++){
+            count += blocks_sizes[i];
+        }
+        MPI_Win_create(buf, count*dtsize, dtsize, MPI_INFO_NULL, comm, &win);
+        MPI_Win_fence(0, win);
+    }
+
+    // Iterate over steps
+    for(size_t step = 0; step < num_steps; step++){
+        DPRINTF("[%d] Starting step %d\n", rank, step);
+        size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
+        uint32_t peer = peers[rank][block_step];
+        DPRINTF("[%d] Peer %d\n", rank, peer);
+
+        // Sendrecv + aggregate
+        int diff = peer - rank;
+
+        size_t contiguous_start_offset_s = -1, contiguous_end_offset_s = 0, contiguous_count_s = 0; // TODO, cache start/end indexes
+        size_t contiguous_start_offset_r = -1, contiguous_end_offset_r = 0, contiguous_count_r = 0;
+        for(size_t i = 0; i < size; i++){
+            // Instead of computing the peer's bitmaps, I considering them as shifted versions of my bitmap.
+            // If dist is the distance between me and my peer, I should just shift my bitmap by dist positions, and then reverse it along the x-axis
+            // with respect to my peer. However, I can avoid doing that and just play with indexes
+            //assert(bitmaps[step][i] == reference_bitmap[step][mod(2*rank - size - diff - i, size)]);
+
+            size_t send_index, recv_index;
+
+            // peer - size + rank - i >= size  ==> peer + rank - i >= 2*size. At most we can have i=0, and thus peer + rank >= 2* size. However this can never be true since peer + rank < 2*size
+            // peer - size + rank - i < 0      ==> peer + rank - i < size. At most we can have i=size-1, and thus peer + rank - size + 1 < size ==> peer + rank + 1 < 2*size, which might indeed happen.
+            // To see if we can simply sum sum when it's negative, we have to check that:
+            // peer - size + rank - i >= -size ==> peer + rank - i >= 0, which might not be true, so we have to loop and add
+            //int other = mod(peer - size + rank - i, size); 
+            int other = peer - size + rank - i;
+            while(other < 0){other += size;}
+            if(coll_type == SWING_REDUCE_SCATTER){
+                send_index = i;
+                recv_index = other;
+            }else{
+                send_index = other;
+                recv_index = i;
+            }
+            if(my_blocks_matrix[block_step][send_index]){
+                size_t k = blocks_remapping[i];
+                DPRINTF("[%d] Going to send block %d (displ %d)\n", rank, k, blocks_displs[k]);
+                if(blocks_displs[k] < contiguous_start_offset_s){
+                    contiguous_start_offset_s = blocks_displs[k];
+                }
+                if(blocks_displs[k] + blocks_sizes[k] > contiguous_end_offset_s){
+                    contiguous_end_offset_s = blocks_displs[k] + blocks_sizes[k];
+                }
+                contiguous_count_s += blocks_sizes[k];
+            }
+            if(my_blocks_matrix[block_step][recv_index]){
+                size_t k = blocks_remapping[i];
+                DPRINTF("[%d] Going to recv block %d (displ %d)\n", rank, k, blocks_displs[k]);
+                if(blocks_displs[k] < contiguous_start_offset_r){
+                    contiguous_start_offset_r = blocks_displs[k];
+                }
+                if(blocks_displs[k] + blocks_sizes[k] > contiguous_end_offset_r){
+                    contiguous_end_offset_r = blocks_displs[k] + blocks_sizes[k];
+                }
+                contiguous_count_r += blocks_sizes[k];
+            }
+        }
+
+        // Overlap here
+        if(step != num_steps - 1){
+            size_t block_step_next = (coll_type == SWING_REDUCE_SCATTER)?step + 1:(num_steps - step - 1 - 1);            
+            __builtin_prefetch(my_blocks_matrix[block_step_next], 0, 0);
+        }
+        // End overlap
+
+        if(rdma){
+            if(coll_type == SWING_REDUCE_SCATTER){
+                res = MPI_Accumulate(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype, op, win);
+            }else{
+                res = MPI_Put(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype, win);
+            }
+            MPI_Win_fence(0, win);
+        }else{
+            assert(contiguous_end_offset_s - contiguous_start_offset_s == contiguous_count_s);
+            assert(contiguous_end_offset_r - contiguous_start_offset_r == contiguous_count_r);
+            MPI_Sendrecv(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype,
+                         peer, tag,
+                         ((char*) rbuf) + contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype,
+                         peer, tag, comm, MPI_STATUS_IGNORE);
+            if(coll_type == SWING_REDUCE_SCATTER){
+                void* rbuf_block = (void*) (((char*) rbuf) + contiguous_start_offset_r*dtsize);
+                void* buf_block = (void*) (((char*) buf) + contiguous_start_offset_r*dtsize);            
+                MPI_Reduce_local(rbuf_block, buf_block, contiguous_count_r, sendtype, op); 
+            }
+        }     
+    }
+
+    if(rdma){
+        MPI_Win_free(&win);
+    }
+    return 0;
+}
+
+
 static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
                            MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type, uint** peers, char** my_blocks_matrix, uint* blocks_remapping){
@@ -866,9 +979,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
         int num_requests_s = 0, num_requests_r = 0;
         int diff = peer - rank;
         int sendcnt = 0, recvcnt = 0, recvblocks = 0;     
-
-        size_t contiguous_start_offset_s = -1, contiguous_end_offset_s = 0, contiguous_count_s = 0;
-        size_t contiguous_start_offset_r = -1, contiguous_end_offset_r = 0, contiguous_count_r = 0;
         for(size_t i = 0; i < size; i++){
             // Instead of computing the peer's bitmaps, I considering them as shifted versions of my bitmap.
             // If dist is the distance between me and my peer, I should just shift my bitmap by dist positions, and then reverse it along the x-axis
@@ -904,22 +1014,10 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                             res = MPI_Put(((char*) buf) + blocks_displs[i]*dtsize, blocks_sizes[i], sendtype, peer, blocks_displs[i], blocks_sizes[i], recvtype, win);
                         }
                     }else{
-                        if(blocks_remapping){
-                            size_t k = blocks_remapping[i];
-                            DPRINTF("[%d] Going to send block %d (displ %d)\n", rank, k, blocks_displs[k]);
-                            if(blocks_displs[k] < contiguous_start_offset_s){
-                                contiguous_start_offset_s = blocks_displs[k];
-                            }
-                            if(blocks_displs[k] + blocks_sizes[k] > contiguous_end_offset_s){
-                                contiguous_end_offset_s = blocks_displs[k] + blocks_sizes[k];
-                            }
-                            contiguous_count_s += blocks_sizes[k];
-                        }else{
-                            DPRINTF("[%d] Sending block %d to %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
-                            res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize, blocks_sizes[i], sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
-                            if(res != MPI_SUCCESS){return res;}
-                            ++num_requests_s;
-                        }
+                        DPRINTF("[%d] Sending block %d to %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
+                        res = MPI_Isend(((char*) buf) + blocks_displs[i]*dtsize, blocks_sizes[i], sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
+                        if(res != MPI_SUCCESS){return res;}
+                        ++num_requests_s;
                     }                
                 }
             }
@@ -929,23 +1027,11 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                     recvblocks++;
                 }else{
                     if(!rdma){
-                        if(blocks_remapping){
-                            size_t k = blocks_remapping[i];
-                            DPRINTF("[%d] Going to recv block %d (displ %d)\n", rank, k, blocks_displs[k]);
-                            if(blocks_displs[k] < contiguous_start_offset_r){
-                                contiguous_start_offset_r = blocks_displs[k];
-                            }
-                            if(blocks_displs[k] + blocks_sizes[k] > contiguous_end_offset_r){
-                                contiguous_end_offset_r = blocks_displs[k] + blocks_sizes[k];
-                            }
-                            contiguous_count_r += blocks_sizes[k];
-                        }else{
-                            DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
-                            res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*dtsize, blocks_sizes[i], recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
-                            if(res != MPI_SUCCESS){return res;}
-                            req_idx_to_block_idx[num_requests_r] = i;
-                            ++num_requests_r;
-                        }
+                        DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d) (i %d)\n", rank, i, peer, step, coll_type, i);
+                        res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*dtsize, blocks_sizes[i], recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
+                        if(res != MPI_SUCCESS){return res;}
+                        req_idx_to_block_idx[num_requests_r] = i;
+                        ++num_requests_r;
                     }
                 }
             }
@@ -957,80 +1043,65 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
             __builtin_prefetch(my_blocks_matrix[block_step_next], 0, 0);
         }
         // End overlap
-
-        if(blocks_remapping){
-            assert(contiguous_end_offset_s - contiguous_start_offset_s == contiguous_count_s);
-            assert(contiguous_end_offset_r - contiguous_start_offset_r == contiguous_count_r);
-            MPI_Sendrecv(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype,
-                         peer, tag,
-                         ((char*) rbuf) + contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype,
-                         peer, tag, comm, MPI_STATUS_IGNORE);
-            if(coll_type == SWING_REDUCE_SCATTER){
-                void* rbuf_block = (void*) (((char*) rbuf) + contiguous_start_offset_r*dtsize);
-                void* buf_block = (void*) (((char*) buf) + contiguous_start_offset_r*dtsize);            
-                MPI_Reduce_local(rbuf_block, buf_block, contiguous_count_r, sendtype, op); 
+        if(srtype == SENDRECV_IDEAL){
+            MPI_Sendrecv(buf, sendcnt, sendtype,
+                        peer, tag,
+                        rbuf, recvcnt, recvtype,
+                        peer, tag, comm, MPI_STATUS_IGNORE);
+            for(size_t i = 0; i < recvblocks; i++){
+                size_t displ_bytes = dtsize*blocks_displs[i];
+                void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
+                void* buf_block = (void*) (((char*) buf) + displ_bytes);            
+                MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op); 
             }
-        }else{
-            if(srtype == SENDRECV_IDEAL){
-                MPI_Sendrecv(buf, sendcnt, sendtype,
-                            peer, tag,
-                            rbuf, recvcnt, recvtype,
-                            peer, tag, comm, MPI_STATUS_IGNORE);
-                for(size_t i = 0; i < recvblocks; i++){
-                    size_t displ_bytes = dtsize*blocks_displs[i];
-                    void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
-                    void* buf_block = (void*) (((char*) buf) + displ_bytes);            
-                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[i], sendtype, op); 
-                }
-            }else if(!rdma){
-                if(coll_type == SWING_REDUCE_SCATTER){
-                    int index, completed = 0;
-                    for(size_t i = 0; i < num_requests_r; i++){
-        #ifdef ACTIVE_WAIT
-                        int flag = 0;
-                        do{
-                            MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
-                        }while(!flag);
-
-        #else
-                        res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
-                        if(res != MPI_SUCCESS){return res;}
-        #endif                
-                        int block_idx = req_idx_to_block_idx[index];
-                        size_t displ_bytes = dtsize*blocks_displs[block_idx];
-                        void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
-                        void* buf_block = (void*) (((char*) buf) + displ_bytes);            
-                        MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op); 
-                    }
-                }else{
-        #ifdef ACTIVE_WAIT
-                    int index;
-                    for(size_t i = 0; i < num_requests_r; i++){
-                        int flag = 0;
-                        do{
-                            MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
-                        }while(!flag);
-                    }
-        #else                            
-                    res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
-                    if(res != MPI_SUCCESS){return res;}        
-        #endif
-                }
-        #ifdef ACTIVE_WAIT
-                int index;
-                for(size_t i = 0; i < num_requests_s; i++){
+        }else if(!rdma){
+            if(coll_type == SWING_REDUCE_SCATTER){
+                int index, completed = 0;
+                for(size_t i = 0; i < num_requests_r; i++){
+    #ifdef ACTIVE_WAIT
                     int flag = 0;
                     do{
-                        MPI_Testany(num_requests_s, requests_s, &index, &flag, MPI_STATUS_IGNORE);
+                        MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
+                    }while(!flag);
+
+    #else
+                    res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
+                    if(res != MPI_SUCCESS){return res;}
+    #endif                
+                    int block_idx = req_idx_to_block_idx[index];
+                    size_t displ_bytes = dtsize*blocks_displs[block_idx];
+                    void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
+                    void* buf_block = (void*) (((char*) buf) + displ_bytes);            
+                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op); 
+                }
+            }else{
+    #ifdef ACTIVE_WAIT
+                int index;
+                for(size_t i = 0; i < num_requests_r; i++){
+                    int flag = 0;
+                    do{
+                        MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
                     }while(!flag);
                 }
-        #else                            
-                res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
+    #else                            
+                res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
                 if(res != MPI_SUCCESS){return res;}        
-        #endif
-            }else{ // rdma
-                MPI_Win_fence(0, win);
+    #endif
             }
+    #ifdef ACTIVE_WAIT
+            int index;
+            for(size_t i = 0; i < num_requests_s; i++){
+                int flag = 0;
+                do{
+                    MPI_Testany(num_requests_s, requests_s, &index, &flag, MPI_STATUS_IGNORE);
+                }while(!flag);
+            }
+    #else                            
+            res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
+            if(res != MPI_SUCCESS){return res;}        
+    #endif
+        }else{ // rdma
+            MPI_Win_fence(0, win);
         }
     }
 
@@ -1076,6 +1147,8 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     memcpy(buf, sendbuf, total_size_bytes);
     if(srtype == SENDRECV_BBBN || srtype == SENDRECV_IDEAL){
         res = swing_coll_bbbn(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER, peers, my_blocks_matrix, block_remapping);
+    }else if(srtype == SENDRECV_CONT){
+        res = swing_coll_cont(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER, peers, my_blocks_matrix, block_remapping);
     }else{
         res = swing_coll(buf, rbuf, recvcounts, displs, op, comm, size, rank, datatype, datatype, SWING_REDUCE_SCATTER, peers, my_blocks_matrix);
     }
@@ -1157,6 +1230,8 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
     memcpy(((char*) recvbuf) + displ*dtsize, sendbuf, count*dtsize);
     if(srtype == SENDRECV_BBBN || srtype == SENDRECV_IDEAL){
         res = swing_coll_bbbn(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix, blocks_remapping);
+    }else if(srtype == SENDRECV_CONT){
+        res = swing_coll_cont(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix, blocks_remapping);
     }else{
         res = swing_coll(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix);
     }
@@ -1432,6 +1507,11 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         // Compute total size of data
         size_t total_size_bytes = count*dtsize;
 
+        // TODO: Fix (Cont not working for non-powers-of-two)
+        if(srtype == SENDRECV_CONT && (size & (size - 1)) != 0){
+            srtype = SENDRECV_BBBN;
+        }
+
         // Compute the peers
         
         int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
@@ -1444,6 +1524,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             int num_steps = (int) ceil(log2(size));
             uint** peers; 
             char** my_blocks_matrix;
+            uint* blocks_remapping = NULL;
 
             if(!cache || cached_p != size){
                 // Delete previous cache if available (different p)
@@ -1455,7 +1536,8 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     for(uint i = 0; i < size; i++){
                         free(cached_peers[i]);
                     }
-                    free(cached_peers);            
+                    free(cached_peers);
+                    free(cached_blocks_remapping);
                 }
                 peers = (uint**) malloc(sizeof(uint*)*size);
                 for(uint i = 0; i < size; i++){
@@ -1472,51 +1554,54 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                 uint8_t* reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
                 getBitmapsMatrix(rank, size, my_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
                 free(reached_step);
+
+
+                // Block remapping
+                if(srtype == SENDRECV_CONT){
+                    uint8_t* reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
+                    char** zero_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);    
+                    for(size_t step = 0; step < num_steps; step++){    // TODO: Cache it
+                        zero_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+                    }
+                    getBitmapsMatrix(0, size, zero_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
+                    free(reached_step);
+                    blocks_remapping = (uint*) malloc(sizeof(uint)*size);                
+                    // Setting everything to 'size' to indicate it has not been set yet
+                    for(size_t j = 0; j < size; j++){
+                        blocks_remapping[j] = size;
+                    }
+                    
+                    std::vector<int> nodes(size);
+                    for(size_t i = 0; i < size; i++){
+                        nodes[i] = i;
+                    }
+                    remap(nodes, 0, size, blocks_remapping, zero_blocks_matrix, 0, size, rank, peers, 0, num_steps);
+    #ifdef DEBUG
+                    if(rank == 0){
+                        printf("Remapped: ");
+                        for(size_t i = 0; i < size; i++){
+                            printf("%d ", blocks_remapping[i]);
+                        }
+                        printf("\n");
+                    }
+    #endif          
+
+                    for(size_t step = 0; step < num_steps; step++){    
+                        free(zero_blocks_matrix[step]);
+                    }
+                    free(zero_blocks_matrix);
+                }
+
                 if(cache){
                     cached_peers = peers;
                     cached_p = size;
                     cached_my_blocks_matrix = my_blocks_matrix;
+                    cached_blocks_remapping = blocks_remapping;
                 }
             }else{
                 peers = cached_peers;
                 my_blocks_matrix = cached_my_blocks_matrix;
-            }
-
-            // Block remapping
-            uint* blocks_remapping = NULL;
-            if(remap_blocks){
-                uint8_t* reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
-                char** zero_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);    
-                for(size_t step = 0; step < num_steps; step++){    // TODO: Cache it
-                    zero_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
-                }
-                getBitmapsMatrix(0, size, zero_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
-                free(reached_step);
-                blocks_remapping = (uint*) malloc(sizeof(uint)*size);                
-                // Setting everything to 'size' to indicate it has not been set yet
-                for(size_t j = 0; j < size; j++){
-                    blocks_remapping[j] = size;
-                }
-                
-                std::vector<int> nodes(size);
-                for(size_t i = 0; i < size; i++){
-                    nodes[i] = i;
-                }
-                remap(nodes, 0, size, blocks_remapping, zero_blocks_matrix, 0, size, rank, peers, 0, num_steps);
-#ifdef DEBUG
-                if(rank == 0){
-                    printf("Remapped: ");
-                    for(size_t i = 0; i < size; i++){
-                        printf("%d ", blocks_remapping[i]);
-                    }
-                    printf("\n");
-                }
-#endif          
-
-                for(size_t step = 0; step < num_steps; step++){    
-                    free(zero_blocks_matrix[step]);
-                }
-                free(zero_blocks_matrix);
+                blocks_remapping = cached_blocks_remapping;
             }
 
             size_t last = 0;
@@ -1530,7 +1615,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                 last += recvcounts[i];
             }
             int intermediate_rank = rank;
-            if(remap_blocks){
+            if(srtype == SENDRECV_CONT){
                 intermediate_rank = blocks_remapping[rank];
             }
             char* intermediate_buf = ((char*) recvbuf) + displs[intermediate_rank]*dtsize;
@@ -1550,9 +1635,9 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     free(my_blocks_matrix[step]);
                 }
                 free(my_blocks_matrix);
-            }
-            if(remap_blocks){
-                free(blocks_remapping);
+                if(srtype == SENDRECV_CONT){
+                    free(blocks_remapping);
+                }
             }
             return res;  
         }         

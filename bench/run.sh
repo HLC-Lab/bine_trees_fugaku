@@ -47,7 +47,7 @@ do
         fi
         echo -n "Running on "${collective}" nodes with count="${n}"..."
         LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
-        for SWINGTYPE in "BBB" "BBBN"
+        for SWINGTYPE in "CONT" "BBBN"
         do
             # Run bandwidth optimal
             LIBSWING_LATENCY_OPTIMAL_THRESHOLD=0 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_${SWINGTYPE}.csv
