@@ -39,7 +39,8 @@ typedef enum{
     ALGO_DEFAULT = 0,
     ALGO_SWING,
     ALGO_RING,
-    ALGO_RECDOUB
+    ALGO_RECDOUB_L,
+    ALGO_RECDOUB_B,
 }Algo;
 
 typedef enum{
@@ -125,8 +126,10 @@ static inline void read_env(MPI_Comm comm){
                 algo = ALGO_SWING;
             }else if(strcmp(env_str, "RING") == 0){
                 algo = ALGO_RING;
-            }else if(strcmp(env_str, "RECDOUB") == 0){
-                algo = ALGO_RECDOUB;
+            }else if(strcmp(env_str, "RECDOUB_L") == 0){
+                algo = ALGO_RECDOUB_L;
+            }else if(strcmp(env_str, "RECDOUB_B") == 0){
+                algo = ALGO_RECDOUB_B;
             }else{
                 fprintf(stderr, "Unknown LIBSWING_ALGO\n");
                 exit(-1);
@@ -1240,37 +1243,27 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
     return res;
 }
 
-
-#define MPL_MAX(a,b)    (((a) > (b)) ? (a) : (b))
-
-static int MPI_Allreduce_recdoub(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int comm_size, rank;
     int mpi_errno = MPI_SUCCESS;
     int mpi_errno_ret = MPI_SUCCESS;
-    int mask, dst, pof2, newrank, rem, newdst, i, send_idx, recv_idx, last_idx;
-    MPI_Aint true_extent, true_lb, lb, extent;
+    int mask, dst, is_commutative, pof2, newrank, rem, newdst;
+    MPI_Aint extent;
     void *tmp_buf;
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+    extent = dtsize;
 
     MPI_Comm_size(comm, &comm_size);
     MPI_Comm_rank(comm, &rank);
 
-    /* need to allocate temporary buffer to store incoming data */
-    MPI_Type_get_true_extent(datatype, &true_lb, &true_extent);
-    MPI_Type_get_extent(datatype, &lb, &extent);
+    is_commutative = true;
 
-    tmp_buf = malloc(count * (MPL_MAX(extent, true_extent)));
-
-    /* adjust for potential negative lower bound in datatype */
-    tmp_buf = (void *) ((char *) tmp_buf - true_lb);
-
-    /* copy local data into recvbuf */
-    int dtsize;
-    MPI_Type_size(datatype, &dtsize);
-    memcpy(recvbuf, sendbuf, count*dtsize);
+    tmp_buf = malloc(count*extent);
+    memcpy(recvbuf, sendbuf, count*extent);
 
     /* get nearest power-of-two less than or equal to comm_size */
     pof2 = pow(2, floor(log2(comm_size)));
-
     rem = comm_size - pof2;
 
     /* In the non-power-of-two case, all even-numbered
@@ -1279,6 +1272,112 @@ static int MPI_Allreduce_recdoub(const void *sendbuf, void *recvbuf, int count, 
      * participate in the algorithm until the very end. The
      * remaining processes form a nice power-of-two. */
 
+    if (rank < 2 * rem) {
+        if (rank % 2 == 0) {    /* even */
+            mpi_errno = MPI_Send(recvbuf, count,
+                                datatype, rank + 1, TAG_SWING_ALLREDUCE, comm);
+            /* temporarily set the rank to -1 so that this
+             * process does not pariticipate in recursive
+             * doubling */
+            newrank = -1;
+        } else {        /* odd */
+            mpi_errno = MPI_Recv(tmp_buf, count,
+                                  datatype, rank - 1,
+                                  TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
+            /* do the reduction on received data. since the
+             * ordering is right, it doesn't matter whether
+             * the operation is commutative or not. */
+            mpi_errno = MPI_Reduce_local(tmp_buf, recvbuf, count, datatype, op);
+            /* change the rank */
+            newrank = rank / 2;
+        }
+    } else      /* rank >= 2*rem */
+        newrank = rank - rem;
+
+    /* If op is user-defined or count is less than pof2, use
+     * recursive doubling algorithm. Otherwise do a reduce-scatter
+     * followed by allgather. (If op is user-defined,
+     * derived datatypes are allowed and the user could pass basic
+     * datatypes on one process and derived on another as long as
+     * the type maps are the same. Breaking up derived
+     * datatypes to do the reduce-scatter is tricky, therefore
+     * using recursive doubling in that case.) */
+
+    if (newrank != -1) {
+        mask = 0x1;
+        while (mask < pof2) {
+            newdst = newrank ^ mask;
+            /* find real rank of dest */
+            dst = (newdst < rem) ? newdst * 2 + 1 : newdst + rem;
+
+            /* Send the most current data, which is in recvbuf. Recv
+             * into tmp_buf */
+            mpi_errno = MPI_Sendrecv(recvbuf, count, datatype,
+                                      dst, TAG_SWING_ALLREDUCE, tmp_buf,
+                                      count, datatype, dst,
+                                      TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);        
+
+            /* tmp_buf contains data received in this step.
+             * recvbuf contains data accumulated so far */
+
+            if (is_commutative || (dst < rank)) {
+                /* op is commutative OR the order is already right */
+                mpi_errno = MPI_Reduce_local(tmp_buf, recvbuf, count, datatype, op);
+            } else {
+                /* op is noncommutative and the order is not right */
+                mpi_errno = MPI_Reduce_local(recvbuf, tmp_buf, count, datatype, op);
+                /* copy result back into recvbuf */
+                memcpy(recvbuf, tmp_buf, count*extent);
+            }
+            mask <<= 1;
+        }
+    }
+    /* In the non-power-of-two case, all odd-numbered
+     * processes of rank < 2*rem send the result to
+     * (rank-1), the ranks who didn't participate above. */
+    if (rank < 2 * rem) {
+        if (rank % 2)   /* odd */
+            mpi_errno = MPI_Send(recvbuf, count,
+                                  datatype, rank - 1, TAG_SWING_ALLREDUCE, comm);
+        else    /* even */
+            mpi_errno = MPI_Recv(recvbuf, count,
+                                  datatype, rank + 1,
+                                  TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
+    }
+  fn_exit:
+    return mpi_errno_ret;
+  fn_fail:
+    goto fn_exit;
+}
+
+static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int comm_size, rank;
+    int mpi_errno = MPI_SUCCESS;
+    int mpi_errno_ret = MPI_SUCCESS;
+    int mask, dst, pof2, newrank, rem, newdst, i, send_idx, recv_idx, last_idx;
+    void *tmp_buf;
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+    MPI_Aint extent = dtsize;
+
+    MPI_Comm_size(comm, &comm_size);
+    MPI_Comm_rank(comm, &rank);
+
+    /* need to allocate temporary buffer to store incoming data */
+    tmp_buf = malloc(count * dtsize);
+
+    /* copy local data into recvbuf */
+    memcpy(recvbuf, sendbuf, count*dtsize);
+
+    /* get nearest power-of-two less than or equal to comm_size */
+    pof2 = pow(2, floor(log2(comm_size)));
+
+    rem = comm_size - pof2;
+    /* In the non-power-of-two case, all even-numbered
+     * processes of rank < 2*rem send their data to
+     * (rank+1). These even-numbered processes no longer
+     * participate in the algorithm until the very end. The
+     * remaining processes form a nice power-of-two. */
     if (rank < 2 * rem) {
         if (rank % 2 == 0) {    /* even */
             mpi_errno = MPI_Send(recvbuf, count,
@@ -1312,8 +1411,6 @@ static int MPI_Allreduce_recdoub(const void *sendbuf, void *recvbuf, int count, 
      * the type maps are the same. Breaking up derived
      * datatypes to do the reduce-scatter is tricky, therefore
      * using recursive doubling in that case.) */
-
-
     if (newrank != -1) {
         MPI_Aint *cnts, *disps;
         cnts = (MPI_Aint*) malloc(pof2 * sizeof(MPI_Aint));
@@ -1443,52 +1540,6 @@ static int MPI_Allreduce_recdoub(const void *sendbuf, void *recvbuf, int count, 
     return mpi_errno_ret;
   fn_fail:
     goto fn_exit;
-#if 0
-    int rank, size;
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-    int dtsize;
-    MPI_Type_size(datatype, &dtsize);
-    int mask = 0x1;
-    int dst, src, res;
-    int recv_offset, send_offset;
-    char* tmpbuf = (char*) malloc(count*dtsize);
-    memcpy(recvbuf, sendbuf, count*dtsize);
-
-    int log2_size = (int)log2(size);
-    for (int i = 0; i < log2_size; i++) {
-        dst = rank ^ (1 << i);
-        src = rank ^ (1 << i);
-        recv_offset = send_offset = count / (1 << (i + 1));
-        res = MPI_Sendrecv((char*) recvbuf + send_offset*dtsize, recv_offset, datatype, dst, TAG_SWING_ALLREDUCE, (char*) recvbuf + recv_offset*dtsize, recv_offset, datatype, src, TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
-        if(res != MPI_SUCCESS){
-            return res;
-        }
-        MPI_Reduce_local((char*) recvbuf + recv_offset*dtsize, (char*) recvbuf + send_offset*dtsize, recv_offset, datatype, op);
-    }
-    /*
-    while (mask < size) {
-        dst = rank ^ mask;
-        src = rank ^ mask;
-        recv_offset = send_offset = count / (mask * 2);
-        if ((rank & mask) == 0) {
-            MPI_Send((char*) recvbuf + send_offset*dtsize, recv_offset, datatype, dst, tag, comm);
-            MPI_Recv((char*) recvbuf + recv_offset*dtsize, recv_offset, datatype, src, tag, comm, MPI_STATUS_IGNORE);
-            MPI_Reduce_local((char*) recvbuf + recv_offset*dtsize, (char*) recvbuf + send_offset*dtsize, recv_offset, datatype, op);
-        } else {
-            MPI_Recv(tmpbuf, recv_offset, datatype, src, tag, comm, MPI_STATUS_IGNORE);
-            MPI_Send((char*) recvbuf + send_offset*dtsize, recv_offset, datatype, dst, tag, comm);
-            MPI_Reduce_local((char*) recvbuf + send_offset*dtsize, tmpbuf, recv_offset, datatype, op);
-            char* tmp = tmpbuf;
-            tmpbuf = (char*) recvbuf + send_offset*dtsize;
-            (char*) recvbuf + send_offset*dtsize = tmp;
-        }
-        mask <<= 1;
-    }
-    */
-    free(tmpbuf);
-    return MPI_SUCCESS;
-#endif
 }
 
 static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
@@ -1896,8 +1947,12 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         }         
     }else if(algo == ALGO_RING){
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
-    }else{ // Recdoub
-        return MPI_Allreduce_recdoub(sendbuf, recvbuf, count, datatype, op, comm);
+    }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
+        return MPI_Allreduce_recdoub_b(sendbuf, recvbuf, count, datatype, op, comm);
+    }else if(algo == ALGO_RECDOUB_L){ // Recdoub_l
+        return MPI_Allreduce_recdoub_l(sendbuf, recvbuf, count, datatype, op, comm);
+    }else{
+        return 1;
     }
 }
 
