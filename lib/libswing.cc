@@ -913,12 +913,14 @@ static int swing_coll_cont(void *buf, void* rbuf, const int *blocks_sizes, const
         // End overlap
 
         if(rdma){
+            MPI_Win_lock(MPI_LOCK_EXCLUSIVE, peer, 0, win);
             if(coll_type == SWING_REDUCE_SCATTER){
-                res = MPI_Accumulate(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype, op, win);
+                res = MPI_Accumulate(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r, contiguous_count_r, recvtype, op, win);
             }else{
-                res = MPI_Put(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r*dtsize, contiguous_count_r, recvtype, win);
+                res = MPI_Put(((char*) buf) + contiguous_start_offset_s*dtsize, contiguous_count_s, sendtype, peer, contiguous_start_offset_r, contiguous_count_r, recvtype, win);
             }
-            MPI_Win_fence(0, win);
+            MPI_Win_unlock(peer, win);
+            //MPI_Win_fence(0, win);
         }else{
             assert(contiguous_end_offset_s - contiguous_start_offset_s == contiguous_count_s);
             assert(contiguous_end_offset_r - contiguous_start_offset_r == contiguous_count_r);
