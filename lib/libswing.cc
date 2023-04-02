@@ -604,63 +604,6 @@ static int sendrecv_bbb(char* send_bitmap, char* recv_bitmap,
     return res;
 }
 
-
-static int sendrecv_cont(char* send_bitmap, char* recv_bitmap, 
-                    int dest, int source, int sendtag, int recvtag, 
-                    void* buf, void* rbuf, void* tmpbuf, const int *blocks_sizes, 
-                    const int *blocks_displs, MPI_Comm comm, int size, int rank,  
-                    MPI_Datatype sendtype, MPI_Datatype recvtype, MPI_Op op, CollType coll_type){
-#ifdef PERF_DEBUGGING
-    auto start = std::chrono::high_resolution_clock::now();
-#endif
-    // Create datatype starting from bitmaps
-    // Check how many blocks we have to send/recv
-    int dtsize_s, dtsize_r;
-    MPI_Type_size(sendtype, &dtsize_s);
-    MPI_Type_size(recvtype, &dtsize_r);
-    int res;
-
-    // Copy blocks to send to contiguous memory
-    size_t next_good_offset = 0, count_s = 0, count_r = 0;
-    for(size_t i = 0; i < size; i++){
-        if(send_bitmap[i]){
-            size_t block_size_bytes = (blocks_sizes[i])*dtsize_s;
-            size_t block_displ_bytes = (blocks_displs[i])*dtsize_s;
-            memcpy(((char*) tmpbuf) + next_good_offset, ((char*) buf) + block_displ_bytes, block_size_bytes);
-            next_good_offset += block_size_bytes;
-            count_s += blocks_sizes[i];
-        }
-        if(recv_bitmap[i]){
-            count_r += blocks_sizes[i];
-        }
-    }
-
-    res = MPI_Sendrecv(tmpbuf, count_s, sendtype, dest, sendtag,
-                  rbuf, count_r, recvtype, source, recvtag,  
-                  comm, MPI_STATUS_IGNORE);
-    if(res != MPI_SUCCESS){
-        return res;
-    }
-
-    // Aggregate recvd blocks (or move them to appropriate locations) -- to buf
-    size_t next_rbuf_offset = 0;
-    for(size_t i = 0; i < size; i++){
-        size_t block_size_bytes = (blocks_sizes[i])*dtsize_r;
-        size_t block_displ_bytes = (blocks_displs[i])*dtsize_r;
-        if(recv_bitmap[i]){
-            char* recvd_block_ptr = ((char*) rbuf) + next_rbuf_offset;
-            char* buf_block_ptr = ((char*) buf) + block_displ_bytes;
-            if(coll_type == SWING_REDUCE_SCATTER){
-                MPI_Reduce_local(recvd_block_ptr, buf_block_ptr, blocks_sizes[i], sendtype, op);
-            }else{
-                memcpy(buf_block_ptr, recvd_block_ptr, block_size_bytes);
-            }
-            next_rbuf_offset += block_size_bytes;
-        }
-    }
-    return res;
-}
-
 // Just to be used for performance debugging reasons
 static int sendrecv_ideal(char* send_bitmap, char* recv_bitmap, 
                     int dest, int source, int sendtag, int recvtag, 
@@ -738,9 +681,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
     MPI_Request* requests_s;
     MPI_Request* requests_r;
     int* req_idx_to_block_idx;
-    if(srtype == SENDRECV_CONT){
-        tmpbuf = (char*) malloc(sizeof(char)*total_size_bytes);
-    }else if(srtype == SENDRECV_BBB || srtype == SENDRECV_BBBO){
+    if(srtype == SENDRECV_BBB || srtype == SENDRECV_BBBO){
         requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
         requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
         req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
@@ -840,11 +781,6 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
                 }
 
             }
-        }else if(srtype == SENDRECV_CONT){
-            res  = sendrecv_cont(blocks_bitmap_s, blocks_bitmap_r, 
-                                peer, peer, tag, tag, 
-                                buf, rbuf, tmpbuf, blocks_sizes, blocks_displs, 
-                                comm, size, rank, sendtype, recvtype, op, coll_type);
         }else{
             res  = sendrecv_ideal(blocks_bitmap_s, blocks_bitmap_r, 
                                 peer, peer, tag, tag, 
@@ -877,9 +813,7 @@ static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int 
         free(array_of_blocklengths_r);
         free(array_of_displacements_r);
     }
-    if(srtype == SENDRECV_CONT){
-        free(tmpbuf);
-    }else if(srtype == SENDRECV_BBB || srtype == SENDRECV_BBBO){
+    if(srtype == SENDRECV_BBB || srtype == SENDRECV_BBBO){
         free(requests_s);
         free(requests_r);
         free(req_idx_to_block_idx);
@@ -935,7 +869,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 
         size_t contiguous_start_offset_s = -1, contiguous_end_offset_s = 0, contiguous_count_s = 0;
         size_t contiguous_start_offset_r = -1, contiguous_end_offset_r = 0, contiguous_count_r = 0;
-        std::vector<int> blocks_s, blocks_r;
         for(size_t i = 0; i < size; i++){
             // Instead of computing the peer's bitmaps, I considering them as shifted versions of my bitmap.
             // If dist is the distance between me and my peer, I should just shift my bitmap by dist positions, and then reverse it along the x-axis
@@ -973,7 +906,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                     }else{
                         if(blocks_remapping){
                             size_t k = blocks_remapping[i];
-                            blocks_s.push_back(k);
                             DPRINTF("[%d] Going to send block %d (displ %d)\n", rank, k, blocks_displs[k]);
                             if(blocks_displs[k] < contiguous_start_offset_s){
                                 contiguous_start_offset_s = blocks_displs[k];
@@ -999,7 +931,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                     if(!rdma){
                         if(blocks_remapping){
                             size_t k = blocks_remapping[i];
-                            blocks_r.push_back(k);
                             DPRINTF("[%d] Going to recv block %d (displ %d)\n", rank, k, blocks_displs[k]);
                             if(blocks_displs[k] < contiguous_start_offset_r){
                                 contiguous_start_offset_r = blocks_displs[k];
@@ -1019,13 +950,6 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                 }
             }
         }
-
-        std::sort(blocks_s.begin(), blocks_s.end());
-        printf("[%d] Step %d Sending blocks: ", rank, step);
-        for(auto s : blocks_s){
-            printf("%d ", s);
-        }
-        printf("\n");
 
         // Overlap here
         if(step != num_steps - 1){
@@ -1233,10 +1157,6 @@ static int MPI_Allgatherv_swing(const void *sendbuf, int sendcount, MPI_Datatype
     memcpy(((char*) recvbuf) + displ*dtsize, sendbuf, count*dtsize);
     if(srtype == SENDRECV_BBBN || srtype == SENDRECV_IDEAL){
         res = swing_coll_bbbn(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix, blocks_remapping);
-    }else if(srtype == SENDRECV_CONT){
-        char* tmpbuf = (char*) malloc(buf_size*dtsize);
-        res = swing_coll(recvbuf, tmpbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix);
-        free(tmpbuf);
     }else{
         res = swing_coll(recvbuf, recvbuf, recvcounts, displs, MPI_SUM, comm, size, rank, sendtype, recvtype, SWING_ALLGATHER, peers, my_blocks_matrix);
     }
@@ -1444,6 +1364,62 @@ int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, vo
     }
 }
 
+static std::string vectostr(const std::vector<int>& v){
+    std::string s = "";
+    for(auto i : v){
+        s += std::to_string(i) + ",";
+    }
+    return s;
+}
+
+static void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping, char** zero_blocks_matrix, int step, int size, int rank, uint** peers, int simrank, int num_steps){
+    if(nodes.size() == 2){
+        blocks_remapping[nodes[0]] = start_range;
+        blocks_remapping[nodes[1]] = end_range - 1;
+#ifdef DEBUG
+        if(rank == 0){
+            printf("Base case, mapping %d->%d and %d->%d\n", nodes[0], start_range, nodes[1], end_range - 1);
+        }
+#endif
+        assert(end_range == start_range + 2);
+    }else{
+        // Find two partitions of node that talk with each other. If I have n nodes, 
+        // if I see what happens in next step, I have two disjoint sets of nodes.
+        std::vector<int> left, right;
+        for(auto n : nodes){
+            if(zero_blocks_matrix[step][n] == 0){
+                left.push_back(n);
+            }else{
+                right.push_back(n);
+            }
+        }
+#ifdef DEBUG
+        if(rank == 0){
+            std::cout << "Remapping " << vectostr(left) << " (" << left.size() << " elements) on range " << start_range << " " << start_range + left.size() << std::endl;
+        }              
+#endif
+        remap(left, start_range, start_range + left.size(), blocks_remapping, zero_blocks_matrix, step + 1, size, rank, peers, simrank, num_steps);
+
+#ifdef DEBUG
+        if(rank == 0){
+            std::cout << "Remapping " << vectostr(right) << " (" << right.size() << " elements) on range " << end_range - right.size() << " " << end_range << std::endl;
+        }              
+#endif
+        uint8_t* reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
+        char** tmp_block_matrix = (char**) malloc(sizeof(char*)*num_steps);    
+        for(size_t step = 0; step < num_steps; step++){
+            tmp_block_matrix[step] = (char*) malloc(sizeof(char)*size);
+        }
+        getBitmapsMatrix(peers[simrank][step], size, tmp_block_matrix, reached_step, num_steps, peers, 0, NULL, -1);
+        free(reached_step);        
+        remap(right, end_range - right.size(), end_range, blocks_remapping, tmp_block_matrix, step + 1, size, rank, peers, peers[simrank][step], num_steps);
+        for(size_t step = 0; step < num_steps; step++){    
+            free(tmp_block_matrix[step]);
+        }
+        free(tmp_block_matrix);
+    }
+}
+
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
     if(disable_allreduce || algo == ALGO_DEFAULT){
@@ -1462,8 +1438,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         if(latency_optimal){
             return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm); // Misleading, should call the function in a different way            
         }else{
-            int rank, res;
-            MPI_Comm_rank(comm, &rank);
+            int res;
             int* recvcounts = (int*) malloc(sizeof(int)*size);
             int* displs = (int*) malloc(sizeof(int)*size);
             int num_steps = (int) ceil(log2(size));
@@ -1510,53 +1485,25 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             // Block remapping
             uint* blocks_remapping = NULL;
             if(remap_blocks){
+                uint8_t* reached_step = (uint8_t*) malloc(sizeof(uint8_t)*size);
+                char** zero_blocks_matrix = (char**) malloc(sizeof(char*)*num_steps);    
+                for(size_t step = 0; step < num_steps; step++){    // TODO: Cache it
+                    zero_blocks_matrix[step] = (char*) malloc(sizeof(char)*size);
+                }
+                getBitmapsMatrix(0, size, zero_blocks_matrix, reached_step, num_steps, peers, 0, NULL, -1);
+                free(reached_step);
                 blocks_remapping = (uint*) malloc(sizeof(uint)*size);                
                 // Setting everything to 'size' to indicate it has not been set yet
                 for(size_t j = 0; j < size; j++){
                     blocks_remapping[j] = size;
                 }
                 
-                uint next = 0;                
-                std::vector<int> v;
-                // Start from node 0 (but any node would work)
-                
-                std::vector<int> seeds;
-                seeds.push_back(0); // Any n (even) and n+1 would work
-                seeds.push_back(1);                
-                for(auto s : seeds){
-                    v.push_back(s);
-                    for(int step = num_steps - 1; step >= 0; step--){
-                        for(auto n : v){
-                            if(blocks_remapping[n] == size){
-                                if(rank == 0){
-                                    printf("Assigning %d->%d\n", n, next);
-                                }
-                                blocks_remapping[n] = next;
-                                ++next;
-                            }
-                            if(blocks_remapping[peers[n][num_steps - 1]] == size){    
-                                if(rank == 0){
-                                    printf("Assigning %d->%d\n", peers[n][num_steps - 1], next);
-                                }
-                                blocks_remapping[peers[n][num_steps - 1]] = next;
-                                ++next;
-                            }
-                        }
-                        std::vector<int> tmp = v;
-                        for(auto n : tmp){
-                            v.push_back(peers[n][step]);
-                            if(rank == 0){
-                                printf("Pushing %d\n", peers[n][step]);
-                            }
-                        }                            
-                        if(rank == 0){
-                           printf("-----");
-                        }
-                    }
-                    v.clear();
+                std::vector<int> nodes(size);
+                for(size_t i = 0; i < size; i++){
+                    nodes[i] = i;
                 }
-
-//#ifdef DEBUG
+                remap(nodes, 0, size, blocks_remapping, zero_blocks_matrix, 0, size, rank, peers, 0, num_steps);
+#ifdef DEBUG
                 if(rank == 0){
                     printf("Remapped: ");
                     for(size_t i = 0; i < size; i++){
@@ -1564,7 +1511,12 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     }
                     printf("\n");
                 }
-//#endif                
+#endif          
+
+                for(size_t step = 0; step < num_steps; step++){    
+                    free(zero_blocks_matrix[step]);
+                }
+                free(zero_blocks_matrix);
             }
 
             size_t last = 0;
