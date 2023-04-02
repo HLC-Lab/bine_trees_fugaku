@@ -1,4 +1,5 @@
 #include <mpi.h>
+#include <algorithm>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -934,6 +935,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
 
         size_t contiguous_start_offset_s = -1, contiguous_end_offset_s = 0, contiguous_count_s = 0;
         size_t contiguous_start_offset_r = -1, contiguous_end_offset_r = 0, contiguous_count_r = 0;
+        std::vector<int> blocks_s, blocks_r;
         for(size_t i = 0; i < size; i++){
             // Instead of computing the peer's bitmaps, I considering them as shifted versions of my bitmap.
             // If dist is the distance between me and my peer, I should just shift my bitmap by dist positions, and then reverse it along the x-axis
@@ -971,6 +973,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                     }else{
                         if(blocks_remapping){
                             size_t k = blocks_remapping[i];
+                            blocks_s.push_back(k);
                             DPRINTF("[%d] Going to send block %d (displ %d)\n", rank, k, blocks_displs[k]);
                             if(blocks_displs[k] < contiguous_start_offset_s){
                                 contiguous_start_offset_s = blocks_displs[k];
@@ -996,6 +999,7 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                     if(!rdma){
                         if(blocks_remapping){
                             size_t k = blocks_remapping[i];
+                            blocks_r.push_back(k);
                             DPRINTF("[%d] Going to recv block %d (displ %d)\n", rank, k, blocks_displs[k]);
                             if(blocks_displs[k] < contiguous_start_offset_r){
                                 contiguous_start_offset_r = blocks_displs[k];
@@ -1015,6 +1019,13 @@ static int swing_coll_bbbn(void *buf, void* rbuf, const int *blocks_sizes, const
                 }
             }
         }
+
+        std::sort(blocks_s.begin(), blocks_s.end());
+        printf("[%d] Step %d Sending blocks: ", rank, step);
+        for(auto s : blocks_s){
+            printf("%d ", s);
+        }
+        printf("\n");
 
         // Overlap here
         if(step != num_steps - 1){
@@ -1517,27 +1528,43 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     for(int step = num_steps - 1; step >= 0; step--){
                         for(auto n : v){
                             if(blocks_remapping[n] == size){
+                                if(rank == 0){
+                                    printf("Assigning %d->%d\n", n, next);
+                                }
                                 blocks_remapping[n] = next;
+                                ++next;
+                            }
+                            if(blocks_remapping[peers[n][num_steps - 1]] == size){    
+                                if(rank == 0){
+                                    printf("Assigning %d->%d\n", peers[n][num_steps - 1], next);
+                                }
+                                blocks_remapping[peers[n][num_steps - 1]] = next;
                                 ++next;
                             }
                         }
                         std::vector<int> tmp = v;
                         for(auto n : tmp){
                             v.push_back(peers[n][step]);
+                            if(rank == 0){
+                                printf("Pushing %d\n", peers[n][step]);
+                            }
+                        }                            
+                        if(rank == 0){
+                           printf("-----");
                         }
                     }
                     v.clear();
                 }
 
-#ifdef DEBUG
+//#ifdef DEBUG
                 if(rank == 0){
-                    DPRINTF("Remapped: ");
+                    printf("Remapped: ");
                     for(size_t i = 0; i < size; i++){
-                        DPRINTF("%d ", blocks_remapping[i]);
+                        printf("%d ", blocks_remapping[i]);
                     }
-                    DPRINTF("\n");
+                    printf("\n");
                 }
-#endif                
+//#endif                
             }
 
             size_t last = 0;
