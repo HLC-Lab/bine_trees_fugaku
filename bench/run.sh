@@ -35,17 +35,17 @@ do
         iterations=0
         if [ $n -le 512 ]
         then
-            iterations=100000
+            iterations=10000
         elif [ $n -le 1048576 ]
         then
-            iterations=10000
+            iterations=1000
         elif [ $n -le 8388608 ]
         then
-            iterations=1000
+            iterations=100
         else
             iterations=10
         fi
-        echo -n "Running on "${collective}" nodes with count="${n}"..."
+        echo -n "Running on "${p}" nodes with count="${n}"..."
         LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
         for SWINGTYPE in "CONT" "BBBN"
         do
