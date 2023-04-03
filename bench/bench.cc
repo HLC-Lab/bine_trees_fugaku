@@ -5,11 +5,12 @@
 #include <string.h>
 #include <unistd.h>
 
-// Usage: ./bench msgsize(elems) iterations
+// Usage: ./bench type msgsize(elems) iterations
 int main(int argc, char** argv){
     int warmup = 10;    
-    int count = atoi(argv[1]);
-    int iterations = atoi(argv[2]);
+    char* type = argv[0];
+    int count = atoi(argv[2]);
+    int iterations = atoi(argv[3]);
     double* samples = (double*) malloc(sizeof(double)*iterations);
     double* samples_all;
     long i, r;
@@ -17,17 +18,30 @@ int main(int argc, char** argv){
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    char* buffer = (char*) malloc(sizeof(char)*comm_size);
-    float* sendbuf = (float*) malloc(sizeof(float)*count);
-    float* recvbuf = (float*) malloc(sizeof(float)*count);
+    MPI_Datatype dt;
+    if(strcmp(type, "CHAR") == 0){
+        dt = MPI_CHAR;
+        count *= 4;
+    }else if(strcmp(type, "FLOAT") == 0){
+        dt = MPI_FLOAT;
+    }else if(strcmp(type, "INT") == 0){
+        dt = MPI_INT;
+    }else{
+        fprintf(stderr, "Unknown type %s\n", type);
+        return 1;
+    }
+    int dtsize;
+    MPI_Type_size(dt, &dtsize);
+    char* sendbuf = (char*) malloc(dtsize*count);
+    char* recvbuf = (char*) malloc(dtsize*count);
     if(rank == 0){
         samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
     }
-    for(i = -10; i < iterations; i++){
+    for(i = -warmup; i < iterations; i++){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
         double start_time = MPI_Wtime();
-        MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(sendbuf, recvbuf, count, dt, MPI_SUM, MPI_COMM_WORLD);
 
         if(i >= 0){
             samples[i] = ((MPI_Wtime() - start_time)*1000000.0);
@@ -57,7 +71,6 @@ int main(int argc, char** argv){
     MPI_Finalize();
     free(sendbuf);
     free(recvbuf);
-    free(buffer);
     free(samples);
     return 0;
 }

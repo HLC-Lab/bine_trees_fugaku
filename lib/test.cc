@@ -40,7 +40,6 @@ int main(int argc, char** argv){
     for(int i = warmup; i >= 0; i--){
         r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
-    unsetenv("LIBSWING_FORCE_ENV_RELOAD");
 
     start = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < iterations; i++){
@@ -62,16 +61,19 @@ int main(int argc, char** argv){
 #endif
     for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
         std::cout << "Running " << algos[algo] << std::endl;
+        memset(recvbuf, 0, sizeof(float)*count);
         // Run first swing allreduce
         setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
         setenv("LIBSWING_ALGO", algos[algo], 1);
+        setenv("LIBSWING_SENDRECV_TYPE", "CONT", 1);
+        setenv("LIBSWING_CACHE", "1", 1);
+        setenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD", "0", 1);
         setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
         setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
         setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
         for(int i = warmup; i >= 0; i--){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         }
-        unsetenv("LIBSWING_FORCE_ENV_RELOAD");
         start = std::chrono::high_resolution_clock::now();
         for(size_t i = 0; i < iterations; i++){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);

@@ -29,7 +29,7 @@ do
 
     # Run EBB
     if [ $EBB != "" ]; then
-        ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ${EBB} -m mpi -x ebb -s 16777216:16777216 > ${OUT_FOLDER}/ebb_${p}.txt
+        ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ${EBB} -s 16777216:16777216 -m mpi -x ebb > ${OUT_FOLDER}/ebb_${p}.txt
     fi
 
     case $SYSTEM in
