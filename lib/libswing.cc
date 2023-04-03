@@ -1345,10 +1345,7 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
                                   datatype, rank + 1,
                                   TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
     }
-  fn_exit:
     return mpi_errno_ret;
-  fn_fail:
-    goto fn_exit;
 }
 
 // Code copied from MPICH repo (https://github.com/pmodels/mpich/tree/bb7f0a9f61dbee66c67073f9c68fa28b6f443e0a/src/mpi/coll/allreduce)
@@ -1451,7 +1448,7 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
                     send_cnt += cnts[i];
                 for (i = recv_idx; i < last_idx; i++)
                     recv_cnt += cnts[i];
-            }
+            }            
 
             /* Send data from recvbuf. Recv into tmp_buf */
             mpi_errno = MPI_Sendrecv((char *) recvbuf +
@@ -1538,10 +1535,7 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
                                   datatype, rank + 1,
                                   TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
     }
-  fn_exit:
     return mpi_errno_ret;
-  fn_fail:
-    goto fn_exit;
 }
 
 static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){

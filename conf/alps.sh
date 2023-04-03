@@ -3,3 +3,4 @@ MPIRUN_MAP_BY_NODE_FLAG="-m plane=1" # Flag to force ranks to be mapped by node 
 MPIRUN_PINNING_FLAGS="--cpu-bind=map_cpu=2,2" # Pinning flags
 MPIRUN_ADDITIONAL_FLAGS=""    # Any additional flag that must be used by mpirun
 MPI_COMPILER=CC # MPI Compiler
+EBB=""

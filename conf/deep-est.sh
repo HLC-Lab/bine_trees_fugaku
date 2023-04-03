@@ -2,6 +2,7 @@ MPIRUN="srun" # Command for running MPI applications
 MPIRUN_MAP_BY_NODE_FLAG="-m plane=1" # Flag to force ranks to be mapped by node (srun)
 MPIRUN_ADDITIONAL_FLAGS=""    # Any additional flag that must be used by mpirun
 MPI_COMPILER=mpicc # MPI Compiler
+EBB=""
 
 module load intel-para/2021b
 #module load Intel/2021.4.0
