@@ -8,7 +8,7 @@
 // Usage: ./bench type msgsize(elems) iterations
 int main(int argc, char** argv){
     int warmup = 10;    
-    char* type = argv[0];
+    char* type = argv[1];
     int count = atoi(argv[2]);
     int iterations = atoi(argv[3]);
     double* samples = (double*) malloc(sizeof(double)*iterations);

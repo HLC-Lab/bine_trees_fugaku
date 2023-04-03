@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="deep-est"
+SYSTEM="alps"
 
 case $SYSTEM in
   daint)
