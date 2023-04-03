@@ -64,12 +64,12 @@ do
         do
             # Run bandwidth optimal
             LIBSWING_LATENCY_OPTIMAL_THRESHOLD=0 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_${SWINGTYPE}.csv
-            # If msg small enough, run latency optimal
-            if [ $n -le 1048576 ]
-            then
-                LIBSWING_LATENCY_OPTIMAL_THRESHOLD=99999999 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_${SWINGTYPE}.csv
-            fi
         done
+        # If msg small enough, run latency optimal
+        if [ $n -le 1048576 ]
+        then
+            LIBSWING_LATENCY_OPTIMAL_THRESHOLD=99999999 LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_${SWINGTYPE}.csv
+        fi
         echo " ${GREEN}[Done]${NC}"
     done
 done

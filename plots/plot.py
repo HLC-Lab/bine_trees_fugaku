@@ -31,24 +31,43 @@ algo_names["recdoub_l"] = "RecDoub (L)"
 algo_names["recdoub_b"] = "RecDoub (B)"
 
 
+# CONF
 merge = True
+add_default = True
+
+algos_sota = ["recdoub_l", "recdoub_b", "ring"]
+if add_default:
+    algos_sota = ["default"] + algos_sota
+#algos_swing = ["bw_BBBN", "lat_CONT", "bw_CONT"]
+algos_swing = ["lat_CONT", "bw_CONT"]
+algos = algos_sota + algos_swing # ATTENTION! SWING MUST ALWAYS COME AFTER SOTA FOR THE SCRIPT TO WORK CORRECTLY
+
 best_algo = {}
 def plot(arch, p):
     df = pd.DataFrame()
+    df_impr_to_sota = pd.DataFrame()
     for n in [1, 8, 64, 512, 2048, 16384, 131072, 1048576, 8388608, 67108864]:
         def_bw = 0
-        #for algo in ["default", "lat_BBB", "bw_BBB", "lat_BBBN", "bw_BBBN"]:        
         best_swing_bw = 0
         best_recdoub_bw = 0
-        for algo in ["default", "lat_BBBN", "bw_BBBN", "lat_CONT", "bw_CONT", "recdoub_l", "recdoub_b", "ring"]:
+        best_sota_bw = 0
+        for algo in algos:
+            if (algo == "bw_CONT" or algo == "bw_BBBN") and n < p:
+                continue
+
             k = (arch, str(p))
             if k in paths:
                 vpath = paths[k]
             else:
+                print("No data found for " + str(k))
                 continue
             filename = vpath + "/" + str(p) + "_" + str(n) + "_" + algo + ".csv"
             if os.path.exists(filename):
-                data_real = pd.read_csv(filename, sep=" ", skipfooter=1)                    
+                try:
+                    data_real = pd.read_csv(filename, sep=" ", error_bad_lines=False)
+                    data_real.drop(data_real.tail(1).index, inplace=True) 
+                except:
+                    continue
                 if len(data_real) == 0:                    
                     continue
                 data_real = data_real.loc[:, ~data_real.columns.str.contains('^Unnamed')]
@@ -65,8 +84,19 @@ def plot(arch, p):
                     def_bw = data_real["Bandwidth (Gb/s)"].mean()
                 data_real["Normalized Bandwidth"] = data_real["Bandwidth (Gb/s)"]/def_bw
 
+                bw_mean = data_real["Bandwidth (Gb/s)"].mean()
+                if algo in algos_sota and bw_mean > best_sota_bw:
+                    best_sota_bw = bw_mean
+                if not merge and algo in algos_swing:
+                    df_tmp = pd.DataFrame()
+                    name = algo_names[algo]                
+                    df_tmp["Improvement (%)"] = ((data_real["Bandwidth (Gb/s)"] - best_sota_bw)/best_sota_bw)*100.0
+                    df_tmp["Size"] = sizes[n]
+                    df_tmp["Algorithm"] = name
+                    df_impr_to_sota = pd.concat([df_impr_to_sota, df_tmp])                
+
                 if merge:
-                    meanbw = data_real["Normalized Bandwidth"].mean()
+                    meanbw = data_real["Bandwidth (Gb/s)"].mean()
                     if ("BBBN" in algo or "CONT" in algo) and meanbw > best_swing_bw:
                         data_real["Algo"] = "Swing"
                         best_swing_bw = meanbw
@@ -87,16 +117,40 @@ def plot(arch, p):
         if merge:
             for ba in ["Swing", "RecDoub", "Default", "Ring"]:
                 if ba in best_algo:
-                    df = pd.concat([df, best_algo[ba]])
+                    if ba == "Swing":
+                        # For impr plot
+                        df_tmp = pd.DataFrame()
+                        df_tmp["Improvement (%)"] = ((best_algo["Swing"]["Bandwidth (Gb/s)"] - best_sota_bw)/best_sota_bw)*100.0
+                        df_tmp["Size"] = sizes[n]
+                        df_tmp["Algorithm"] = "Swing"
+                        df_impr_to_sota = pd.concat([df_impr_to_sota, df_tmp])         
 
+                    if not add_default: # If I didn't normalize bw wrt default, now I normalize wrt Swing
+                        best_algo[ba]["Normalized Bandwidth"] = best_algo[ba]["Bandwidth (Gb/s)"] / best_algo["Swing"]["Bandwidth (Gb/s)"].mean()
+                    df = pd.concat([df, best_algo[ba]])
+    if len(df) == 0:
+        return
+    df_impr_to_sota.reset_index(drop=True, inplace=True)
     df.reset_index(drop=True, inplace=True)
     df["Time (ms)"] = df["Time (us)"] / 1000.0
 
     rows = 1
     cols = 1
+
+    # Improve to sota, lines
+    fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
+    ax = sns.pointplot(data=df_impr_to_sota, \
+                      x="Size", y="Improvement (%)", hue="Algorithm", ax=axes)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.75)
+    fig.savefig("out/" + arch + "_" + str(p) + "_impr_sota.pdf", format='pdf', dpi=100)
+    plt.clf()
+
+    # All, boxes
     fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
     ax = sns.boxplot(data=df, \
                      x="Size", y="Normalized Bandwidth", hue="Algo", showmeans=True, 
+                     showfliers=False,
                      meanprops={
                        "markerfacecolor":"white", 
                        "markeredgecolor":"black",
@@ -107,26 +161,29 @@ def plot(arch, p):
     plt.clf()
 
 
+    # All, lines
     fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
-    ax = sns.lineplot(data=df, \
-                      x="Size", y="Bandwidth (Gb/s)", hue="Algo", style="Algo", sort=False,
-                      markers=True, dashes=True, ax=axes)
-    plt.xscale('log')
+    ax = sns.pointplot(data=df, \
+                      x="Size", y="Bandwidth (Gb/s)", hue="Algo", ax=axes)
+    #plt.xscale('log')
     plt.tight_layout()
     plt.subplots_adjust(top=0.75)
     fig.savefig("out/" + arch + "_" + str(p) + "_line.pdf", format='pdf', dpi=100)
     plt.clf()
 
+    print("out/" + arch + "_" + str(p) + "_ plotted.")
+
 ps = {}
+ps["alps"] = [16, 32, 62, 64]
+ps["daint_ad3"] = [16, 62, 64]
+ps["deep-est"] = [16, 32]
+
 ps["daint"] = [18, 30, 32]
-ps["daint_ad3"] = [62, 64]
-ps["deep-est"] = [14, 16, 30, 32]
 ps["daint_sameswitch"] = [4]
 ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
 
-#archs = ["daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3"]
-archs = ["daint_ad3"]
+archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:

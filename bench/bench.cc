@@ -5,6 +5,11 @@
 #include <string.h>
 #include <unistd.h>
 
+void voidop(void *invec, void *inoutvec, int *len, MPI_Datatype *datatype){
+    return;
+}
+
+
 // Usage: ./bench type msgsize(elems) iterations
 int main(int argc, char** argv){
     int warmup = 10;    
@@ -18,7 +23,11 @@ int main(int argc, char** argv){
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    MPI_Op MPI_VOIDOP;
+    MPI_Op_create(voidop, 1, &MPI_VOIDOP);
     MPI_Datatype dt;
+    MPI_Op op = MPI_SUM;
     if(strcmp(type, "CHAR") == 0){
         dt = MPI_CHAR;
         count *= 4;
@@ -26,6 +35,9 @@ int main(int argc, char** argv){
         dt = MPI_FLOAT;
     }else if(strcmp(type, "INT") == 0){
         dt = MPI_INT;
+    }else if(strcmp(type, "VOID") == 0){
+        dt = MPI_FLOAT;
+        op = MPI_VOIDOP;
     }else{
         fprintf(stderr, "Unknown type %s\n", type);
         return 1;
@@ -41,7 +53,7 @@ int main(int argc, char** argv){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
         double start_time = MPI_Wtime();
-        MPI_Allreduce(sendbuf, recvbuf, count, dt, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(sendbuf, recvbuf, count, dt, op, MPI_COMM_WORLD);
 
         if(i >= 0){
             samples[i] = ((MPI_Wtime() - start_time)*1000000.0);
