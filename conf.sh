@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="einstein"
+SYSTEM="deep-est"
 
 case $SYSTEM in
   daint)

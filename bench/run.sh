@@ -26,6 +26,12 @@ mkdir -p ${OUT_FOLDER}
 for p in "${NODES[@]}"
 do
     echo ${SYSTEM}${EXTRA},${p},${OUT_FOLDER} >> ../data/description.csv
+
+    # Run EBB
+    if [ $EBB != "" ]; then
+        ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ${EBB} -m mpi -x ebb -s 16777216:16777216 > ${OUT_FOLDER}/ebb_${p}.txt
+    fi
+
     case $SYSTEM in
     daint)
         ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./get_coord_daint > ${OUT_FOLDER}/coord_${p}.txt
