@@ -1972,13 +1972,13 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             if(((count*dtsize)/size) <= switch_point){
                 max_count = count;
             }else{
-                max_count = (count*dtsize) / (((count*dtsize)/size)/switch_point);
+                max_count = (switch_point*size)/dtsize;
             }
         }else{ // RECDOUB/SWING
             if(((count*dtsize)/2) <= switch_point){
                 max_count = count;
             }else{
-                max_count = (count*dtsize) / (((count*dtsize)/2)/switch_point);
+                max_count = (switch_point*2)/dtsize;
             }
         }
         do{
