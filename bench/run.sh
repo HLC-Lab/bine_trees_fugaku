@@ -42,7 +42,7 @@ do
 	    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
 	    ;;
     esac
-    for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+    for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864 536870912
     do
         iterations=0
         if [ $n -le 512 ]
@@ -54,8 +54,11 @@ do
         elif [ $n -le 8388608 ]
         then
             iterations=100
-        else
+        elif [ $n -le 67108864 ]
+        then
             iterations=10
+        else
+            iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
         LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
