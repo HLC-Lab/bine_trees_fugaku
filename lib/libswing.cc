@@ -54,7 +54,7 @@ typedef enum{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0;
+                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0, switch_point = 0; //2097152;
 static char** cached_my_blocks_matrix = NULL;
 static uint* cached_blocks_remapping = NULL;
 static uint** cached_peers = NULL;
@@ -116,6 +116,11 @@ static inline void read_env(MPI_Comm comm){
         env_str = getenv("LIBSWING_RDMA");
         if(env_str){
             rdma = atoi(env_str);
+        }
+        
+        env_str = getenv("LIBSWING_SWITCH_POINT");
+        if(env_str){
+            switch_point = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_ALGO");
@@ -194,6 +199,7 @@ static inline void read_env(MPI_Comm comm){
             printf("LIBSWING_RDMA: %d\n", rdma);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_SENDRECV_TYPE: %d\n", srtype);            
+            printf("LIBSWING_SWITCH_POINT: %d\n", switch_point);            
             printf("LIBSWING_DIMENSIONS: ");
             for(size_t i = 0; i < dimensions_num; i++){
                 printf("%d", dimensions[i]);
@@ -1795,8 +1801,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
     }
 }
 
-int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-    read_env(comm);
+static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_SWING){
@@ -1952,4 +1957,42 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     }
 }
 
+int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    read_env(comm);
+    if(disable_allreduce || algo == ALGO_DEFAULT){
+        return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
+    }else if(switch_point){
+        int size, dtsize, rank, res;
+        MPI_Comm_size(comm, &size);
+        MPI_Comm_rank(comm, &rank);
+        MPI_Type_size(datatype, &dtsize);    
+        int remaining_count = count;
+        int max_count, next_offset = 0;
+        if(algo == ALGO_RING){
+            if(((count*dtsize)/size) <= switch_point){
+                max_count = count;
+            }else{
+                max_count = (count*dtsize) / (((count*dtsize)/size)/switch_point);
+            }
+        }else{ // RECDOUB/SWING
+            if(((count*dtsize)/2) <= switch_point){
+                max_count = count;
+            }else{
+                max_count = (count*dtsize) / (((count*dtsize)/2)/switch_point);
+            }
+        }
+        do{
+            int next_count = std::min(remaining_count, max_count);
+            res = MPI_Allreduce_int(((char*)sendbuf) + next_offset*dtsize, ((char*) recvbuf) + next_offset*dtsize, next_count, datatype, op, comm);
+            if(res != MPI_SUCCESS){
+                return res;
+            }
+            next_offset += next_count;
+            remaining_count -= next_count;
+        }while(remaining_count > 0);            
+        return MPI_SUCCESS;
+    }else{
+        return MPI_Allreduce_int(sendbuf, recvbuf, count, datatype, op, comm);
+    }
+}
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)
