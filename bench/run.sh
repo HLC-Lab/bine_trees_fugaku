@@ -32,13 +32,15 @@ do
         ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ${EBB}  -s 16777216:16777216 -m mpi -x ebb > ${OUT_FOLDER}/ebb_${p}.txt
     fi
 
+    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} hostname > ${OUT_FOLDER}/hostnames_${p}.txt
+    
     case $SYSTEM in
     daint)
         ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./get_coord_daint > ${OUT_FOLDER}/coord_${p}.txt
         ;;
     alps)
-	${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
-	;;
+	    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
+	    ;;
     esac
     for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
