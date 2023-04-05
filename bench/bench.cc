@@ -69,12 +69,15 @@ int main(int argc, char** argv){
         double avg_iteration = 0.0;
         for(i = 0; i < iterations; i++){
             printf("%d ", count);
-            double avg_ranks = 0.0;
+            double max_ranks = 0.0;
             for(r = 0; r < comm_size; r++){
-               printf("%f ", samples_all[r*iterations + i]);
-               avg_ranks += samples_all[r*iterations + i];
+                double sample = samples_all[r*iterations + i];
+               printf("%f ", sample);
+               if(sample > max_ranks){
+                max_ranks = sample;
+               }
             }
-            avg_iteration += avg_ranks / comm_size;
+            avg_iteration += max_ranks;
             printf("\n");
         }
         avg_iteration /= iterations;
