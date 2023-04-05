@@ -42,7 +42,7 @@ do
 	    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
 	    ;;
     esac
-    for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864 536870912
+    for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
         iterations=0
         if [ $n -le 512 ]
@@ -64,17 +64,10 @@ do
         LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
         LIBSWING_ALGO="RECDOUB_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_l.csv
         LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv
-        LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv
-        for SWINGTYPE in "CONT" "BBBN"
-        do
-            # Run bandwidth optimal
-            LIBSWING_LATENCY_OPTIMAL_THRESHOLD=0 LIBSWING_SENDRECV_TYPE="${SWINGTYPE}" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_${SWINGTYPE}.csv
-        done
-        # If msg small enough, run latency optimal
-        if [ $n -le 1048576 ]
-        then
-            LIBSWING_LATENCY_OPTIMAL_THRESHOLD=99999999 LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_${SWINGTYPE}.csv
-        fi
+        LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv        
+        # Run bandwidth optimal and lat optimal swing
+        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv
+        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_cont.csv
         echo " ${GREEN}[Done]${NC}"
     done
 done
