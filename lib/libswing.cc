@@ -1975,10 +1975,19 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                 max_count = (switch_point*size)/dtsize;
             }
         }else{ // RECDOUB/SWING
-            if(((count*dtsize)/2) <= switch_point){
-                max_count = count;
-            }else{
-                max_count = (switch_point*2)/dtsize;
+            int latency_optimal = (count*dtsize <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
+            if(algo == ALGO_RECDOUB_B || (algo == ALGO_SWING && !latency_optimal)){// Bw optimal
+                if(((count*dtsize)/2) <= switch_point){
+                    max_count = count;
+                }else{
+                    max_count = (switch_point*2)/dtsize;
+                }
+            }else{ // Lat optimal
+                if(((count*dtsize)) <= switch_point){
+                    max_count = count;
+                }else{
+                    max_count = (switch_point)/dtsize;
+                }
             }
         }
         do{
