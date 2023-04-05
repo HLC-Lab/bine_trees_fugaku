@@ -54,8 +54,9 @@ typedef enum{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0, switch_point = 0; //2097152;
+                    fast_bitmaps = 1, cache = 1, cached_p = 0, cached_tmpbuf_bytes = 0, rdma = 0, switch_point = 0; //2097152;
 static char** cached_my_blocks_matrix = NULL;
+static void* cached_tmp_buf = NULL;
 static uint* cached_blocks_remapping = NULL;
 static uint** cached_peers = NULL;
 static Algo algo = ALGO_SWING;
@@ -1141,9 +1142,14 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     }
 
     size_t total_size_bytes = buf_size*dtsize, total_elements = buf_size;
-    char* buf = (char*) malloc(buf_size*dtsize);    
-    char* rbuf = (char*) malloc(buf_size*dtsize);
-    memset(buf, 0, sizeof(char)*buf_size*dtsize);
+    char* buf = (char*) malloc(buf_size*dtsize); 
+    memset(buf, 0, sizeof(char)*buf_size*dtsize);   
+    char* rbuf;
+    if(cached_tmp_buf){
+        rbuf = (char*) cached_tmp_buf;
+    }else{
+        rbuf = (char*) malloc(buf_size*dtsize);
+    }
     size_t my_displ_bytes;
     size_t my_count_bytes;
 
@@ -1166,7 +1172,9 @@ static int MPI_Reduce_scatter_swing(const void *sendbuf, void *recvbuf, const in
     // Copy the block in recvbuf
     memcpy(recvbuf, ((char*) buf) + my_displ_bytes, my_count_bytes);
     free(buf);
-    free(rbuf);
+    if(rbuf != cached_tmp_buf){
+        free(rbuf);
+    }
     free(displs);
     return res;
 }
@@ -1198,7 +1206,11 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
             res = MPI_Irecv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[1]));
             if(res != MPI_SUCCESS){return res;}
             // While data is transmitted, we allocate buffer for the next steps
-            rbuf = (char*) malloc(count*dtsize);
+            if(cached_tmp_buf){
+                rbuf = (char*) cached_tmp_buf;
+            }else{
+                rbuf = (char*) malloc(count*dtsize);
+            }
             res = MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
             if(res != MPI_SUCCESS){return res;}
             MPI_Reduce_local(sendbuf, recvbuf, count, datatype, op);
@@ -1214,7 +1226,9 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     }    
     free(peers[rank]);
     free(peers);
-    free(rbuf);
+    if(rbuf != cached_tmp_buf){
+        free(rbuf);
+    }
     return res;
 }
 
@@ -1266,7 +1280,11 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
 
     is_commutative = true;
 
-    tmp_buf = malloc(count*extent);
+    if(cached_tmp_buf){
+        tmp_buf = cached_tmp_buf;
+    }else{
+        tmp_buf = malloc(count*extent);
+    }
     memcpy(recvbuf, sendbuf, count*extent);
 
     /* get nearest power-of-two less than or equal to comm_size */
@@ -1351,6 +1369,9 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
                                   datatype, rank + 1,
                                   TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
     }
+    if(tmp_buf != cached_tmp_buf){
+        free(tmp_buf);
+    }
     return mpi_errno_ret;
 }
 
@@ -1369,7 +1390,11 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
     MPI_Comm_rank(comm, &rank);
 
     /* need to allocate temporary buffer to store incoming data */
-    tmp_buf = malloc(count * dtsize);
+    if(cached_tmp_buf){
+        tmp_buf = cached_tmp_buf;
+    }else{
+        tmp_buf = malloc(count * dtsize);
+    }
 
     /* copy local data into recvbuf */
     memcpy(recvbuf, sendbuf, count*dtsize);
@@ -1541,6 +1566,9 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
                                   datatype, rank + 1,
                                   TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
     }
+    if(tmp_buf != cached_tmp_buf){
+        free(tmp_buf);
+    }
     return mpi_errno_ret;
 }
 
@@ -1583,7 +1611,12 @@ static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI
     // We know that segment_sizes[0] is going to be the largest buffer size,
     // because if there are any overflow elements at least one will be added to
     // the first segment.
-    char* buffer = (char*) malloc(segment_sizes[0]*dtsize);
+    char* buffer;
+    if(cached_tmp_buf){
+        buffer = (char*) cached_tmp_buf;
+    }else{
+        buffer = (char*) malloc(segment_sizes[0]*dtsize);
+    }
 
     // Receive from your left neighbor with wrap-around.
     const size_t recv_from = (rank - 1 + size) % size;
@@ -1635,7 +1668,9 @@ static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI
     }
 
     // Free temporary memory.
-    free(buffer);    
+    if(buffer != cached_tmp_buf){
+        free(buffer);    
+    }
     return 0;
 }
 
@@ -1961,47 +1996,57 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     read_env(comm);
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
-    }else if(switch_point){
-        int size, dtsize, rank, res;
-        MPI_Comm_size(comm, &size);
-        MPI_Comm_rank(comm, &rank);
-        MPI_Type_size(datatype, &dtsize);    
-        int remaining_count = count;
-        int max_count, next_offset = 0;
-        if(algo == ALGO_RING){
-            if(((count*dtsize)/size) <= switch_point){
-                max_count = count;
-            }else{
-                max_count = (switch_point*size)/dtsize;
-            }
-        }else{ // RECDOUB/SWING
-            int latency_optimal = (count*dtsize <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
-            if(algo == ALGO_RECDOUB_B || (algo == ALGO_SWING && !latency_optimal)){// Bw optimal
-                if(((count*dtsize)/2) <= switch_point){
-                    max_count = count;
-                }else{
-                    max_count = (switch_point*2)/dtsize;
-                }
-            }else{ // Lat optimal
-                if(((count*dtsize)) <= switch_point){
-                    max_count = count;
-                }else{
-                    max_count = (switch_point)/dtsize;
-                }
-            }
-        }
-        do{
-            int next_count = std::min(remaining_count, max_count);
-            res = MPI_Allreduce_int(((char*)sendbuf) + next_offset*dtsize, ((char*) recvbuf) + next_offset*dtsize, next_count, datatype, op, comm);
-            if(res != MPI_SUCCESS){
-                return res;
-            }
-            next_offset += next_count;
-            remaining_count -= next_count;
-        }while(remaining_count > 0);            
-        return MPI_SUCCESS;
     }else{
-        return MPI_Allreduce_int(sendbuf, recvbuf, count, datatype, op, comm);
+        int dtsize;
+        MPI_Type_size(datatype, &dtsize);    
+        if(cache && cached_tmpbuf_bytes != count*dtsize){
+            if(cached_tmp_buf){
+                free(cached_tmp_buf);
+            }
+            cached_tmp_buf = malloc(count*dtsize);
+        }
+        if(switch_point){
+            int size, rank, res;
+            MPI_Comm_size(comm, &size);
+            MPI_Comm_rank(comm, &rank);
+            
+            int remaining_count = count;
+            int max_count, next_offset = 0;
+            if(algo == ALGO_RING){
+                if(((count*dtsize)/size) <= switch_point){
+                    max_count = count;
+                }else{
+                    max_count = (switch_point*size)/dtsize;
+                }
+            }else{ // RECDOUB/SWING
+                int latency_optimal = (count*dtsize <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
+                if(algo == ALGO_RECDOUB_B || (algo == ALGO_SWING && !latency_optimal)){// Bw optimal
+                    if(((count*dtsize)/2) <= switch_point){
+                        max_count = count;
+                    }else{
+                        max_count = (switch_point*2)/dtsize;
+                    }
+                }else{ // Lat optimal
+                    if(((count*dtsize)) <= switch_point){
+                        max_count = count;
+                    }else{
+                        max_count = (switch_point)/dtsize;
+                    }
+                }
+            }
+            do{
+                int next_count = std::min(remaining_count, max_count);
+                res = MPI_Allreduce_int(((char*)sendbuf) + next_offset*dtsize, ((char*) recvbuf) + next_offset*dtsize, next_count, datatype, op, comm);
+                if(res != MPI_SUCCESS){
+                    return res;
+                }
+                next_offset += next_count;
+                remaining_count -= next_count;
+            }while(remaining_count > 0);            
+            return MPI_SUCCESS;
+        }else{
+            return MPI_Allreduce_int(sendbuf, recvbuf, count, datatype, op, comm);
+        }
     }
 }
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)
