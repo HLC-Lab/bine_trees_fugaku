@@ -37,7 +37,8 @@ typedef enum{
 
 typedef enum{
     ALGO_DEFAULT = 0,
-    ALGO_SWING,
+    ALGO_SWING_L,
+    ALGO_SWING_B,
     ALGO_RING,
     ALGO_RECDOUB_L,
     ALGO_RECDOUB_B,
@@ -59,7 +60,7 @@ static char** cached_my_blocks_matrix = NULL;
 static void* cached_tmp_buf = NULL;
 static uint* cached_blocks_remapping = NULL;
 static uint** cached_peers = NULL;
-static Algo algo = ALGO_SWING;
+static Algo algo = ALGO_SWING_B;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 
@@ -128,8 +129,10 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             if(strcmp(env_str, "DEFAULT") == 0){
                 algo = ALGO_DEFAULT;
-            }else if(strcmp(env_str, "SWING") == 0){
-                algo = ALGO_SWING;
+            }else if(strcmp(env_str, "SWING_L") == 0){
+                algo = ALGO_SWING_L;
+            }else if(strcmp(env_str, "SWING_B") == 0){
+                algo = ALGO_SWING_B;
             }else if(strcmp(env_str, "RING") == 0){
                 algo = ALGO_RING;
             }else if(strcmp(env_str, "RECDOUB_L") == 0){
@@ -1678,7 +1681,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
     read_env(comm);
     if(disable_reducescatter || algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
-    }else if(algo == ALGO_SWING){
+    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B){
         int size, rank;
         MPI_Comm_size(comm, &size);
         MPI_Comm_rank(comm, &rank);
@@ -1719,7 +1722,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     read_env(comm);
     if(disable_allgather || algo == ALGO_DEFAULT){
         return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-    }else if(algo == ALGO_SWING){
+    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B){
         int size, rank;    
         MPI_Comm_size(comm, &size);    
         MPI_Comm_rank(comm, &rank);
@@ -1745,7 +1748,7 @@ int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, vo
     read_env(comm);
     if(disable_allgatherv || algo == ALGO_DEFAULT){
         return PMPI_Allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm);
-    }else if(algo == ALGO_SWING){
+    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B){
         int size, rank;
         MPI_Comm_size(comm, &size);
         MPI_Comm_rank(comm, &rank);
@@ -1839,7 +1842,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
 static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
-    }else if(algo == ALGO_SWING){
+    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B){
         int size, dtsize, rank;
         MPI_Comm_size(comm, &size);
         MPI_Comm_rank(comm, &rank);
@@ -1854,8 +1857,7 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
 
         // Compute the peers
         
-        int latency_optimal = (total_size_bytes <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
-        if(latency_optimal){
+        if(algo == ALGO_SWING_L){
             return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm); // Misleading, should call the function in a different way            
         }else{
             int res;
@@ -2012,6 +2014,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             
             int remaining_count = count;
             int max_count, next_offset = 0;
+            /*
             if(algo == ALGO_RING){
                 if(((count*dtsize)/size) <= switch_point){
                     max_count = count;
@@ -2020,7 +2023,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                 }
             }else{ // RECDOUB/SWING
                 int latency_optimal = (count*dtsize <= latency_optimal_threshold) || (count < size); // TODO Adjust for tori        
-                if(algo == ALGO_RECDOUB_B || (algo == ALGO_SWING && !latency_optimal)){// Bw optimal
+                if(algo == ALGO_RECDOUB_B || (algo == ALGO_SWING_B)){// Bw optimal
                     if(((count*dtsize)/2) <= switch_point){
                         max_count = count;
                     }else{
@@ -2033,6 +2036,11 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                         max_count = (switch_point)/dtsize;
                     }
                 }
+            }*/
+            if(count*dtsize <= switch_point){
+              max_count = count;
+            }else{
+              max_count = switch_point / dtsize;
             }
             do{
                 int next_count = std::min(remaining_count, max_count);
