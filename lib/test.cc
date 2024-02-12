@@ -55,7 +55,7 @@ int main(int argc, char** argv){
 #endif
 
 #ifdef PROFILE
-    const char* algos[1] = {"SWING"};
+    const char* algos[1] = {"SWING_B"};
 #else
     const char* algos[5] = {"SWING_L", "SWING_B", "RING", "RECDOUB_L", "RECDOUB_B"};
 #endif
@@ -91,14 +91,14 @@ int main(int argc, char** argv){
         bool valid = true;
         for(size_t i = 0; i < count; i++){
             if(recvbuf[i] != recvbuf_v[i]){
-                fprintf(stderr, "[%d] Validation failed at index %d (%f but should be %f)\n", rank, (int) i, recvbuf[i], recvbuf_v[i]);
+                fprintf(stderr, "[%d][%s] Validation failed at index %d (%f but should be %f)\n", rank, algos[algo], (int) i, recvbuf[i], recvbuf_v[i]);
                 valid = false;
                 return 1;
             }
         }
 
         if(valid){
-            printf("Validation succeeded.\n");
+            printf("%s Validation succeeded.\n", algos[algo]);
         }
 #endif
     }

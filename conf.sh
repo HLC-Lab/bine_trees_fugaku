@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="alps"
+SYSTEM="einstein"
 
 case $SYSTEM in
   daint)
