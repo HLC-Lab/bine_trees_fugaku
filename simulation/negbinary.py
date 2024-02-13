@@ -80,11 +80,7 @@ print("")
 print("")
 
 
-# Flip the bits for even destinations (assuming even source),
-# so that the processing is homogeneous
-
 idxs = {}
-
 for i in range(p):
     for j in ranks[i]:
         string = j[::-1]
@@ -96,3 +92,30 @@ for i in range(p):
 
 for i in range(p):
     print(i, idxs[i])
+
+
+print("")
+print("")
+
+deltas = [1, -1, 3, -5, 11, -21, 43, -85, 171]
+chains = {}
+for i in range(p):
+    for j in idxs[i]:
+        s = str(r) + "->"
+        rank = r
+        for k in j:
+            if rank % 2 == 0:            
+                rank = (rank + deltas[k]) % p
+            else:
+                rank = (rank - deltas[k]) % p
+            s += str(rank)                
+            if k != j[-1]:
+                s += "->"
+
+        if i in chains:
+            chains[i] += [s]
+        else:
+            chains[i] = [s]
+        
+for i in range(p):
+    print(i, chains[i])

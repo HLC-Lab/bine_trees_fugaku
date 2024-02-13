@@ -21,7 +21,7 @@
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -1815,11 +1815,239 @@ static inline int MPI_Allreduce_bw_optimal_swing_old(const void *sendbuf, void *
 }
 
 
+
+// https://stackoverflow.com/questions/37637781/calculating-the-negabinary-representation-of-a-given-number-without-loops
+static uint32_t binary_to_negabinary(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t negabinary_to_binary(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+static int32_t smallest_negabinary(uint32_t nbits){
+    return -2 * ((pow(2, (nbits / 2)*2) - 1) / 3);
+}
+
+static int32_t largest_negabinary(uint32_t nbits){
+    int32_t tmp = ((pow(2, (nbits / 2)*2) - 1) / 3);
+    if(nbits % 2 == 0){
+        return tmp;
+    }else{
+        return tmp + pow(2, nbits - 1);
+    }
+}
+
+// Checks if a given negabinary number is in the range of a given number of bits
+static int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary(nbits) && x <= largest_negabinary(nbits);
+}
+
+static inline int is_power_of_two(int x){
+    return (x != 0) && ((x & (x - 1)) == 0);
+}
+
+static inline void skip_send_or_recv(uint32_t delta, int peer, int step, SwingInfo* info, int* skip_send, int* skip_recv){
+    // x and y are the two distances between source and destination on the ring
+    int x = mod(delta, info->size);
+    int y = x - info->size;
+    if(mod(info->rank, 2)){ // Flip the sign for odd nodes
+        x = -x;
+        y = -y;
+    }
+    DPRINTF("[%d] Step %d, x=%d, y=%d\n", info->rank, step, x, y);
+    if(in_range(x, info->num_steps) && in_range(y, info->num_steps)){ // With the number of bits I have, I can reach the destination with two different combinations of steps.
+        //y = mod(y, info->size);
+        // I am not going to send data that will be received again in the last step.
+        if(step == info->num_steps - 2){
+            if(info->rank % 2){
+                *skip_recv = 1;
+                DPRINTF("[%d] Skipping recv from %d on step %d\n", info->rank, peer, step);
+            }else{
+                *skip_send = 1;            
+                DPRINTF("[%d] Skipping send to %d on step %d\n", info->rank, peer, step);
+            }
+        }
+    }
+}
+
+static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int first_step, int skip_send, int skip_recv, char** rbuf, int peer, int step, int delta, int overwrite){    
+    int res;
+    const void *sendbuf_real, *aggbuff_a;
+    void *aggbuff_b, *recvbuf_real;
+    if(first_step){
+        sendbuf_real = sendbuf;
+        recvbuf_real = recvbuf;
+        aggbuff_a = sendbuf;
+        aggbuff_b = recvbuf;
+    }else{
+        sendbuf_real = recvbuf;
+        recvbuf_real = *rbuf;
+        aggbuff_a = *rbuf;
+        aggbuff_b = recvbuf;
+    }
+
+    DPRINTF("[%d] Starting step %d, communicating with %d (delta=%d, skip_send=%d, skip_recv=%d)\n", info->rank, step, peer, delta, skip_send, skip_recv);
+
+    MPI_Request requests[2];
+    memset(requests, 0, sizeof(requests));
+    if(!skip_send){
+        res = MPI_Isend(sendbuf_real, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[0]));
+        if(res != MPI_SUCCESS){return res;}
+    }
+    if(!skip_recv){
+        res = MPI_Irecv(recvbuf_real, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[1]));
+        if(res != MPI_SUCCESS){return res;}
+    }
+    // While data is transmitted in the first step, we allocate buffer for the next steps
+    if(first_step){
+        if(cached_tmp_buf){
+            *rbuf = (char*) cached_tmp_buf;
+        }else{
+            *rbuf = (char*) malloc(count*info->dtsize);
+        }
+    }    
+    if(!skip_send){
+        res = MPI_Wait(&(requests[0]), MPI_STATUS_IGNORE);
+        if(res != MPI_SUCCESS){return res;}
+    }
+    if(!skip_recv){
+        res = MPI_Wait(&(requests[1]), MPI_STATUS_IGNORE);
+        if(res != MPI_SUCCESS){return res;}
+    }
+    
+    if(res != MPI_SUCCESS){return res;}
+    if(!skip_recv){
+        if(overwrite){
+            memcpy(aggbuff_b, aggbuff_a, count*info->dtsize);
+        }else{
+            MPI_Reduce_local(aggbuff_a, aggbuff_b, count, datatype, op);
+        }
+    }
+    
+    return MPI_SUCCESS;
+}
+
+static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
+    int res;    
+    char* rbuf; // Temporary buffer (to avoid overwriting sendbuf)
+    int num_steps = info->num_steps;
+    int p2 = is_power_of_two(info->size);
+    int shrinked_size = info->size;
+    int rank_virtual = info->rank;
+    int peer;
+    int first_step = 1;
+    int start_extra = 0;
+    int skip_send = 0, skip_recv = 0;
+   
+    if(!p2){ // Non-power-of-2 nodes
+        num_steps -= 1;
+        shrinked_size = pow(2, num_steps);
+        start_extra = 2*shrinked_size - info->size;
+
+        // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
+        if(info->rank >= start_extra){            
+            if(info->rank % 2){
+                peer = info->rank - 1;
+                skip_send = 0;
+                skip_recv = 1;
+            }else{
+                peer = info->rank + 1;
+                skip_send = 1;
+                skip_recv = 0;
+            }
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 998, 998, 0);
+            first_step = 0;
+            if(res != MPI_SUCCESS){
+                return res;
+            }
+            rank_virtual = ((start_extra) + info->rank) / 2;
+            DPRINTF("[%d] Virtual rank %d\n", info->rank, rank_virtual);
+        }
+    }
+
+    for(size_t step = 0; step < num_steps; step++){     
+        skip_send = 0;
+        skip_recv = 0;
+        // Create a binary number with "step+1" ones.
+        uint32_t unary = (1 << (step + 1)) - 1;
+        uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
+        if(mod(rank_virtual, 2)){ // Flip the sign for odd nodes
+            delta = -delta;
+        } // TODO: manage multiport
+        peer = mod((rank_virtual + delta), shrinked_size);
+
+        if(!p2){
+            if(info->rank >= start_extra){
+                if(info->rank % 2){
+                    skip_send = 1;
+                    skip_recv = 1;
+                }
+            }
+            if(peer >= start_extra){                
+                peer = start_extra + (peer - start_extra)*2;
+            }
+        }       
+        
+        // Check that I am not going to send data that will be received 
+        // another time in the last step (for non-power-of-2 nodes).        
+        // TODO: Still not sure how to do that for latency-optimal version, for the moment we 
+        // adopt a simpler solution (extra nodes send to a node within the previous power of 2 range)
+        /*
+        if(!p2){ // Non-power-of-2 nodes
+            skip_send_or_recv(delta, peer, step, info, &skip_send, &skip_recv);
+        }
+        */
+        res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, step, delta, 0);
+        first_step = 0;
+        if(res != MPI_SUCCESS){
+            return res;
+        }
+    }    
+
+    if(!p2){ // Non-power-of-2 nodes
+        // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
+        if(info->rank >= start_extra){
+            int overwrite = 0;
+            if(info->rank % 2){
+                peer = info->rank - 1;
+                skip_send = 1;
+                skip_recv = 0;
+                overwrite = 1;
+            }else{
+                peer = info->rank + 1;
+                skip_send = 0;
+                skip_recv = 1;
+            }
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 999, 999, overwrite);
+            first_step = 0;
+            if(res != MPI_SUCCESS){
+                return res;
+            }
+        }
+    }
+
+    if(rbuf != cached_tmp_buf){
+        free(rbuf);
+    }
+    return res;
+}
+
+
 static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){
     if(algo == ALGO_SWING_OLD_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing_old(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_SWING_OLD_B){ // Swing_b
         return MPI_Allreduce_bw_optimal_swing_old(sendbuf, recvbuf, count, datatype, op, comm, info);
+    }if(algo == ALGO_SWING_L){ // Swing_l
+        return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
+    }else if(algo == ALGO_SWING_B){ // Swing_b
+        ;//return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info); // TODO: Implement
     }else if(algo == ALGO_RING){ // Ring
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
@@ -1836,6 +2064,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{
+        // TODO: All this caching thing might not be needed for the new swing (and for the other algos), so we might keep this only for SWING_OLD_L/B
         SwingInfo info;
         MPI_Type_size(datatype, &info.dtsize);    
         MPI_Comm_size(comm, &info.size);
