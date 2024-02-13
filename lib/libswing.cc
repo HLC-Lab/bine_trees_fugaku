@@ -1898,7 +1898,7 @@ static int32_t largest_negabinary(uint32_t nbits){
     }
 }
 
-// Checks if a given negabinary number is in the range of a given number of bits
+// Checks if a given number can be represented as a negabinary number with nbits bits
 static int in_range(int x, uint32_t nbits){
     return x >= smallest_negabinary(nbits) && x <= largest_negabinary(nbits);
 }
@@ -2022,20 +2022,13 @@ static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo
     int x, y;
     if((rank % 2 == 0 && block_idx % 2) || (rank % 2 && block_idx % 2)){
         x = block_idx - rank;
-        if(x < 0){
-            y = x + info->size;
-        }else{
-            y = x - info->size;
-        }
-        //y = x - info->size;
     }else{
         x = rank - block_idx;        
-        if(x < 0){
-            y = x + info->size;
-        }else{
-            y = x - info->size;
-        }
-        //y = x + info->size;
+    }
+    if(x < 0){
+        y = x + info->size;
+    }else{
+        y = x - info->size;
     }
     //DPRINTF("[%d] Step %d, x=%d, y=%d\n", info->rank, step, x, y);
     if(in_range(x, info->num_steps) && in_range(y, info->num_steps)){ // With the number of bits I have, I can reach the destination with two different combinations of steps.
@@ -2047,12 +2040,66 @@ static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo
     }
 }
 
-static int get_block_distance_neg(int rank, int block){
+static int get_block_distance(int rank, int block){
     if((rank % 2 == 0 && block % 2) || (rank % 2 && block % 2)){
-        return binary_to_negabinary(block - rank);                
+        return block - rank;                
     }else{
-        return binary_to_negabinary(rank - block);
+        return rank - block;
     }
+}
+
+static int is_reachable(int rank, int block, size_t block_step, int num_steps, int size, int* skipped, SwingInfo* info){
+    if(rank == block){
+        return 0;
+    }
+    int reach_a = 0, reach_b = 0, is_in_range_a = 0, is_in_range_b;
+    int block_distance_a, block_distance_neg_a, block_distance_b, block_distance_neg_b;    
+    block_distance_a = get_block_distance(rank, block);
+    if(block_distance_a < 0){
+        block_distance_b = block_distance_a + size;
+    }else{
+        block_distance_b = block_distance_a - size;
+    }
+
+    is_in_range_a = in_range(block_distance_a, num_steps);
+    is_in_range_b = in_range(block_distance_b, num_steps);
+
+    if(is_in_range_a){
+        block_distance_neg_a = binary_to_negabinary(block_distance_a);
+        reach_a = check_last_n_bits_equal(block_distance_neg_a,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
+                  check_last_n_bits_equal(block_distance_neg_a, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+    }
+
+    if(is_in_range_b){
+        block_distance_neg_b = binary_to_negabinary(block_distance_b);
+        reach_b = check_last_n_bits_equal(block_distance_neg_b,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
+                  check_last_n_bits_equal(block_distance_neg_b, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+    }
+    if(rank == info->rank){
+        DPRINTF("[%d] Step %d Block %d, distance (%d, %d), distance_neg (%d, %d), is_in_range (%d, %d), reach (%d, %d)\n", info->rank, block_step, block, block_distance_a, block_distance_b, block_distance_neg_a, block_distance_neg_b, is_in_range_a, is_in_range_b, reach_a, reach_b);
+    }
+    //assert(!(reach_a && reach_b));
+    if(reach_a && reach_b){ // If I can reach with two different combinations of steps, I don't skip it since it will be resolved later (the two paths share the first part of the path)
+        return 1;
+    }
+    if(is_in_range_a && is_in_range_b){
+        // If I can reach the same node twice, I want to reach it only in the last step.
+        // Thus, if I can reach with sequence a, I check if the most significant bit
+        // of block_distance_neg_a is equal to 1. If not, I skip it.        
+        if((reach_a && (block_distance_neg_a & (0x1 << (num_steps - 1))) == 0) ||
+           (reach_b && (block_distance_neg_b & (0x1 << (num_steps - 1))) == 0)){
+            return 0;
+        } 
+
+        // Equivalent:   
+        /* 
+        if((reach_a && block_distance_neg_a < block_distance_neg_b) ||
+           (reach_b && block_distance_neg_b < block_distance_neg_a)){
+            return 0;
+        }
+        */
+    }
+    return reach_a || reach_b;
 }
 
 static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
@@ -2102,49 +2149,17 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
 
         // Sendrecv + aggregate
         int num_requests_s = 0, num_requests_r = 0;
-        int diff = peer - rank;
         int sendcnt = 0, recvcnt = 0, recvblocks = 0;     
         for(size_t i = 0; i < size; i++){
             // Take distance between rank and block id, convert to negabinary, and check if it must be sent now (using blockstep).
-            int send_block = 0, recv_block = 0;
-            int block_distance_s_neg = get_block_distance_neg(rank, i);
-            int block_distance_r_neg = get_block_distance_neg(peer, i);
-
-            if(i != info->rank){
-                send_block = check_last_n_bits_equal(block_distance_s_neg,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
-                             check_last_n_bits_equal(block_distance_s_neg, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+            int send_block, recv_block;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                send_block = is_reachable(rank, i, block_step, num_steps, info->size, skipped_send, info);
+                recv_block = is_reachable(peer, i, block_step, num_steps, info->size, skipped_recv, info);
+            }else{
+                recv_block = is_reachable(rank, i, block_step, num_steps, info->size, skipped_recv, info);
+                send_block = is_reachable(peer, i, block_step, num_steps, info->size, skipped_send, info);
             }
-            if(i != peer){
-                recv_block = check_last_n_bits_equal(block_distance_r_neg,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
-                             check_last_n_bits_equal(block_distance_r_neg, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
-            }
-            if(coll_type == SWING_ALLGATHER){
-                // Swap send and recv
-                int tmp = send_block;
-                send_block = recv_block;
-                recv_block = tmp;
-            }
-
-            if(!is_power_of_two(size)){
-                int skip_send = 0, skip_recv = 0;
-                skip_send_f(rank, i, block_step, info, &skip_send);
-                skip_send_f(peer, i, block_step, info, &skip_recv);
-                if(skip_send && !skipped_send[i]){                    
-                    if(send_block){
-                        skipped_send[i] = 1;
-                        DPRINTF("[%d] Skipping send block %d on step %d\n", info->rank, i, step);
-                    }
-                    send_block = 0;
-                }
-                if(skip_recv && !skipped_recv[i]){                    
-                    if(recv_block){
-                        skipped_recv[i] = 1;
-                        DPRINTF("[%d] Skipping recv block %d on step %d\n", info->rank, i, step);
-                    }
-                    recv_block = 0;
-                }
-            }
-
 
             //DPRINTF("[%d] Block %d (send %d recv %d)\n", rank, i, send_block, recv_block);
             if(send_block){              
