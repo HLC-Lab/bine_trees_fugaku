@@ -1814,68 +1814,6 @@ static inline int MPI_Allreduce_bw_optimal_swing_old(const void *sendbuf, void *
     return res;  
 }
 
-
-
-// https://stackoverflow.com/questions/37637781/calculating-the-negabinary-representation-of-a-given-number-without-loops
-static uint32_t binary_to_negabinary(int32_t bin) {
-    if (bin > 0x55555555) throw std::overflow_error("value out of range");
-    const uint32_t mask = 0xAAAAAAAA;
-    return (mask + bin) ^ mask;
-}
-
-static int32_t negabinary_to_binary(uint32_t neg) {
-    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
-    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
-    const uint32_t mask = 0xAAAAAAAA;
-    return (mask ^ neg) - mask;
-}
-
-static int32_t smallest_negabinary(uint32_t nbits){
-    return -2 * ((pow(2, (nbits / 2)*2) - 1) / 3);
-}
-
-static int32_t largest_negabinary(uint32_t nbits){
-    int32_t tmp = ((pow(2, (nbits / 2)*2) - 1) / 3);
-    if(nbits % 2 == 0){
-        return tmp;
-    }else{
-        return tmp + pow(2, nbits - 1);
-    }
-}
-
-// Checks if a given negabinary number is in the range of a given number of bits
-static int in_range(int x, uint32_t nbits){
-    return x >= smallest_negabinary(nbits) && x <= largest_negabinary(nbits);
-}
-
-static inline int is_power_of_two(int x){
-    return (x != 0) && ((x & (x - 1)) == 0);
-}
-
-static inline void skip_send_or_recv(uint32_t delta, int peer, int step, SwingInfo* info, int* skip_send, int* skip_recv){
-    // x and y are the two distances between source and destination on the ring
-    int x = mod(delta, info->size);
-    int y = x - info->size;
-    if(mod(info->rank, 2)){ // Flip the sign for odd nodes
-        x = -x;
-        y = -y;
-    }
-    DPRINTF("[%d] Step %d, x=%d, y=%d\n", info->rank, step, x, y);
-    if(in_range(x, info->num_steps) && in_range(y, info->num_steps)){ // With the number of bits I have, I can reach the destination with two different combinations of steps.
-        //y = mod(y, info->size);
-        // I am not going to send data that will be received again in the last step.
-        if(step == info->num_steps - 2){
-            if(info->rank % 2){
-                *skip_recv = 1;
-                DPRINTF("[%d] Skipping recv from %d on step %d\n", info->rank, peer, step);
-            }else{
-                *skip_send = 1;            
-                DPRINTF("[%d] Skipping send to %d on step %d\n", info->rank, peer, step);
-            }
-        }
-    }
-}
-
 static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int first_step, int skip_send, int skip_recv, char** rbuf, int peer, int step, int delta, int overwrite){    
     int res;
     const void *sendbuf_real, *aggbuff_a;
@@ -1931,6 +1869,42 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
     }
     
     return MPI_SUCCESS;
+}
+
+// https://stackoverflow.com/questions/37637781/calculating-the-negabinary-representation-of-a-given-number-without-loops
+static uint32_t binary_to_negabinary(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t negabinary_to_binary(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+static int32_t smallest_negabinary(uint32_t nbits){
+    return -2 * ((pow(2, (nbits / 2)*2) - 1) / 3);
+}
+
+static int32_t largest_negabinary(uint32_t nbits){
+    int32_t tmp = ((pow(2, (nbits / 2)*2) - 1) / 3);
+    if(nbits % 2 == 0){
+        return tmp;
+    }else{
+        return tmp + pow(2, nbits - 1);
+    }
+}
+
+// Checks if a given negabinary number is in the range of a given number of bits
+static int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary(nbits) && x <= largest_negabinary(nbits);
+}
+
+static inline int is_power_of_two(int x){
+    return (x != 0) && ((x & (x - 1)) == 0);
 }
 
 static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
@@ -2038,6 +2012,272 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     return res;
 }
 
+static int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
+    uint32_t mask = (1 << n) - 1;
+    return (a & mask) == (b & mask);
+}
+
+static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo* info, int* skip){
+    // x and y are the two distances between source and destination on the ring
+    int x, y;
+    if((rank % 2 == 0 && block_idx % 2) || (rank % 2 && block_idx % 2)){
+        x = block_idx - rank;
+        if(x < 0){
+            y = x + info->size;
+        }else{
+            y = x - info->size;
+        }
+        //y = x - info->size;
+    }else{
+        x = rank - block_idx;        
+        if(x < 0){
+            y = x + info->size;
+        }else{
+            y = x - info->size;
+        }
+        //y = x + info->size;
+    }
+    //DPRINTF("[%d] Step %d, x=%d, y=%d\n", info->rank, step, x, y);
+    if(in_range(x, info->num_steps) && in_range(y, info->num_steps)){ // With the number of bits I have, I can reach the destination with two different combinations of steps.
+        // y = mod(y, info->size);
+        // I am not going to send data that will be received again in the last step.
+        if(step < info->num_steps - 1){
+            *skip = 1;
+        }
+    }
+}
+
+static int get_block_distance_neg(int rank, int block){
+    if((rank % 2 == 0 && block % 2) || (rank % 2 && block % 2)){
+        return binary_to_negabinary(block - rank);                
+    }else{
+        return binary_to_negabinary(rank - block);
+    }
+}
+
+static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
+                           MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                           CollType coll_type, SwingInfo* info){
+    int tag, res;  
+    uint num_steps = info->num_steps;
+
+    if(coll_type == SWING_REDUCE_SCATTER){
+        tag = TAG_SWING_REDUCESCATTER;
+    }else{
+        tag = TAG_SWING_ALLGATHER;
+    }
+
+    MPI_Win win = MPI_WIN_NULL;
+    if(rdma){
+        int count = 0;
+        for(size_t i = 0; i < size; i++){
+            count += blocks_sizes[i];
+        }
+        MPI_Win_create(buf, count*info->dtsize, info->dtsize, MPI_INFO_NULL, comm, &win);
+        MPI_Win_fence(0, win);
+    }
+
+    MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
+    MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
+    int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
+    int* skipped_send = (int*) malloc(sizeof(int)*size);
+    memset(skipped_send, 0, sizeof(int)*size);
+    int* skipped_recv = (int*) malloc(sizeof(int)*size);
+    memset(skipped_recv, 0, sizeof(int)*size);
+
+    // Iterate over steps
+    for(size_t step = 0; step < num_steps; step++){        
+        size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
+        
+        // Create a binary number with "step+1" ones.
+        uint32_t unary = (1 << (block_step + 1)) - 1;
+        uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
+
+        if(mod(info->rank, 2)){ // Flip the sign for odd nodes
+            delta = -delta;
+        } // TODO: manage multiport
+
+        int peer = mod((info->rank + delta), info->size);
+        DPRINTF("[%d] Starting step %d peer %d\n", rank, step, peer);
+
+        // Sendrecv + aggregate
+        int num_requests_s = 0, num_requests_r = 0;
+        int diff = peer - rank;
+        int sendcnt = 0, recvcnt = 0, recvblocks = 0;     
+        for(size_t i = 0; i < size; i++){
+            // Take distance between rank and block id, convert to negabinary, and check if it must be sent now (using blockstep).
+            int send_block = 0, recv_block = 0;
+            int block_distance_s_neg = get_block_distance_neg(rank, i);
+            int block_distance_r_neg = get_block_distance_neg(peer, i);
+
+            if(i != info->rank){
+                send_block = check_last_n_bits_equal(block_distance_s_neg,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
+                             check_last_n_bits_equal(block_distance_s_neg, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+            }
+            if(i != peer){
+                recv_block = check_last_n_bits_equal(block_distance_r_neg,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
+                             check_last_n_bits_equal(block_distance_r_neg, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+            }
+            if(coll_type == SWING_ALLGATHER){
+                // Swap send and recv
+                int tmp = send_block;
+                send_block = recv_block;
+                recv_block = tmp;
+            }
+
+            if(!is_power_of_two(size)){
+                int skip_send = 0, skip_recv = 0;
+                skip_send_f(rank, i, block_step, info, &skip_send);
+                skip_send_f(peer, i, block_step, info, &skip_recv);
+                if(skip_send && !skipped_send[i]){                    
+                    if(send_block){
+                        skipped_send[i] = 1;
+                        DPRINTF("[%d] Skipping send block %d on step %d\n", info->rank, i, step);
+                    }
+                    send_block = 0;
+                }
+                if(skip_recv && !skipped_recv[i]){                    
+                    if(recv_block){
+                        skipped_recv[i] = 1;
+                        DPRINTF("[%d] Skipping recv block %d on step %d\n", info->rank, i, step);
+                    }
+                    recv_block = 0;
+                }
+            }
+
+
+            //DPRINTF("[%d] Block %d (send %d recv %d)\n", rank, i, send_block, recv_block);
+            if(send_block){              
+                DPRINTF("[%d] Sending block %d to %d at step %d (coll %d)\n", rank, i, peer, step, coll_type);
+                if(rdma){
+                    if(coll_type == SWING_REDUCE_SCATTER){
+                        res = MPI_Accumulate(((char*) buf) + blocks_displs[i]*info->dtsize, blocks_sizes[i], sendtype, peer, blocks_displs[i], blocks_sizes[i], recvtype, op, win);
+                    }else{
+                        res = MPI_Put(((char*) buf) + blocks_displs[i]*info->dtsize, blocks_sizes[i], sendtype, peer, blocks_displs[i], blocks_sizes[i], recvtype, win);
+                    }
+                }else{                    
+                    res = MPI_Isend(((char*) buf) + blocks_displs[i]*info->dtsize, blocks_sizes[i], sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
+                    if(res != MPI_SUCCESS){return res;}
+                    ++num_requests_s;
+                }                
+            }
+            if(recv_block){
+                DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d)\n", rank, i, peer, step, coll_type);
+                if(!rdma){                    
+                    res = MPI_Irecv(((char*) rbuf) + blocks_displs[i]*info->dtsize, blocks_sizes[i], recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
+                    if(res != MPI_SUCCESS){return res;}
+                    req_idx_to_block_idx[num_requests_r] = i;
+                    ++num_requests_r;
+                }
+            }
+        }
+
+        // Overlap here
+        
+        // End overlap
+        if(!rdma){
+            if(coll_type == SWING_REDUCE_SCATTER){
+                int index, completed = 0;
+                for(size_t i = 0; i < num_requests_r; i++){
+    #ifdef ACTIVE_WAIT
+                    int flag = 0;
+                    do{
+                        MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
+                    }while(!flag);
+
+    #else
+                    res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
+                    if(res != MPI_SUCCESS){return res;}
+    #endif                
+                    int block_idx = req_idx_to_block_idx[index];
+                    size_t displ_bytes = info->dtsize*blocks_displs[block_idx];
+                    void* rbuf_block = (void*) (((char*) rbuf) + displ_bytes);
+                    void* buf_block = (void*) (((char*) buf) + displ_bytes);            
+                    MPI_Reduce_local(rbuf_block, buf_block, blocks_sizes[block_idx], sendtype, op); 
+                }
+            }else{
+    #ifdef ACTIVE_WAIT
+                int index;
+                for(size_t i = 0; i < num_requests_r; i++){
+                    int flag = 0;
+                    do{
+                        MPI_Testany(num_requests_r, requests_r, &index, &flag, MPI_STATUS_IGNORE);
+                    }while(!flag);
+                }
+    #else                            
+                res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
+                if(res != MPI_SUCCESS){return res;}        
+    #endif
+            }
+    #ifdef ACTIVE_WAIT
+            int index;
+            for(size_t i = 0; i < num_requests_s; i++){
+                int flag = 0;
+                do{
+                    MPI_Testany(num_requests_s, requests_s, &index, &flag, MPI_STATUS_IGNORE);
+                }while(!flag);
+            }
+    #else                            
+            res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
+            if(res != MPI_SUCCESS){return res;}        
+    #endif
+        }else{ // rdma
+            MPI_Win_fence(0, win);
+        }
+    }
+
+    if(rdma){
+        MPI_Win_free(&win);
+    }
+
+    free(requests_s);
+    free(requests_r);
+    free(req_idx_to_block_idx);
+    free(skipped_send);
+    free(skipped_recv);
+    return 0;
+}
+
+
+static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
+    int res;
+    int* recvcounts = (int*) malloc(sizeof(int)*info->size);
+    int* displs = (int*) malloc(sizeof(int)*info->size);
+
+    // Define blocks sizes and displacements
+    size_t last = 0;
+    size_t normcount = ceil(count / info->size);
+    for(size_t i = 0; i < info->size; i++){
+        recvcounts[i] = normcount;
+        if(i == info->size - 1){
+            recvcounts[i] = count - ((count / info->size)*(info->size - 1));
+        } 
+        displs[i] = last;
+        last += recvcounts[i];
+    }
+    
+    size_t total_size_bytes = last*info->dtsize;
+    char* rbuf;
+    if(cached_tmp_buf){
+        rbuf = (char*) cached_tmp_buf;
+    }else{
+        rbuf = (char*) malloc(total_size_bytes);
+    }
+    memcpy(recvbuf, sendbuf, total_size_bytes);
+
+
+    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info);
+    if(res != MPI_SUCCESS){return res;} 
+    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info);
+    if(res != MPI_SUCCESS){return res;}
+
+    free(recvcounts);
+    free(displs);            
+    if(rbuf != cached_tmp_buf){
+        free(rbuf);
+    }
+    return res;  
+}
 
 static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){
     if(algo == ALGO_SWING_OLD_L){ // Swing_l
@@ -2047,7 +2287,7 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
     }if(algo == ALGO_SWING_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_SWING_B){ // Swing_b
-        ;//return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info); // TODO: Implement
+        return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info); // TODO: Implement
     }else if(algo == ALGO_RING){ // Ring
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
