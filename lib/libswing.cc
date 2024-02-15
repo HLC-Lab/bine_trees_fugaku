@@ -1814,7 +1814,7 @@ static inline int MPI_Allreduce_bw_optimal_swing_old(const void *sendbuf, void *
     return res;  
 }
 
-static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int first_step, int skip_send, int skip_recv, char** rbuf, int peer, int step, int delta, int overwrite){    
+static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int first_step, int skip_send, int skip_recv, char** rbuf, int peer, int step, int overwrite){    
     int res;
     const void *sendbuf_real, *aggbuff_a;
     void *aggbuff_b, *recvbuf_real;
@@ -1830,7 +1830,7 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
         aggbuff_b = recvbuf;
     }
 
-    DPRINTF("[%d] Starting step %d, communicating with %d (delta=%d, skip_send=%d, skip_recv=%d)\n", info->rank, step, peer, delta, skip_send, skip_recv);
+    DPRINTF("[%d] Starting step %d, communicating with %d (skip_send=%d, skip_recv=%d)\n", info->rank, step, peer, skip_send, skip_recv);
 
     MPI_Request requests[2];
     memset(requests, 0, sizeof(requests));
@@ -1907,6 +1907,15 @@ static inline int is_power_of_two(int x){
     return (x != 0) && ((x & (x - 1)) == 0);
 }
 
+static inline int get_peer(int step, int rank, int size){
+    uint32_t unary = (1 << (step + 1)) - 1;        
+    uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
+    if(mod(rank, 2)){ // Flip the sign for odd nodes
+        delta = -delta;
+    } // TODO: manage multiport
+    return mod((rank + delta), size);
+}
+
 static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
     int res;    
     char* rbuf; // Temporary buffer (to avoid overwriting sendbuf)
@@ -1935,7 +1944,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
                 skip_send = 1;
                 skip_recv = 0;
             }
-            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 998, 998, 0);
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 998, 0);
             first_step = 0;
             if(res != MPI_SUCCESS){
                 return res;
@@ -1948,13 +1957,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     for(size_t step = 0; step < num_steps; step++){     
         skip_send = 0;
         skip_recv = 0;
-        // Create a binary number with "step+1" ones.
-        uint32_t unary = (1 << (step + 1)) - 1;
-        uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
-        if(mod(rank_virtual, 2)){ // Flip the sign for odd nodes
-            delta = -delta;
-        } // TODO: manage multiport
-        peer = mod((rank_virtual + delta), shrinked_size);
+        peer = get_peer(step, rank_virtual, shrinked_size);
 
         if(!p2){
             if(info->rank >= start_extra){
@@ -1977,7 +1980,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
             skip_send_or_recv(delta, peer, step, info, &skip_send, &skip_recv);
         }
         */
-        res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, step, delta, 0);
+        res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, step, 0);
         first_step = 0;
         if(res != MPI_SUCCESS){
             return res;
@@ -1998,7 +2001,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
                 skip_send = 0;
                 skip_recv = 1;
             }
-            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 999, 999, overwrite);
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 999, overwrite);
             first_step = 0;
             if(res != MPI_SUCCESS){
                 return res;
@@ -2135,16 +2138,8 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){        
         size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
-        
-        // Create a binary number with "step+1" ones.
-        uint32_t unary = (1 << (block_step + 1)) - 1;
-        uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
 
-        if(mod(info->rank, 2)){ // Flip the sign for odd nodes
-            delta = -delta;
-        } // TODO: manage multiport
-
-        int peer = mod((info->rank + delta), info->size);
+        int peer = get_peer(block_step, info->rank, info->size);
         DPRINTF("[%d] Starting step %d peer %d\n", rank, step, peer);
 
         // Sendrecv + aggregate
