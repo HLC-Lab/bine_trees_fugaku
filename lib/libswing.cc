@@ -2133,7 +2133,7 @@ static int is_valid_steps_sequence(int block_distance, size_t step, uint target_
 
 // Returns the step in which rank will send the block.
 static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info){
-    int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b;
+    int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b = 0;
     int block_distance_a, block_distance_b;
     uint32_t block_distance_neg_a, block_distance_neg_b;    
     block_distance_a = get_block_distance(rank, block);
@@ -2173,6 +2173,31 @@ static int get_step_to_reach(int rank, int block, int num_steps, int size, Swing
             return first_step_b;
         }
     }
+}
+
+
+static int get_step_to_reach_multid(int rank, int block, int num_steps, int size, SwingInfo* info){
+#if MAX_SUPPORTED_DIMENSIONS == 1
+        return get_step_to_reach(rank, block, info->num_steps, info->size, info);
+#else
+        int coord_block[MAX_SUPPORTED_DIMENSIONS];
+        getCoordFromId(block, coord_block);
+        int coord_mine[MAX_SUPPORTED_DIMENSIONS];
+        getCoordFromId(rank, coord_mine);
+        int min_step = info->num_steps + 1, min_d = MAX_SUPPORTED_DIMENSIONS;
+        for(size_t d = 0; d < dimensions_num; d++){
+            if(coord_block[d] != coord_mine[d]){
+                int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info);
+                if(st < min_step){
+                    min_step = st;
+                    min_d = d;
+                    // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
+                }
+            }
+        }
+        // TODO: Fix for any dimension and rectangular
+        return min_step*dimensions_num + min_d;
+#endif
 }
 
 static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
@@ -2215,40 +2240,21 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     memset(step_to_send, 0, sizeof(uint32_t)*size);
     memset(step_to_recv, 0, sizeof(uint32_t)*size); 
     for(size_t i = 0; i < size; i++){
-        // TODO Generalize
-        /*
-        uint target_dim = block_step % dimensions_num;
-        uint step_r = block_step / dimensions_num;
-        ++last_step_on_dim[target_dim];
-        */
-
         // In reducescatter I never send my block
-        if(i != info->rank){
-            DPRINTF("[%d] Computing steps for block %d step to send %" PRIu32 "\n", rank, get_step_to_reach(rank, i, num_steps, size, info), step_to_send[i]);
-            step_to_send[i] |= (0x1 << get_step_to_reach(rank, i, num_steps, size, info));
+        if(i != info->rank){            
+            step_to_send[i] |= (0x1 << get_step_to_reach_multid(rank, i, num_steps, size, info));
         }
 
+        // TODO: Don't like this nested loop, find a way to simplify it...
         for(size_t step = 0; step < num_steps; step++){
             int peer = peers[info->rank][step];
             if(i != peer){
-                if(get_step_to_reach(peer, i, num_steps, size, info) == step){
+                if(get_step_to_reach_multid(peer, i, num_steps, size, info) == step){
                     step_to_recv[i] |= (0x1 << step);
                 }
             }
         }
-
-        DPRINTF("[%d] Block %d (send %" PRIu32 " recv %" PRIu32 ")\n", rank, i, step_to_send[i], step_to_recv[i]);
-        /*
-        if(coll_type == SWING_REDUCE_SCATTER){
-            send_block = is_reachable(rank, i, step_r, num_steps, info->size, skipped_send, info, target_dim, last_step_on_dim);
-            recv_block = is_reachable(peer, i, step_r, num_steps, info->size, skipped_recv, info, target_dim, last_step_on_dim);
-        }else{
-            recv_block = is_reachable(rank, i, step_r, num_steps, info->size, skipped_recv, info, target_dim, last_step_on_dim);
-            send_block = is_reachable(peer, i, step_r, num_steps, info->size, skipped_send, info, target_dim, last_step_on_dim);
-        } 
-        */       
     }
-
 
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){        
