@@ -2114,23 +2114,6 @@ static inline int get_last_step(uint32_t block_distance){
     return 32 - clz(block_distance) - 1;
 }
 
-static int is_valid_steps_sequence(int block_distance, size_t step, uint target_dim, SwingInfo* info, int8_t* last_step_on_dim){
-    // For each dimension, get the first step. If for any other dimension it is smaller than the last step performed in that dimension, then the block was already sent previously.
-    for(size_t i = 0; i < dimensions_num; i++){
-        int mask = (0x1 << info->num_steps_per_dim[i]) - 1;
-        int first_step = get_first_step((block_distance >> info->offset_per_dim[i]) & mask);
-        // On the dimension I am sending, I include the block if the first step is equal to this step
-        if(i == target_dim && first_step != step){
-            return 0;
-        }
-        // On the other dimensions, I include the block if the first step is greater than the last step performed on that dimension (and thus has not yet been performed)
-        if(i != target_dim && first_step <= last_step_on_dim[i]){
-            return 0;
-        }
-    }
-    return 1;
-}
-
 // Returns the step in which rank will send the block.
 static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info){
     int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b = 0;
@@ -2185,18 +2168,34 @@ static int get_step_to_reach_multid(int rank, int block, int num_steps, int size
         int coord_mine[MAX_SUPPORTED_DIMENSIONS];
         getCoordFromId(rank, coord_mine);
         int min_step = info->num_steps + 1, min_d = MAX_SUPPORTED_DIMENSIONS;
+        // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
+        // Fix by starting d = start_dimension and looping thorugh the rest
         for(size_t d = 0; d < dimensions_num; d++){
             if(coord_block[d] != coord_mine[d]){
                 int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info);
                 if(st < min_step){
                     min_step = st;
                     min_d = d;
-                    // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
                 }
             }
         }
-        // TODO: Fix for any dimension and rectangular
-        return min_step*dimensions_num + min_d;
+
+        // Convert from relative to absolute step
+        int actual_step = 0;
+        // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
+        // Fix by starting d = start_dimension and looping thorugh the rest. Fix also the checks below
+        // Probably enough to access arrays using d + start_dimension
+        for(size_t d = 0; d < dimensions_num; d++){
+            if(d < min_d){
+                actual_step += std::min(min_step, info->num_steps_per_dim[d] - 1) + 1;
+            }else{
+                actual_step += std::min(min_step - 1, info->num_steps_per_dim[d] - 1) + 1;
+            }
+        }
+        if(rank == info->rank){
+            DPRINTF("[%d] Block %d, min_step %d, min_d %d, actual_step %d\n", info->rank, block, min_step, min_d, actual_step);
+        }
+        return actual_step;
 #endif
 }
 
@@ -2225,12 +2224,6 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
     int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
-    int* skipped_send = (int*) malloc(sizeof(int)*size);
-    memset(skipped_send, 0, sizeof(int)*size);
-    int* skipped_recv = (int*) malloc(sizeof(int)*size);
-    memset(skipped_recv, 0, sizeof(int)*size);
-    int8_t last_step_on_dim[MAX_SUPPORTED_DIMENSIONS];
-    memset(last_step_on_dim, -1, sizeof(last_step_on_dim));
     
     // For each block, compute the step in which it must be sent
     uint32_t* step_to_send; // Steps in which each block must be sent. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be sent in that step
@@ -2364,8 +2357,6 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     free(requests_s);
     free(requests_r);
     free(req_idx_to_block_idx);
-    free(skipped_send);
-    free(skipped_recv);
     free(step_to_send);
     free(step_to_recv);
     return 0;
@@ -2426,7 +2417,7 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
     }if(algo == ALGO_SWING_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_SWING_B){ // Swing_b
-        return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info); // TODO: Implement
+        return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_RING){ // Ring
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
