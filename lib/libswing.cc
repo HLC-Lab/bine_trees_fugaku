@@ -10,7 +10,7 @@
 #include <chrono>
 #include <iostream>
 #include <vector>
-
+#include <inttypes.h>
 
 #define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
 
@@ -59,7 +59,9 @@ typedef struct{
     int rank;
     int size;
     int dtsize;
-    int num_steps;
+    int num_steps; // TODO: Rely only on the next one and remove this.
+    int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    int offset_per_dim[MAX_SUPPORTED_DIMENSIONS];
 }SwingInfo;
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
@@ -266,6 +268,10 @@ static inline int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_n
     }
 }
 
+static int inline is_odd(int x){
+    return x & 1;
+}
+
 // With this we are ok up to 2^20 nodes, add other terms if needed.
 static int rhos[20] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 
@@ -305,7 +311,7 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
             
             distance = rhos[relative_step];
             // Flip the sign for odd nodes
-            if(coord[target_dim] & 1){distance *= -1;}
+            if(is_odd(coord[target_dim])){distance *= -1;}
             // Mirrored collectives
             if(port >= dimensions_num){distance *= -1;}
 
@@ -1222,7 +1228,7 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
      * remaining processes form a nice power-of-two. */
 
     if (rank < 2 * rem) {
-        if (rank % 2 == 0) {    /* even */
+        if (!is_odd(rank)) {    /* even */
             mpi_errno = MPI_Send(recvbuf, count,
                                 datatype, rank + 1, TAG_SWING_ALLREDUCE, comm);
             /* temporarily set the rank to -1 so that this
@@ -1285,7 +1291,7 @@ static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count
      * processes of rank < 2*rem send the result to
      * (rank-1), the ranks who didn't participate above. */
     if (rank < 2 * rem) {
-        if (rank % 2)   /* odd */
+        if (is_odd(rank))   /* odd */
             mpi_errno = MPI_Send(recvbuf, count,
                                   datatype, rank - 1, TAG_SWING_ALLREDUCE, comm);
         else    /* even */
@@ -1333,7 +1339,7 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
      * participate in the algorithm until the very end. The
      * remaining processes form a nice power-of-two. */
     if (rank < 2 * rem) {
-        if (rank % 2 == 0) {    /* even */
+        if (!is_odd(rank)) {    /* even */
             mpi_errno = MPI_Send(recvbuf, count,
                                   datatype, rank + 1, TAG_SWING_ALLREDUCE, comm);
 
@@ -1482,7 +1488,7 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
      * processes of rank < 2*rem send the result to
      * (rank-1), the ranks who didn't participate above. */
     if (rank < 2 * rem) {
-        if (rank % 2)   /* odd */
+        if (is_odd(rank))   /* odd */
             mpi_errno = MPI_Send(recvbuf, count,
                                   datatype, rank - 1, TAG_SWING_ALLREDUCE, comm);
         else    /* even */
@@ -1891,7 +1897,7 @@ static int32_t smallest_negabinary(uint32_t nbits){
 
 static int32_t largest_negabinary(uint32_t nbits){
     int32_t tmp = ((pow(2, (nbits / 2)*2) - 1) / 3);
-    if(nbits % 2 == 0){
+    if(!is_odd(nbits)){
         return tmp;
     }else{
         return tmp + pow(2, nbits - 1);
@@ -1908,11 +1914,11 @@ static inline int is_power_of_two(int x){
 }
 
 static inline int get_peer(int step, int rank, int size){
-    uint32_t unary = (1 << (step + 1)) - 1;        
-    uint32_t delta = negabinary_to_binary(unary); // TODO: Replace with a lookup table?
-    if(mod(rank, 2)){ // Flip the sign for odd nodes
-        delta = -delta;
-    } // TODO: manage multiport
+    uint32_t negabinary_repunit = (1 << (step + 1)) - 1; // 000...000111...111 (least significant step+1 bits set to 1)          
+    uint32_t delta = negabinary_to_binary(negabinary_repunit); // TODO: Replace with a lookup table?
+    // Flip the sign for odd nodes
+    if(is_odd(rank)){delta = -delta;} 
+    // TODO: manage multiport
     return mod((rank + delta), size);
 }
 
@@ -1927,6 +1933,10 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     int first_step = 1;
     int start_extra = 0;
     int skip_send = 0, skip_recv = 0;
+    uint** peers = (uint**) malloc(sizeof(uint*)*info->size);    
+    peers[info->rank] = (uint*) malloc(sizeof(uint)*info->num_steps);
+    DPRINTF("[%d] Computing peers\n", info->rank);       
+    compute_peers(peers, 0, info->num_steps, info->rank, 1); // Here I need to compute only my peers (that's why I pass a 1 as the last argument) 
    
     if(!p2){ // Non-power-of-2 nodes
         num_steps -= 1;
@@ -1935,7 +1945,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
 
         // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
         if(info->rank >= start_extra){            
-            if(info->rank % 2){
+            if(is_odd(info->rank)){
                 peer = info->rank - 1;
                 skip_send = 0;
                 skip_recv = 1;
@@ -1957,11 +1967,12 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     for(size_t step = 0; step < num_steps; step++){     
         skip_send = 0;
         skip_recv = 0;
-        peer = get_peer(step, rank_virtual, shrinked_size);
+        //peer = peers[rank_virtual][step]; // TODO: Remove and remove compute_peers, fix for multidimensional
+        peer = get_peer(step, rank_virtual, shrinked_size); // TODO: Ouch, what about shrinked size? Pass it on compute_peers?
 
         if(!p2){
             if(info->rank >= start_extra){
-                if(info->rank % 2){
+                if(is_odd(info->rank)){
                     skip_send = 1;
                     skip_recv = 1;
                 }
@@ -1991,7 +2002,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
         // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
         if(info->rank >= start_extra){
             int overwrite = 0;
-            if(info->rank % 2){
+            if(is_odd(info->rank)){
                 peer = info->rank - 1;
                 skip_send = 1;
                 skip_recv = 0;
@@ -2012,6 +2023,8 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     if(rbuf != cached_tmp_buf){
         free(rbuf);
     }
+    free(peers[info->rank]);
+    free(peers);
     return res;
 }
 
@@ -2023,7 +2036,7 @@ static int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
 static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo* info, int* skip){
     // x and y are the two distances between source and destination on the ring
     int x, y;
-    if((rank % 2 == 0 && block_idx % 2) || (rank % 2 && block_idx % 2)){
+    if((!is_odd(rank) && is_odd(block_idx)) || (is_odd(rank) && is_odd(block_idx))){
         x = block_idx - rank;
     }else{
         x = rank - block_idx;        
@@ -2043,20 +2056,86 @@ static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo
     }
 }
 
-static int get_block_distance(int rank, int block){
-    if((rank % 2 == 0 && block % 2) || (rank % 2 && block % 2)){
+static inline int get_block_distance(int rank, int block){
+    if((!is_odd(rank) && is_odd(block)) || (is_odd(rank) && is_odd(block))){
         return block - rank;                
     }else{
         return rank - block;
     }
 }
 
-static int is_reachable(int rank, int block, size_t block_step, int num_steps, int size, int* skipped, SwingInfo* info){
-    if(rank == block){
-        return 0;
+#ifdef __GNUC__
+#define ctz(x) __builtin_ctz(x)
+#define clz(x) __builtin_clz(x)
+#else
+// Counts leading zeros. x MUST be different from zero.
+// https://graphics.stanford.edu/~seander/bithacks.html#ZerosOnRightParallel
+static inline int ctz(uint32_t x){
+    unsigned int v;      // 32-bit word input to count zero bits on right
+    unsigned int c = 32; // c will be the number of zero bits on the right
+    v &= -signed(v);
+    if (v) c--;
+    if (v & 0x0000FFFF) c -= 16;
+    if (v & 0x00FF00FF) c -= 8;
+    if (v & 0x0F0F0F0F) c -= 4;
+    if (v & 0x33333333) c -= 2;
+    if (v & 0x55555555) c -= 1;
+    return c;
+}
+
+// https://stackoverflow.com/questions/23856596/how-to-count-leading-zeros-in-a-32-bit-unsigned-integer
+static inline int clz(uint32_t x){
+    static const char debruijn32[32] = {
+        0, 31, 9, 30, 3, 8, 13, 29, 2, 5, 7, 21, 12, 24, 28, 19,
+        1, 10, 4, 14, 6, 22, 25, 20, 11, 15, 23, 26, 16, 27, 17, 18
+    };
+    x |= x>>1;
+    x |= x>>2;
+    x |= x>>4;
+    x |= x>>8;
+    x |= x>>16;
+    x++;
+    return debruijn32[x*0x076be629>>27];
+}
+#endif
+
+static inline int get_first_step(uint32_t block_distance){
+    // If I have something like 0000111 or 1111000, the first step is 2.
+    // Find the position where we have the first switch from bit 1 to 0 or viceversa.
+    if(block_distance & 0x1){
+        return ctz(~block_distance) - 1;
+    }else{
+        return ctz(block_distance) - 1;
     }
-    int reach_a = 0, reach_b = 0, is_in_range_a = 0, is_in_range_b;
-    int block_distance_a, block_distance_neg_a, block_distance_b, block_distance_neg_b;    
+}
+
+static inline int get_last_step(uint32_t block_distance){
+    // The last step is the position of the most significant bit.
+    return 32 - clz(block_distance) - 1;
+}
+
+static int is_valid_steps_sequence(int block_distance, size_t step, uint target_dim, SwingInfo* info, int8_t* last_step_on_dim){
+    // For each dimension, get the first step. If for any other dimension it is smaller than the last step performed in that dimension, then the block was already sent previously.
+    for(size_t i = 0; i < dimensions_num; i++){
+        int mask = (0x1 << info->num_steps_per_dim[i]) - 1;
+        int first_step = get_first_step((block_distance >> info->offset_per_dim[i]) & mask);
+        // On the dimension I am sending, I include the block if the first step is equal to this step
+        if(i == target_dim && first_step != step){
+            return 0;
+        }
+        // On the other dimensions, I include the block if the first step is greater than the last step performed on that dimension (and thus has not yet been performed)
+        if(i != target_dim && first_step <= last_step_on_dim[i]){
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Returns the step in which rank will send the block.
+static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info){
+    int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b;
+    int block_distance_a, block_distance_b;
+    uint32_t block_distance_neg_a, block_distance_neg_b;    
     block_distance_a = get_block_distance(rank, block);
     if(block_distance_a < 0){
         block_distance_b = block_distance_a + size;
@@ -2069,45 +2148,36 @@ static int is_reachable(int rank, int block, size_t block_step, int num_steps, i
 
     if(is_in_range_a){
         block_distance_neg_a = binary_to_negabinary(block_distance_a);
-        reach_a = check_last_n_bits_equal(block_distance_neg_a,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
-                  check_last_n_bits_equal(block_distance_neg_a, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+        first_step_a = get_first_step(block_distance_neg_a);
     }
 
     if(is_in_range_b){
         block_distance_neg_b = binary_to_negabinary(block_distance_b);
-        reach_b = check_last_n_bits_equal(block_distance_neg_b,   0x1 << (block_step + 1) , std::min(block_step + 2, (size_t) num_steps)) ||
-                  check_last_n_bits_equal(block_distance_neg_b, ~(0x1 << (block_step + 1)), std::min(block_step + 2, (size_t) num_steps));
+        first_step_b = get_first_step(block_distance_neg_b);
     }
     if(rank == info->rank){
-        DPRINTF("[%d] Step %d Block %d, distance (%d, %d), distance_neg (%d, %d), is_in_range (%d, %d), reach (%d, %d)\n", info->rank, block_step, block, block_distance_a, block_distance_b, block_distance_neg_a, block_distance_neg_b, is_in_range_a, is_in_range_b, reach_a, reach_b);
+        DPRINTF("[%d] Block %d, distance (%d, %d), distance_neg (%d, %d), is_in_range (%d, %d), first_step (%d, %d)\n", info->rank,  block, block_distance_a, block_distance_b, block_distance_neg_a, block_distance_neg_b, is_in_range_a, is_in_range_b, first_step_a, first_step_b);
     }
-    //assert(!(reach_a && reach_b));
-    if(reach_a && reach_b){ // If I can reach with two different combinations of steps, I don't skip it since it will be resolved later (the two paths share the first part of the path)
-        return 1;
-    }
-    if(is_in_range_a && is_in_range_b){
-        // If I can reach the same node twice, I want to reach it only in the last step.
-        // Thus, if I can reach with sequence a, I check if the most significant bit
-        // of block_distance_neg_a is equal to 1. If not, I skip it.        
-        if((reach_a && (block_distance_neg_a & (0x1 << (num_steps - 1))) == 0) ||
-           (reach_b && (block_distance_neg_b & (0x1 << (num_steps - 1))) == 0)){
-            return 0;
-        } 
-
-        // Equivalent:   
-        /* 
-        if((reach_a && block_distance_neg_a < block_distance_neg_b) ||
-           (reach_b && block_distance_neg_b < block_distance_neg_a)){
-            return 0;
+    
+    assert(!(first_step_a == -1 && first_step_b == -1));
+    if(first_step_a == -1 && first_step_b != -1){ // I can reach it only in one way
+        return first_step_b;
+    }else if(first_step_a != -1 && first_step_b == -1){ // I can reach it only in one way
+        return first_step_a;
+    }else if(first_step_a == first_step_b){ // I can reach it with two different combinations of steps, but they both start at the first step
+        return first_step_a;
+    }else{ // I can reach it in two different ways, but they start at different steps. We choose the one that arrives later (i.e., in the last step)
+        if(get_last_step(block_distance_neg_a) > get_last_step(block_distance_neg_b)){
+            return first_step_a;
+        }else{
+            return first_step_b;
         }
-        */
     }
-    return reach_a || reach_b;
 }
 
 static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
                            MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                           CollType coll_type, SwingInfo* info){
+                           CollType coll_type, SwingInfo* info, uint** peers){
     int tag, res;  
     uint num_steps = info->num_steps;
 
@@ -2134,26 +2204,71 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     memset(skipped_send, 0, sizeof(int)*size);
     int* skipped_recv = (int*) malloc(sizeof(int)*size);
     memset(skipped_recv, 0, sizeof(int)*size);
+    int8_t last_step_on_dim[MAX_SUPPORTED_DIMENSIONS];
+    memset(last_step_on_dim, -1, sizeof(last_step_on_dim));
+    
+    // For each block, compute the step in which it must be sent
+    uint32_t* step_to_send; // Steps in which each block must be sent. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be sent in that step
+    step_to_send = (uint32_t*) malloc(sizeof(uint32_t)*size);
+    uint32_t* step_to_recv; // Steps in which each block must be recvd. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be recvd in that step
+    step_to_recv = (uint32_t*) malloc(sizeof(uint32_t)*size);   
+    memset(step_to_send, 0, sizeof(uint32_t)*size);
+    memset(step_to_recv, 0, sizeof(uint32_t)*size); 
+    for(size_t i = 0; i < size; i++){
+        // TODO Generalize
+        /*
+        uint target_dim = block_step % dimensions_num;
+        uint step_r = block_step / dimensions_num;
+        ++last_step_on_dim[target_dim];
+        */
+
+        // In reducescatter I never send my block
+        if(i != info->rank){
+            DPRINTF("[%d] Computing steps for block %d step to send %" PRIu32 "\n", rank, get_step_to_reach(rank, i, num_steps, size, info), step_to_send[i]);
+            step_to_send[i] |= (0x1 << get_step_to_reach(rank, i, num_steps, size, info));
+        }
+
+        for(size_t step = 0; step < num_steps; step++){
+            int peer = peers[info->rank][step];
+            if(i != peer){
+                if(get_step_to_reach(peer, i, num_steps, size, info) == step){
+                    step_to_recv[i] |= (0x1 << step);
+                }
+            }
+        }
+
+        DPRINTF("[%d] Block %d (send %" PRIu32 " recv %" PRIu32 ")\n", rank, i, step_to_send[i], step_to_recv[i]);
+        /*
+        if(coll_type == SWING_REDUCE_SCATTER){
+            send_block = is_reachable(rank, i, step_r, num_steps, info->size, skipped_send, info, target_dim, last_step_on_dim);
+            recv_block = is_reachable(peer, i, step_r, num_steps, info->size, skipped_recv, info, target_dim, last_step_on_dim);
+        }else{
+            recv_block = is_reachable(rank, i, step_r, num_steps, info->size, skipped_recv, info, target_dim, last_step_on_dim);
+            send_block = is_reachable(peer, i, step_r, num_steps, info->size, skipped_send, info, target_dim, last_step_on_dim);
+        } 
+        */       
+    }
+
 
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){        
         size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
 
-        int peer = get_peer(block_step, info->rank, info->size);
+        //int peer = get_peer(block_step, info->rank, info->size);
+        int peer = peers[info->rank][block_step];
         DPRINTF("[%d] Starting step %d peer %d\n", rank, step, peer);
 
         // Sendrecv + aggregate
         int num_requests_s = 0, num_requests_r = 0;
         int sendcnt = 0, recvcnt = 0, recvblocks = 0;     
         for(size_t i = 0; i < size; i++){
-            // Take distance between rank and block id, convert to negabinary, and check if it must be sent now (using blockstep).
             int send_block, recv_block;
             if(coll_type == SWING_REDUCE_SCATTER){
-                send_block = is_reachable(rank, i, block_step, num_steps, info->size, skipped_send, info);
-                recv_block = is_reachable(peer, i, block_step, num_steps, info->size, skipped_recv, info);
+                send_block = step_to_send[i] & (0x1 << block_step);
+                recv_block = step_to_recv[i] & (0x1 << block_step);
             }else{
-                recv_block = is_reachable(rank, i, block_step, num_steps, info->size, skipped_recv, info);
-                send_block = is_reachable(peer, i, block_step, num_steps, info->size, skipped_send, info);
+                recv_block = step_to_send[i] & (0x1 << block_step);
+                send_block = step_to_recv[i] & (0x1 << block_step);
             }
 
             //DPRINTF("[%d] Block %d (send %d recv %d)\n", rank, i, send_block, recv_block);
@@ -2245,6 +2360,8 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     free(req_idx_to_block_idx);
     free(skipped_send);
     free(skipped_recv);
+    free(step_to_send);
+    free(step_to_recv);
     return 0;
 }
 
@@ -2253,6 +2370,10 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     int res;
     int* recvcounts = (int*) malloc(sizeof(int)*info->size);
     int* displs = (int*) malloc(sizeof(int)*info->size);
+    uint** peers = (uint**) malloc(sizeof(uint*)*info->size);    
+    peers[info->rank] = (uint*) malloc(sizeof(uint)*info->num_steps);
+    DPRINTF("[%d] Computing peers\n", info->rank);       
+    compute_peers(peers, 0, info->num_steps, info->rank, 1); // Here I need to compute only my peers (that's why I pass a 1 as the last argument) 
 
     // Define blocks sizes and displacements
     size_t last = 0;
@@ -2276,9 +2397,9 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     memcpy(recvbuf, sendbuf, total_size_bytes);
 
 
-    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info);
+    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers);
     if(res != MPI_SUCCESS){return res;} 
-    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info);
+    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers);
     if(res != MPI_SUCCESS){return res;}
 
     free(recvcounts);
@@ -2286,6 +2407,8 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     if(rbuf != cached_tmp_buf){
         free(rbuf);
     }
+    free(peers[info->rank]);
+    free(peers);
     return res;  
 }
 
@@ -2320,6 +2443,12 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         MPI_Comm_size(comm, &info.size);
         MPI_Comm_rank(comm, &info.rank);
         info.num_steps = (int) ceil(log2(info.size));
+        size_t offset = 0;
+        for(size_t i = 0; i < dimensions_num; i++){
+            info.num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
+            info.offset_per_dim[i] = offset;
+            offset += info.num_steps_per_dim[i];
+        }
         if(cache && cached_tmpbuf_bytes != count*info.dtsize){
             if(cached_tmp_buf){
                 free(cached_tmp_buf);

@@ -37,7 +37,7 @@ int main(int argc, char** argv){
     setenv("LIBSWING_DISABLE_REDUCESCATTER", "1", 1);
     setenv("LIBSWING_DISABLE_ALLGATHERV", "1", 1);
     setenv("LIBSWING_DISABLE_ALLREDUCE", "1", 1);
-    for(int i = warmup; i >= 0; i--){
+    for(int i = warmup; i > 0; i--){
         r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
 
