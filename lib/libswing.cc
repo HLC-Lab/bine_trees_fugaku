@@ -279,8 +279,10 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
     int coord[MAX_SUPPORTED_DIMENSIONS];
     bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
     int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    uint8_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    memset(next_step_per_dim, 0, sizeof(uint8_t)*MAX_SUPPORTED_DIMENSIONS);
     for(size_t i = 0; i < dimensions_num; i++){
-        num_steps_per_dim[i] = ceil(log2(dimensions[i])) - 1;
+        num_steps_per_dim[i] = ceil(log2(dimensions[i])); // TODO: Take this from info
     }
     
     for(uint rank = start_rank; rank < start_rank + num_ranks; rank++){
@@ -302,7 +304,8 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
                     target_dim = (port + i + o) % (dimensions_num);            
                     o++;
                 }while(terminated_dimensions_bitmap[target_dim]);
-                relative_step = (i + terminated_dimensions) / dimensions_num;        
+                relative_step = next_step_per_dim[target_dim];
+                ++next_step_per_dim[target_dim];
             }else{
                 target_dim = 0;
                 relative_step = i;
@@ -315,7 +318,7 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
             // Mirrored collectives
             if(port >= dimensions_num){distance *= -1;}
 
-            if(relative_step <= num_steps_per_dim[target_dim]){
+            if(relative_step < num_steps_per_dim[target_dim]){
                 coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
                 if(dimensions_num > 1){
                     peers[rank][i] = getIdFromCoord(coord, dimensions, dimensions_num);
@@ -2232,8 +2235,11 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     step_to_recv = (uint32_t*) malloc(sizeof(uint32_t)*size);   
     memset(step_to_send, 0, sizeof(uint32_t)*size);
     memset(step_to_recv, 0, sizeof(uint32_t)*size); 
+
+    // TODO: Move computation of step_to_send and step_to_recv outside of this function so that it can be reused between reduce-scatter and allgather.
     for(size_t i = 0; i < size; i++){
         // In reducescatter I never send my block
+        // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
         if(i != info->rank){            
             step_to_send[i] |= (0x1 << get_step_to_reach_multid(rank, i, num_steps, size, info));
         }
