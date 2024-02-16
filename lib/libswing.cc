@@ -242,16 +242,19 @@ static inline int mod(int a, int b){
 
 
 // Convert a rank id into a list of d-dimensional coordinates
-static inline void getCoordFromId(int id, int* coord){
+static inline void getCoordFromId(int id, int* coord, uint* dimensions_virtual = NULL){
+    if(dimensions_virtual == NULL){
+        dimensions_virtual = dimensions;
+    }
     if(dimensions_num == 1){
         coord[0] = id;
     }else if(dimensions_num == 2){
-        coord[0] = id / dimensions[1];
-        coord[1] = id % dimensions[1];
+        coord[0] = id / dimensions_virtual[1];
+        coord[1] = id % dimensions_virtual[1];
     }else if(dimensions_num == 3){
-        coord[0] = (id / dimensions[1]) % dimensions[0];
-        coord[1] = id % dimensions[1];
-        coord[2] = id / (dimensions[0]*dimensions[1]);
+        coord[0] = (id / dimensions_virtual[1]) % dimensions_virtual[0];
+        coord[1] = id % dimensions_virtual[1];
+        coord[2] = id / (dimensions_virtual[0]*dimensions_virtual[1]);
     }
 }
 
@@ -275,19 +278,22 @@ static int inline is_odd(int x){
 // With this we are ok up to 2^20 nodes, add other terms if needed.
 static int rhos[20] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 
-static inline void compute_peers(uint** peers, int port, int num_steps, uint start_rank, uint num_ranks){
+static inline void compute_peers(uint** peers, int port, int num_steps, uint start_rank, uint num_ranks, uint* dimensions_virtual = NULL){
+    if(dimensions_virtual == NULL){
+        dimensions_virtual = dimensions;
+    }
     int coord[MAX_SUPPORTED_DIMENSIONS];
     bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
     int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
     uint8_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
     memset(next_step_per_dim, 0, sizeof(uint8_t)*MAX_SUPPORTED_DIMENSIONS);
     for(size_t i = 0; i < dimensions_num; i++){
-        num_steps_per_dim[i] = ceil(log2(dimensions[i])); // TODO: Take this from info
+        num_steps_per_dim[i] = ceil(log2(dimensions_virtual[i])); // TODO: Take this from info
     }
     
     for(uint rank = start_rank; rank < start_rank + num_ranks; rank++){
         // Compute default directions
-        getCoordFromId(rank, coord);
+        getCoordFromId(rank, coord, dimensions_virtual);
         for(size_t i = 0; i < dimensions_num; i++){
             terminated_dimensions_bitmap[i] = false;            
         }
@@ -298,7 +304,7 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
         // Generate peers
         for(size_t i = 0; i < num_steps; ){            
             if(dimensions_num > 1){
-                getCoordFromId(rank, coord); // Regenerate rank coord
+                getCoordFromId(rank, coord, dimensions_virtual); // Regenerate rank coord
                 o = 0;
                 do{
                     target_dim = (port + i + o) % (dimensions_num);            
@@ -319,9 +325,9 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
             if(port >= dimensions_num){distance *= -1;}
 
             if(relative_step < num_steps_per_dim[target_dim]){
-                coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
+                coord[target_dim] = mod((coord[target_dim] + distance), dimensions_virtual[target_dim]); // We need to use mod to avoid negative coordinates
                 if(dimensions_num > 1){
-                    peers[rank][i] = getIdFromCoord(coord, dimensions, dimensions_num);
+                    peers[rank][i] = getIdFromCoord(coord, dimensions_virtual, dimensions_num);
                 }else{
                     peers[rank][i] = coord[0];
                 }
@@ -1823,11 +1829,11 @@ static inline int MPI_Allreduce_bw_optimal_swing_old(const void *sendbuf, void *
     return res;  
 }
 
-static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int first_step, int skip_send, int skip_recv, char** rbuf, int peer, int step, int overwrite){    
+static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int skip_send, int skip_recv, char** rbuf, int peer, int step, int overwrite){    
     int res;
     const void *sendbuf_real, *aggbuff_a;
     void *aggbuff_b, *recvbuf_real;
-    if(first_step){
+    if(!*rbuf){
         sendbuf_real = sendbuf;
         recvbuf_real = recvbuf;
         aggbuff_a = sendbuf;
@@ -1852,7 +1858,7 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
         if(res != MPI_SUCCESS){return res;}
     }
     // While data is transmitted in the first step, we allocate buffer for the next steps
-    if(first_step){
+    if(!*rbuf){
         if(cached_tmp_buf){
             *rbuf = (char*) cached_tmp_buf;
         }else{
@@ -1925,108 +1931,148 @@ static inline int get_peer(int step, int rank, int size){
     return mod((rank + delta), size);
 }
 
-static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
-    int res;    
-    char* rbuf; // Temporary buffer (to avoid overwriting sendbuf)
-    int num_steps = info->num_steps;
-    int p2 = is_power_of_two(info->size);
-    int shrinked_size = info->size;
-    int rank_virtual = info->rank;
-    int peer;
-    int first_step = 1;
-    int start_extra = 0;
-    int skip_send = 0, skip_recv = 0;
-    uint** peers = (uint**) malloc(sizeof(uint*)*info->size);    
-    peers[info->rank] = (uint*) malloc(sizeof(uint)*info->num_steps);
-    DPRINTF("[%d] Computing peers\n", info->rank);       
-    compute_peers(peers, 0, info->num_steps, info->rank, 1); // Here I need to compute only my peers (that's why I pass a 1 as the last argument) 
-   
-    if(!p2){ // Non-power-of-2 nodes
-        num_steps -= 1;
-        shrinked_size = pow(2, num_steps);
-        start_extra = 2*shrinked_size - info->size;
-
-        // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
-        if(info->rank >= start_extra){            
-            if(is_odd(info->rank)){
-                peer = info->rank - 1;
+// Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
+// This is done one dimension at a time.
+// Returns the new rank.
+static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info, uint* dimensions_virtual, int* idle){
+    int coord[MAX_SUPPORTED_DIMENSIONS];
+    int coord_peer[MAX_SUPPORTED_DIMENSIONS];
+    int skip_send, skip_recv;
+    int res;
+    getCoordFromId(info->rank, coord);
+    memcpy(dimensions_virtual, dimensions, sizeof(dimensions));
+    *idle = 0;
+    int do_something = 0;
+    for(size_t i = 0; i < dimensions_num; i++){
+        // This dimensions is not a power of two, shrink it
+        if(!is_power_of_two(dimensions[i])){
+            memcpy(coord_peer, coord, sizeof(coord));
+            dimensions_virtual[i] = pow(2, info->num_steps_per_dim[i] - 1);
+            int extra = dimensions[i] - dimensions_virtual[i];
+            if(coord[i] >= dimensions_virtual[i]){            
+                coord_peer[i] = coord[i] - extra;
                 skip_send = 0;
                 skip_recv = 1;
-            }else{
-                peer = info->rank + 1;
+                *idle = 1;
+                do_something = 1;
+            }else if(coord[i] + extra >= dimensions_virtual[i]){
+                coord_peer[i] = coord[i] + extra;
                 skip_send = 1;
                 skip_recv = 0;
+                do_something = 1;
+            }else{
+                do_something = 0;
             }
-            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 998, 0);
-            first_step = 0;
-            if(res != MPI_SUCCESS){
-                return res;
+            if(do_something){
+                int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);
+                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 998, 0);
+                if(res != MPI_SUCCESS){
+                    return res;
+                }
+                if(*idle){break;}
             }
-            rank_virtual = ((start_extra) + info->rank) / 2;
-            DPRINTF("[%d] Virtual rank %d\n", info->rank, rank_virtual);
         }
     }
+    int rank_virtual = getIdFromCoord(coord, dimensions_virtual, dimensions_num);
+    DPRINTF("[%d] Virtual rank %d coord (%d, %d, %d) dimensions_virtual (%d, %d, %d) idle %d\n", info->rank, rank_virtual, coord[0], coord[1], coord[2], dimensions_virtual[0], dimensions_virtual[1], dimensions_virtual[2], *idle);
+    return rank_virtual;
+}
 
-    for(size_t step = 0; step < num_steps; step++){     
-        skip_send = 0;
-        skip_recv = 0;
-        //peer = peers[rank_virtual][step]; // TODO: Remove and remove compute_peers, fix for multidimensional
-        peer = get_peer(step, rank_virtual, shrinked_size); // TODO: Ouch, what about shrinked size? Pass it on compute_peers?
-
-        if(!p2){
-            if(info->rank >= start_extra){
-                if(is_odd(info->rank)){
-                    skip_send = 1;
-                    skip_recv = 1;
-                }
-            }
-            if(peer >= start_extra){                
-                peer = start_extra + (peer - start_extra)*2;
-            }
-        }       
-        
-        // Check that I am not going to send data that will be received 
-        // another time in the last step (for non-power-of-2 nodes).        
-        // TODO: Still not sure how to do that for latency-optimal version, for the moment we 
-        // adopt a simpler solution (extra nodes send to a node within the previous power of 2 range)
-        /*
-        if(!p2){ // Non-power-of-2 nodes
-            skip_send_or_recv(delta, peer, step, info, &skip_send, &skip_recv);
-        }
-        */
-        res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, step, 0);
-        first_step = 0;
-        if(res != MPI_SUCCESS){
-            return res;
-        }
-    }    
-
-    if(!p2){ // Non-power-of-2 nodes
-        // Manage non-power of 2 case. Extra nodes will send to its left/right neighbor (to reduce congestion deficiency).
-        if(info->rank >= start_extra){
+static inline int enlarge_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info){
+    int coord[MAX_SUPPORTED_DIMENSIONS];
+    int coord_peer[MAX_SUPPORTED_DIMENSIONS];
+    int skip_send, skip_recv;
+    int res;
+    getCoordFromId(info->rank, coord);    
+    int do_something = 0;
+    //for(size_t d = 0; d < dimensions_num; d++){
+    for(int d = dimensions_num - 1; d >= 0; d--){
+        // This dimensions was a non-power of two, enlarge it
+        if(!is_power_of_two(dimensions[d])){
+            memcpy(coord_peer, coord, sizeof(coord));
+            int dim_virtual = pow(2, info->num_steps_per_dim[d] - 1);
+            int extra = dimensions[d] - dim_virtual;
             int overwrite = 0;
-            if(is_odd(info->rank)){
-                peer = info->rank - 1;
+            if(coord[d] >= dim_virtual){                
+                coord_peer[d] = coord[d] - extra;
                 skip_send = 1;
                 skip_recv = 0;
                 overwrite = 1;
-            }else{
-                peer = info->rank + 1;
+                do_something = 1;
+            }else if(coord[d] + extra >= dim_virtual){
+                coord_peer[d] = coord[d] + extra;
                 skip_send = 0;
                 skip_recv = 1;
+                do_something = 1;
+            }else{
+                do_something = 0;
             }
-            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, first_step, skip_send, skip_recv, &rbuf, peer, 999, overwrite);
-            first_step = 0;
-            if(res != MPI_SUCCESS){
-                return res;
+            if(do_something){
+                int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);
+                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 999, overwrite);
+                if(res != MPI_SUCCESS){
+                    return res;
+                }
             }
         }
     }
+    return MPI_SUCCESS;
+}
 
-    if(rbuf != cached_tmp_buf){
+static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){
+    // Reduce the number of steps since we shrink
+    info->num_steps = 0;
+    for(size_t d = 0; d < dimensions_num; d++){
+        info->num_steps += floor(log2(dimensions[d]));
+    }
+    int res;    
+    char* rbuf = NULL; // Temporary buffer (to avoid overwriting sendbuf)
+    int num_steps = info->num_steps;
+    int p2 = is_power_of_two(info->size);
+    int peer;
+    int start_extra = 0;
+    int skip_send = 0, skip_recv = 0;
+    uint** peers = (uint**) malloc(sizeof(uint*)*info->size);    
+    uint dimensions_virtual[MAX_SUPPORTED_DIMENSIONS];   
+    int coord[MAX_SUPPORTED_DIMENSIONS];
+    int coord_peer[MAX_SUPPORTED_DIMENSIONS];
+    getCoordFromId(info->rank, coord); 
+    
+    int idle = 0;
+    int rank_virtual = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, dimensions_virtual, &idle);
+    DPRINTF("[%d] Virtual dimensions (%d, %d, %d)\n", info->rank, dimensions_virtual[0], dimensions_virtual[1], dimensions_virtual[2]);
+    peers[rank_virtual] = (uint*) malloc(sizeof(uint)*info->num_steps);
+
+    if(!idle){
+        int num_steps_virtual = 0;
+        for(size_t i = 0; i < dimensions_num; i++){
+            num_steps_virtual += ceil(log2(dimensions_virtual[i]));
+        }
+        DPRINTF("[%d] Computing peers\n", info->rank);  
+        compute_peers(peers, 0, num_steps_virtual, rank_virtual, 1, dimensions_virtual); // Here I need to compute only my peers (that's why I pass a 1 as the second last argument) 
+        DPRINTF("[%d] Peers computed\n", info->rank);
+        for(size_t step = 0; step < num_steps_virtual; step++){     
+            skip_send = 0;
+            skip_recv = 0;
+            int virtual_peer = peers[rank_virtual][step]; 
+            getCoordFromId(virtual_peer, coord_peer, dimensions_virtual);
+            int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);        
+
+            DPRINTF("[%d] Step %d Peer (virtual): %d (real): %d coord: (%d, %d, %d)\n", info->rank, step, virtual_peer, peer, coord_peer[0], coord_peer[1], coord_peer[2]);  
+            
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, &rbuf, peer, step, 0);
+            if(res != MPI_SUCCESS){
+                return res;
+            }
+        }    
+    }
+
+    enlarge_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info);
+    
+    if(rbuf && rbuf != cached_tmp_buf){
         free(rbuf);
     }
-    free(peers[info->rank]);
+    free(peers[rank_virtual]);
     free(peers);
     return res;
 }
