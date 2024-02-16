@@ -2236,7 +2236,8 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     memset(step_to_send, 0, sizeof(uint32_t)*size);
     memset(step_to_recv, 0, sizeof(uint32_t)*size); 
 
-    // TODO: Move computation of step_to_send and step_to_recv outside of this function so that it can be reused between reduce-scatter and allgather.
+    // TODO: Move computation of step_to_send and step_to_recv outside of this function
+    // so that it can be reused between reduce-scatter and allgather.
     for(size_t i = 0; i < size; i++){
         // In reducescatter I never send my block
         // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
@@ -2445,13 +2446,18 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         MPI_Type_size(datatype, &info.dtsize);    
         MPI_Comm_size(comm, &info.size);
         MPI_Comm_rank(comm, &info.rank);
-        info.num_steps = (int) ceil(log2(info.size));
+        
         size_t offset = 0;
         for(size_t i = 0; i < dimensions_num; i++){
             info.num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
             info.offset_per_dim[i] = offset;
             offset += info.num_steps_per_dim[i];
         }
+        // The number of steps is not ceil(log2(size)) but the sum of the number of steps for each dimension.
+        // This is needed for those cases where dimensions are not powers of two. Consider for example a 
+        // 10x10 torus. We would perform ceil(log2(10)) + ceil(log2(10)) = 4 + 4 = 8 steps, not ceil(log2(100)) = 7.
+        info.num_steps = offset;
+
         if(cache && cached_tmpbuf_bytes != count*info.dtsize){
             if(cached_tmp_buf){
                 free(cached_tmp_buf);
