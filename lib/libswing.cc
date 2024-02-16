@@ -241,34 +241,44 @@ static inline int mod(int a, int b){
 }
 
 
-// Convert a rank id into a list of d-dimensional coordinates
+// Convert a rank id into a list of d-dimensional coordinates (adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c)
+// Row-major order, i.e., row coordinates change the slowest (i.e., we first increase depth, than cols, then rows -- https://eli.thegreenplace.net/2015/memory-layout-of-multi-dimensional-arrays) 
 static inline void getCoordFromId(int id, int* coord, uint* dimensions_virtual = NULL){
     if(dimensions_virtual == NULL){
         dimensions_virtual = dimensions;
     }
-    if(dimensions_num == 1){
-        coord[0] = id;
-    }else if(dimensions_num == 2){
-        coord[0] = id / dimensions_virtual[1];
-        coord[1] = id % dimensions_virtual[1];
-    }else if(dimensions_num == 3){
-        coord[0] = (id / dimensions_virtual[1]) % dimensions_virtual[0];
-        coord[1] = id % dimensions_virtual[1];
-        coord[2] = id / (dimensions_virtual[0]*dimensions_virtual[1]);
+    int nnodes = 1;
+    for (int i = 0; i < dimensions_num; i++) {
+        nnodes *= dimensions_virtual[i];
+    }
+    for (int i = 0; i < dimensions_num; i++) {
+        nnodes = nnodes / dimensions_virtual[i];
+        coord[i] = id / nnodes;
+        id = id % nnodes;
     }
 }
 
-// Convert d-dimensional coordinates into a rank id
-static inline int getIdFromCoord(int* coord, uint* dimensions, uint dimensions_num){
-    if(dimensions_num == 1){
-        return coord[0];
-    }else if(dimensions_num == 2){
-        return coord[0]*dimensions[1] + coord[1];
-    }else if(dimensions_num == 3){    
-        return int(coord[2]*(dimensions[0]*dimensions[1]) + getIdFromCoord(coord, dimensions, dimensions_num - 1));
-    }else{
-        return -1;
+// Convert d-dimensional coordinates into a rank id (adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c)
+// Dimensions are (rows, cols, depth)
+static inline int getIdFromCoord(int* coords, uint* dimensions, uint dimensions_num){
+    int rank = 0;
+    int multiplier = 1;
+    int coord;
+    for (int i = dimensions_num - 1; i >= 0; i--) {
+        coord = coords[i];
+        if (/*cart_ptr->topo.cart.periodic[i]*/ 1) {
+            if (coord >= dimensions[i])
+                coord = coord % dimensions[i]; 
+            else if (coord < 0) {
+                coord = coord % dimensions[i];
+                if (coord)
+                    coord = dimensions[i] + coord;
+            }
+        }
+        rank += multiplier * coord;
+        multiplier *= dimensions[i];
     }
+    return rank;
 }
 
 static int inline is_odd(int x){
@@ -298,7 +308,7 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
             terminated_dimensions_bitmap[i] = false;            
         }
         
-        int target_dim, relative_step, distance;
+        int target_dim, relative_step, distance, last_dim = port - 1;
         uint terminated_dimensions = 0, o = 0;
         
         // Generate peers
@@ -307,11 +317,12 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint sta
                 getCoordFromId(rank, coord, dimensions_virtual); // Regenerate rank coord
                 o = 0;
                 do{
-                    target_dim = (port + i + o) % (dimensions_num);            
+                    target_dim = (last_dim + 1 + o) % (dimensions_num);            
                     o++;
                 }while(terminated_dimensions_bitmap[target_dim]);
                 relative_step = next_step_per_dim[target_dim];
                 ++next_step_per_dim[target_dim];
+                last_dim = target_dim;
             }else{
                 target_dim = 0;
                 relative_step = i;
@@ -2221,6 +2232,7 @@ static int get_step_to_reach_multid(int rank, int block, int num_steps, int size
         // Fix by starting d = start_dimension and looping thorugh the rest
         for(size_t d = 0; d < dimensions_num; d++){
             if(coord_block[d] != coord_mine[d]){
+                DPRINTF("[%d] Rank %d Block %d, coord_block[%d] %d, coord_mine[%d] %d\n", info->rank, rank, block, d, coord_block[d], d, coord_mine[d]);
                 int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info);
                 if(st < min_step){
                     min_step = st;
