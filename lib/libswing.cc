@@ -66,7 +66,7 @@ typedef struct{
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
                     dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0, coalesce = 0,
-                    fast_bitmaps = 1, cache = 1, cached_p = 0, cached_tmpbuf_bytes = 0, rdma = 0, max_size = 0; //2097152;
+                    fast_bitmaps = 1, cache = 1, cached_p = 0, rdma = 0, max_size = 0; //2097152;
 static char** cached_my_blocks_matrix = NULL;
 static void* cached_tmp_buf = NULL;
 static uint* cached_blocks_remapping = NULL;
@@ -1950,6 +1950,10 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
 
     DPRINTF("[%d] Starting step %d, communicating with %d (skip_send=%d, skip_recv=%d)\n", info->rank, step, peer, skip_send, skip_recv);
 
+
+    //printf("Rank %d sending %d bytes to %d on tag %d\n", info->rank, count*info->dtsize, peer, tag);
+    //printf("Rank %d receiving %d bytes from %d on tag %d\n", info->rank, count*info->dtsize, peer, tag);
+
     MPI_Request requests[2];
     memset(requests, 0, sizeof(requests));
     if(!skip_send){
@@ -1962,11 +1966,7 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
     }
     // While data is transmitted in the first step, we allocate buffer for the next steps
     if(!*rbuf){
-        if(cached_tmp_buf){
-            *rbuf = (char*) cached_tmp_buf;
-        }else{
-            *rbuf = (char*) malloc(count*info->dtsize);
-        }
+        *rbuf = (char*) malloc(count*info->dtsize);
     }    
     if(!skip_send){
         res = MPI_Wait(&(requests[0]), MPI_STATUS_IGNORE);
@@ -2184,7 +2184,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
 
     enlarge_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, coordinates, port);
     
-    if(rbuf && rbuf != cached_tmp_buf){
+    if(rbuf){
         free(rbuf);
     }
     free(peers[rank_virtual]);
@@ -2526,12 +2526,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     }
     
     size_t total_size_bytes = last*info->dtsize;
-    char* rbuf;
-    if(cached_tmp_buf){
-        rbuf = (char*) cached_tmp_buf;
-    }else{
-        rbuf = (char*) malloc(total_size_bytes);
-    }
+    char* rbuf = (char*) malloc(total_size_bytes);
     memcpy(recvbuf, sendbuf, total_size_bytes);
 
 
@@ -2579,9 +2574,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     free(step_to_recv);
     free(recvcounts);
     free(displs);            
-    if(rbuf != cached_tmp_buf){
-        free(rbuf);
-    }
+    free(rbuf);
     free(peers[info->rank]);
     free(peers);
     return res;  
@@ -2610,16 +2603,12 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
     }
 }
 
-static inline int MPI_Allreduce_split_max_size(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){
-    if(!max_size){
-        max_size = count*info->dtsize;
-    }
-
+static int MPI_Allreduce_split_max_size(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){        
     int res;            
     int remaining_count = count;
     int max_count, next_offset = 0;
 
-    if(count*info->dtsize <= max_size){
+    if(!max_size || count*info->dtsize <= max_size){
         max_count = count;
     }else{
         max_count = max_size / info->dtsize;
@@ -2661,20 +2650,17 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             assert("Max steps limit must be increased and constants updated.");
         }
         
-        // TODO Remove this caching thing etc
-        if(cache && cached_tmpbuf_bytes != count*info.dtsize){
-            if(cached_tmp_buf){
-                free(cached_tmp_buf);
-            }
-            cached_tmp_buf = malloc(count*info.dtsize);
-        }
-
         if(!multiport){
             return MPI_Allreduce_split_max_size(sendbuf, recvbuf, count, datatype, op, comm, &info, 0);
         }else{
             // First split the data across the ports.
             // If still to big (> max_size), further split it in chunks of max_size
-            uint num_ports = dimensions_num*2;           
+            uint num_ports;
+            if(algo == ALGO_SWING_B || algo == ALGO_SWING_L){ // Multiported supported only on Swing
+                num_ports = dimensions_num*2;           
+            }else{
+                num_ports = 1;
+            }
             uint offsets[MAX_SUPPORTED_DIMENSIONS*2];
             uint counts_per_port[MAX_SUPPORTED_DIMENSIONS*2];
             uint partition_size = count / num_ports;
@@ -2690,7 +2676,6 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             // Go in parallel over all the ports
             #pragma omp parallel for num_threads(num_ports)
             for(size_t i = 0; i < num_ports; i++){
-                // TODO: Split the buffer etc
                 res[i] = MPI_Allreduce_split_max_size(((char*) sendbuf) + offsets[i]*info.dtsize, ((char*) recvbuf) + offsets[i]*info.dtsize, counts_per_port[i], datatype, op, comm, &info, i);
             }
             for(size_t i = 0; i < num_ports; i++){
