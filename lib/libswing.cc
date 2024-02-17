@@ -74,6 +74,7 @@ static uint** cached_peers = NULL;
 static Algo algo = ALGO_SWING_B;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
+static int multiport = 0; // If 1, assumes that the number of ports is equal to twice the number of dimensions
 
 static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
@@ -134,6 +135,11 @@ static inline void read_env(MPI_Comm comm){
         env_str = getenv("LIBSWING_MAX_SIZE");
         if(env_str){
             max_size = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_MULTIPORT");
+        if(env_str){
+            multiport = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_ALGO");
@@ -2262,7 +2268,7 @@ static int get_step_to_reach_multid(int rank, int block, int num_steps, int size
 
 static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
                            MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                           CollType coll_type, SwingInfo* info, uint** peers){
+                           CollType coll_type, SwingInfo* info, uint** peers, uint port, uint32_t* step_to_send, uint32_t* step_to_recv){
     int tag, res;  
     uint num_steps = info->num_steps;
 
@@ -2286,34 +2292,6 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*size);
     int* req_idx_to_block_idx = (int*) malloc(sizeof(int)*size);
     
-    // For each block, compute the step in which it must be sent
-    uint32_t* step_to_send; // Steps in which each block must be sent. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be sent in that step
-    step_to_send = (uint32_t*) malloc(sizeof(uint32_t)*size);
-    uint32_t* step_to_recv; // Steps in which each block must be recvd. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be recvd in that step
-    step_to_recv = (uint32_t*) malloc(sizeof(uint32_t)*size);   
-    memset(step_to_send, 0, sizeof(uint32_t)*size);
-    memset(step_to_recv, 0, sizeof(uint32_t)*size); 
-
-    // TODO: Move computation of step_to_send and step_to_recv outside of this function
-    // so that it can be reused between reduce-scatter and allgather.
-    for(size_t i = 0; i < size; i++){
-        // In reducescatter I never send my block
-        // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
-        if(i != info->rank){            
-            step_to_send[i] |= (0x1 << get_step_to_reach_multid(rank, i, num_steps, size, info));
-        }
-
-        // TODO: Don't like this nested loop, find a way to simplify it...
-        for(size_t step = 0; step < num_steps; step++){
-            int peer = peers[info->rank][step];
-            if(i != peer){
-                if(get_step_to_reach_multid(peer, i, num_steps, size, info) == step){
-                    step_to_recv[i] |= (0x1 << step);
-                }
-            }
-        }
-    }
-
     // Iterate over steps
     for(size_t step = 0; step < num_steps; step++){        
         size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
@@ -2422,20 +2400,18 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     free(requests_s);
     free(requests_r);
     free(req_idx_to_block_idx);
-    free(step_to_send);
-    free(step_to_recv);
     return 0;
 }
 
 
-static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
+static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){    
     int res;
     int* recvcounts = (int*) malloc(sizeof(int)*info->size);
     int* displs = (int*) malloc(sizeof(int)*info->size);
     uint** peers = (uint**) malloc(sizeof(uint*)*info->size);    
     peers[info->rank] = (uint*) malloc(sizeof(uint)*info->num_steps);
     DPRINTF("[%d] Computing peers\n", info->rank);       
-    compute_peers(peers, 0, info->num_steps, info->rank, 1); // Here I need to compute only my peers (that's why I pass a 1 as the last argument) 
+    compute_peers(peers, port, info->num_steps, info->rank, 1); // Here I need to compute only my peers (that's why I pass a 1 as the last argument) 
 
     // Define blocks sizes and displacements
     size_t last = 0;
@@ -2459,11 +2435,41 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     memcpy(recvbuf, sendbuf, total_size_bytes);
 
 
-    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers);
+    // For each block, compute the step in which it must be sent
+    uint32_t* step_to_send; // Steps in which each block must be sent. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be sent in that step
+    step_to_send = (uint32_t*) malloc(sizeof(uint32_t)*info->size);
+    uint32_t* step_to_recv; // Steps in which each block must be recvd. Each element of the array is a 32-bit integer, where each bit represents a step. If 1 the block must be recvd in that step
+    step_to_recv = (uint32_t*) malloc(sizeof(uint32_t)*info->size);   
+    memset(step_to_send, 0, sizeof(uint32_t)*info->size);
+    memset(step_to_recv, 0, sizeof(uint32_t)*info->size); 
+
+    // TODO: Move computation of step_to_send and step_to_recv outside of this function
+    // so that it can be reused between reduce-scatter and allgather.
+    for(size_t i = 0; i < info->size; i++){
+        // In reducescatter I never send my block
+        // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
+        if(i != info->rank){            
+            step_to_send[i] |= (0x1 << get_step_to_reach_multid(info->rank, i, info->num_steps, info->size, info));
+        }
+
+        // TODO: Don't like this nested loop, find a way to simplify it...
+        for(size_t step = 0; step < info->num_steps; step++){
+            int peer = peers[info->rank][step];
+            if(i != peer){
+                if(get_step_to_reach_multid(peer, i, info->num_steps, info->size, info) == step){
+                    step_to_recv[i] |= (0x1 << step);
+                }
+            }
+        }
+    }
+
+    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers, port, step_to_send, step_to_recv);
     if(res != MPI_SUCCESS){return res;} 
-    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers);
+    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers, port, step_to_send, step_to_recv);
     if(res != MPI_SUCCESS){return res;}
 
+    free(step_to_send);
+    free(step_to_recv);
     free(recvcounts);
     free(displs);            
     if(rbuf != cached_tmp_buf){
@@ -2482,7 +2488,18 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
     }if(algo == ALGO_SWING_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_SWING_B){ // Swing_b
-        return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
+        if(!multiport){
+            return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, 0);
+        }else{
+            uint num_ports = dimensions_num*2;
+            #pragma omp parallel for num_threads(num_ports)
+            for(size_t i = 0; i < num_ports; i++){
+                // TODO: Split the buffer etc
+                int res = MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, i);
+                if(res != MPI_SUCCESS){return res;}            
+            }
+            return MPI_SUCCESS;
+        }
     }else if(algo == ALGO_RING){ // Ring
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b

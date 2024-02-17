@@ -25,21 +25,23 @@ algo_names["default"] = "Default"
 algo_names["ring"] = "Ring"
 algo_names["lat_BBBN"] = "Swing (L)"
 algo_names["bw_BBBN"] = "Swing (B)"
-algo_names["lat_CONT"] = "Swing (L) - C"
-algo_names["bw_CONT"] = "Swing (B) - C"
+algo_names["lat_old_CONT"] = "Swing Old (L) - C"
+algo_names["bw_old_CONT"] = "Swing Old (B) - C"
+algo_names["lat"] = "Swing (L)"
+algo_names["bw"] = "Swing (B)"
 algo_names["recdoub_l"] = "RecDoub (L)"
 algo_names["recdoub_b"] = "RecDoub (B)"
 
 
 # CONF
-merge = True
+merge = False
 add_default = True
 
-algos_sota = ["recdoub_l", "recdoub_b", "ring"]
+algos_sota = ["recdoub_l", "recdoub_b", "ring", "lat_old_CONT", "bw_old_CONT"]
 if add_default:
     algos_sota = ["default"] + algos_sota
-#algos_swing = ["bw_BBBN", "lat_CONT", "bw_CONT"]
-algos_swing = ["lat_CONT", "bw_CONT"]
+#algos_swing = ["bw_BBBN", "lat_old_CONT", "bw_old_CONT"]
+algos_swing = ["lat", "bw"]
 algos = algos_sota + algos_swing # ATTENTION! SWING MUST ALWAYS COME AFTER SOTA FOR THE SCRIPT TO WORK CORRECTLY
 
 best_algo = {}
@@ -52,7 +54,7 @@ def plot(arch, p):
         best_recdoub_bw = 0
         best_sota_bw = 0
         for algo in algos:
-            if (algo == "bw_CONT" or algo == "bw_BBBN") and n < p:
+            if ("bw" in algo) and n < p:
                 continue
 
             k = (arch, str(p))
@@ -62,9 +64,10 @@ def plot(arch, p):
                 print("No data found for " + str(k))
                 continue
             filename = vpath + "/" + str(p) + "_" + str(n) + "_" + algo + ".csv"
+            print("Accessing data on " + filename)
             if os.path.exists(filename):
                 try:
-                    data_real = pd.read_csv(filename, sep=" ", error_bad_lines=False)
+                    data_real = pd.read_csv(filename, sep=" ", on_bad_lines='skip', comment="[") # TODO Is not actually a comment but on Leonardo there are some warning lines starting with "["
                     data_real.drop(data_real.tail(1).index, inplace=True) 
                 except:
                     continue
@@ -182,8 +185,10 @@ ps["daint"] = [18, 30, 32]
 ps["daint_sameswitch"] = [4]
 ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
+ps["leonardo"] = [32]
 
-archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3"]
+#archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
+archs = ["leonardo"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:
