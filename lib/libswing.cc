@@ -12,16 +12,16 @@
 #include <vector>
 #include <inttypes.h>
 
-#define MAX_SUPPORTED_DIMENSIONS 8 // We support up to 8D torus
+#define MAX_SUPPORTED_DIMENSIONS 6 // We support up to 6D torus
 
-#define TAG_SWING_REDUCESCATTER 0x7FFF
-#define TAG_SWING_ALLGATHER 0x7FFE
-#define TAG_SWING_ALLREDUCE 0x7FFD
+#define TAG_SWING_REDUCESCATTER (0x7FFF - MAX_SUPPORTED_DIMENSIONS*2*1)
+#define TAG_SWING_ALLGATHER     (0x7FFF - MAX_SUPPORTED_DIMENSIONS*2*2)
+#define TAG_SWING_ALLREDUCE     (0x7FFF - MAX_SUPPORTED_DIMENSIONS*2*3)
 
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -1929,7 +1929,8 @@ static inline int MPI_Allreduce_bw_optimal_swing_old(const void *sendbuf, void *
     return res;  
 }
 
-static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, int skip_send, int skip_recv, char** rbuf, int peer, int step, int overwrite){    
+static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, 
+                                                           int skip_send, int skip_recv, char** rbuf, int peer, int step, int overwrite, uint port){    
     int res;
     const void *sendbuf_real, *aggbuff_a;
     void *aggbuff_b, *recvbuf_real;
@@ -1945,16 +1946,18 @@ static inline int MPI_Allreduce_lat_optimal_swing_sendrecv(const void *sendbuf, 
         aggbuff_b = recvbuf;
     }
 
+    int tag = TAG_SWING_ALLREDUCE + port;
+
     DPRINTF("[%d] Starting step %d, communicating with %d (skip_send=%d, skip_recv=%d)\n", info->rank, step, peer, skip_send, skip_recv);
 
     MPI_Request requests[2];
     memset(requests, 0, sizeof(requests));
     if(!skip_send){
-        res = MPI_Isend(sendbuf_real, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[0]));
+        res = MPI_Isend(sendbuf_real, count, datatype, peer, tag, comm, &(requests[0]));
         if(res != MPI_SUCCESS){return res;}
     }
     if(!skip_recv){
-        res = MPI_Irecv(recvbuf_real, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests[1]));
+        res = MPI_Irecv(recvbuf_real, count, datatype, peer, tag, comm, &(requests[1]));
         if(res != MPI_SUCCESS){return res;}
     }
     // While data is transmitted in the first step, we allocate buffer for the next steps
@@ -2038,7 +2041,7 @@ static inline int get_peer(int step, int rank, int size){
 // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
 // This is done one dimension at a time.
 // Returns the new rank.
-static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info, uint* dimensions_virtual, uint* coordinates, int* idle){    
+static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info, uint* dimensions_virtual, uint* coordinates, int* idle, uint port){    
     uint coord_peer[MAX_SUPPORTED_DIMENSIONS];
     uint coord[MAX_SUPPORTED_DIMENSIONS];
     int skip_send, skip_recv;
@@ -2070,7 +2073,7 @@ static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, in
             }
             if(do_something){
                 int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);
-                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 998, 0);
+                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 998, 0, port);
                 if(res != MPI_SUCCESS){
                     return res;
                 }
@@ -2083,7 +2086,7 @@ static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, in
     return rank_virtual;
 }
 
-static inline int enlarge_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info, uint* coordinates){
+static inline int enlarge_non_power_of_two(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char** rbuf, SwingInfo* info, uint* coordinates, uint port){
     int skip_send, skip_recv;
     int res;
     uint coord[MAX_SUPPORTED_DIMENSIONS];
@@ -2114,7 +2117,7 @@ static inline int enlarge_non_power_of_two(const void *sendbuf, void *recvbuf, i
             }
             if(do_something){
                 int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);
-                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 999, overwrite);
+                res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, rbuf, peer, 999, overwrite, port);
                 if(res != MPI_SUCCESS){
                     return res;
                 }
@@ -2124,7 +2127,7 @@ static inline int enlarge_non_power_of_two(const void *sendbuf, void *recvbuf, i
     return MPI_SUCCESS;
 }
 
-static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){
+static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){
     // Reduce the number of steps since we shrink
     info->num_steps = 0;
     for(size_t d = 0; d < dimensions_num; d++){
@@ -2149,7 +2152,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     retrieve_coord_mapping(coordinates, info->rank, coord);
     
     int idle = 0;
-    int rank_virtual = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, dimensions_virtual, coordinates, &idle);
+    int rank_virtual = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, dimensions_virtual, coordinates, &idle, port);
     compute_rank_to_coord_mapping(info->size, dimensions_virtual, coordinates_virtual);
     DPRINTF("[%d] Virtual dimensions (%d, %d, %d)\n", info->rank, dimensions_virtual[0], dimensions_virtual[1], dimensions_virtual[2]);
     peers[rank_virtual] = (uint*) malloc(sizeof(uint)*info->num_steps);
@@ -2160,7 +2163,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
             num_steps_virtual += ceil(log2(dimensions_virtual[i]));
         }
         DPRINTF("[%d] Computing peers\n", info->rank);  
-        compute_peers(peers, 0, num_steps_virtual, rank_virtual, coordinates_virtual, dimensions_virtual); 
+        compute_peers(peers, port, num_steps_virtual, rank_virtual, coordinates_virtual, dimensions_virtual); 
         DPRINTF("[%d] Peers computed\n", info->rank);
         for(size_t step = 0; step < num_steps_virtual; step++){     
             skip_send = 0;
@@ -2172,14 +2175,14 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
 
             DPRINTF("[%d] Step %d Peer (virtual): %d (real): %d coord: (%d, %d, %d)\n", info->rank, step, virtual_peer, peer, coord_peer[0], coord_peer[1], coord_peer[2]);  
             
-            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, &rbuf, peer, step, 0);
+            res = MPI_Allreduce_lat_optimal_swing_sendrecv(sendbuf, recvbuf, count, datatype, op, comm, info, skip_send, skip_recv, &rbuf, peer, step, 0, port);
             if(res != MPI_SUCCESS){
                 return res;
             }
         }    
     }
 
-    enlarge_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, coordinates);
+    enlarge_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, &rbuf, info, coordinates, port);
     
     if(rbuf && rbuf != cached_tmp_buf){
         free(rbuf);
@@ -2368,9 +2371,9 @@ static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const 
     uint num_steps = info->num_steps;
 
     if(coll_type == SWING_REDUCE_SCATTER){
-        tag = TAG_SWING_REDUCESCATTER;
+        tag = TAG_SWING_REDUCESCATTER + port;
     }else{
-        tag = TAG_SWING_ALLGATHER;
+        tag = TAG_SWING_ALLGATHER + port;
     }
 
     MPI_Win win = MPI_WIN_NULL;
@@ -2584,26 +2587,15 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     return res;  
 }
 
-static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){
+static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){
     if(algo == ALGO_SWING_OLD_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing_old(sendbuf, recvbuf, count, datatype, op, comm, info);
     }else if(algo == ALGO_SWING_OLD_B){ // Swing_b
         return MPI_Allreduce_bw_optimal_swing_old(sendbuf, recvbuf, count, datatype, op, comm, info);
     }if(algo == ALGO_SWING_L){ // Swing_l
-        return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info);
+        return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, port);
     }else if(algo == ALGO_SWING_B){ // Swing_b
-        if(!multiport){
-            return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, 0);
-        }else{
-            uint num_ports = dimensions_num*2;
-            #pragma omp parallel for num_threads(num_ports)
-            for(size_t i = 0; i < num_ports; i++){
-                // TODO: Split the buffer etc
-                int res = MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, i);
-                if(res != MPI_SUCCESS){return res;}            
-            }
-            return MPI_SUCCESS;
-        }
+        return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, info, port);
     }else if(algo == ALGO_RING){ // Ring
         return MPI_Allreduce_ring(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
@@ -2613,6 +2605,32 @@ static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_
     }else{
         return 1;
     }
+}
+
+static inline int MPI_Allreduce_split_max_size(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){
+    if(!max_size){
+        max_size = count*info->dtsize;
+    }
+
+    int res;            
+    int remaining_count = count;
+    int max_count, next_offset = 0;
+
+    if(count*info->dtsize <= max_size){
+        max_count = count;
+    }else{
+        max_count = max_size / info->dtsize;
+    }
+    do{
+        int next_count = std::min(remaining_count, max_count);
+        res = MPI_Allreduce_int(((char*)sendbuf) + next_offset*info->dtsize, ((char*) recvbuf) + next_offset*info->dtsize, next_count, datatype, op, comm, info, port);
+        if(res != MPI_SUCCESS){
+            return res;
+        }
+        next_offset += next_count;
+        remaining_count -= next_count;
+    }while(remaining_count > 0);   
+    return MPI_SUCCESS;         
 }
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
@@ -2647,28 +2665,37 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             }
             cached_tmp_buf = malloc(count*info.dtsize);
         }
-        if(max_size){
-            int res;            
-            int remaining_count = count;
-            int max_count, next_offset = 0;
 
-            if(count*info.dtsize <= max_size){
-              max_count = count;
-            }else{
-              max_count = max_size / info.dtsize;
-            }
-            do{
-                int next_count = std::min(remaining_count, max_count);
-                res = MPI_Allreduce_int(((char*)sendbuf) + next_offset*info.dtsize, ((char*) recvbuf) + next_offset*info.dtsize, next_count, datatype, op, comm, &info);
-                if(res != MPI_SUCCESS){
-                    return res;
-                }
-                next_offset += next_count;
-                remaining_count -= next_count;
-            }while(remaining_count > 0);            
-            return MPI_SUCCESS;
+        if(!multiport){
+            return MPI_Allreduce_split_max_size(sendbuf, recvbuf, count, datatype, op, comm, &info, 0);
         }else{
-            return MPI_Allreduce_int(sendbuf, recvbuf, count, datatype, op, comm, &info);
+            // First split the data across the ports.
+            // If still to big (> max_size), further split it in chunks of max_size
+            uint num_ports = dimensions_num*2;           
+            uint offsets[MAX_SUPPORTED_DIMENSIONS*2];
+            uint counts_per_port[MAX_SUPPORTED_DIMENSIONS*2];
+            uint partition_size = count / num_ports;
+            uint remaining = count % num_ports;
+            uint count_so_far = 0;
+            for(size_t i = 0; i < num_ports; i++){
+                counts_per_port[i] = partition_size + (i < remaining ? 1 : 0);
+                offsets[i] = count_so_far;
+                count_so_far += counts_per_port[i];
+            }
+
+            int res[MAX_SUPPORTED_DIMENSIONS*2];
+            // Go in parallel over all the ports
+            #pragma omp parallel for num_threads(num_ports)
+            for(size_t i = 0; i < num_ports; i++){
+                // TODO: Split the buffer etc
+                res[i] = MPI_Allreduce_split_max_size(((char*) sendbuf) + offsets[i]*info.dtsize, ((char*) recvbuf) + offsets[i]*info.dtsize, counts_per_port[i], datatype, op, comm, &info, i);
+            }
+            for(size_t i = 0; i < num_ports; i++){
+                if(res[i] != MPI_SUCCESS){
+                    return res[i];
+                }
+            }
+            return MPI_SUCCESS;
         }
     }
 }
