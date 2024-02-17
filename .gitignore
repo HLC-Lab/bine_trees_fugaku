@@ -135,3 +135,4 @@ lib/test
 lib/test_profile
 bench/bench
 bench/get_coord_daint
+data/

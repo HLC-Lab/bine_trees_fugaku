@@ -21,7 +21,7 @@
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -307,7 +307,7 @@ static inline void compute_peers_old(uint** peers, int port, int num_steps, uint
     uint8_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
     memset(next_step_per_dim, 0, sizeof(uint8_t)*MAX_SUPPORTED_DIMENSIONS);
     for(size_t i = 0; i < dimensions_num; i++){
-        num_steps_per_dim[i] = ceil(log2(dimensions_virtual[i])); // TODO: Take this from info
+        num_steps_per_dim[i] = ceil(log2(dimensions_virtual[i]));
     }
     
     for(uint rank = start_rank; rank < start_rank + num_ranks; rank++){
@@ -383,7 +383,7 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint ran
     for(size_t i = 0; i < dimensions_num; i++){
         num_steps_per_dim[i] = ceil(log2(dimensions_virtual[i]));
     }
-    
+    // TODO: Peers can be a 1D array
     // Compute default directions
     uint coord[MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, rank, coord);
@@ -425,11 +425,18 @@ static inline void compute_peers(uint** peers, int port, int num_steps, uint ran
             }else{
                 peers[rank][i] = coord[0];
             }
+        
+            /*
+            if(rank == 0){
+                DPRINTF("eeeeee step %d relative step %d target_dim %d rho %d distance %d peer %d\n", i, relative_step, target_dim, rhos[relative_step], distance, peers[rank][i]);
+            }
+            */
             i += 1;
         }else{
             terminated_dimensions_bitmap[target_dim] = true;
             terminated_dimensions++;                
         }        
+
     }        
 }
 
@@ -2017,6 +2024,7 @@ static inline int is_power_of_two(int x){
     return (x != 0) && ((x & (x - 1)) == 0);
 }
 
+/*
 static inline int get_peer(int step, int rank, int size){
     uint32_t negabinary_repunit = (1 << (step + 1)) - 1; // 000...000111...111 (least significant step+1 bits set to 1)          
     uint32_t delta = negabinary_to_binary(negabinary_repunit); // TODO: Replace with a lookup table?
@@ -2025,6 +2033,7 @@ static inline int get_peer(int step, int rank, int size){
     // TODO: manage multiport
     return mod((rank + delta), size);
 }
+*/
 
 // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
 // This is done one dimension at a time.
@@ -2187,11 +2196,23 @@ static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
     return (a & mask) == (b & mask);
 }
 
-static inline int get_block_distance(int rank, int block){
-    if((!is_odd(rank) && is_odd(block)) || (is_odd(rank) && is_odd(block))){
-        return block - rank;                
+static inline int get_block_distance(int rank, int block, uint port){
+    if(((!is_odd(rank) && is_odd(block)) || (is_odd(rank) && is_odd(block)))){
+        if(port < dimensions_num){
+            return block - rank;                
+        }else{
+            // If port >= dimensions_num, this is a mirrored collective.
+            // This means that the signs in Eq. 4 would be flipped, as well as the
+            // conditions to determine how to compute the block distance (r-q or q-r)
+            return rank - block;
+        }
     }else{
-        return rank - block;
+        if(port < dimensions_num){
+            return rank - block;
+        }else{
+            // Mirrored
+            return block - rank;
+        }
     }
 }
 
@@ -2246,11 +2267,11 @@ static inline int get_last_step(uint32_t block_distance){
 }
 
 // Returns the step in which rank will send the block.
-static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info){
+static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info, uint port){
     int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b = 0;
     int block_distance_a, block_distance_b;
-    uint32_t block_distance_neg_a, block_distance_neg_b;    
-    block_distance_a = get_block_distance(rank, block);
+    uint32_t block_distance_neg_a, block_distance_neg_b;
+    block_distance_a = get_block_distance(rank, block, port);
     if(block_distance_a < 0){
         block_distance_b = block_distance_a + size;
     }else{
@@ -2290,20 +2311,22 @@ static int get_step_to_reach(int rank, int block, int num_steps, int size, Swing
 }
 
 
-static int get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int num_steps, int size, SwingInfo* info, uint* coordinates){
+static int get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int num_steps, int size, SwingInfo* info, uint* coordinates, uint port){
 #if MAX_SUPPORTED_DIMENSIONS == 1
         return get_step_to_reach(rank, block, info->num_steps, info->size, info);
 #else       
         int min_step = info->num_steps + 1, min_d = MAX_SUPPORTED_DIMENSIONS;
+        uint starting_dimension = port % dimensions_num; 
         // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
         // Fix by starting d = start_dimension and looping thorugh the rest
-        for(size_t d = 0; d < dimensions_num; d++){
+        for(size_t i = 0; i < dimensions_num; i++){
+            size_t d = (i + starting_dimension) % dimensions_num;
             if(coord_block[d] != coord_mine[d]){
                 //DPRINTF("[%d] Rank %d Block %d, coord_block[%d] %d, coord_mine[%d] %d\n", info->rank, rank, block, d, coord_block[d], d, coord_mine[d]);
-                int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info);
+                int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info, port);
                 if(st < min_step){
                     min_step = st;
-                    min_d = d;
+                    min_d = i;
                 }
             }
         }
@@ -2313,13 +2336,22 @@ static int get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int num
         // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
         // Fix by starting d = start_dimension and looping thorugh the rest. Fix also the checks below
         // Probably enough to access arrays using d + start_dimension
-        for(size_t d = 0; d < dimensions_num; d++){
-            if(d < min_d){
+        for(size_t i = 0; i < dimensions_num; i++){
+            uint d = (i + starting_dimension) % dimensions_num;
+            if(i < min_d){
                 actual_step += std::min(min_step, info->num_steps_per_dim[d] - 1) + 1;
             }else{
                 actual_step += std::min(min_step - 1, info->num_steps_per_dim[d] - 1) + 1;
             }
         }
+
+
+        /*
+        if(info->rank == 0){
+            DPRINTF("eeee going to reach block (%d,%d) at step %d on dim %d actual step %d\n", coord_block[0], coord_block[1], min_step, min_d, actual_step);
+        }
+        */
+
         /*
         if(rank == info->rank){
             DPRINTF("[%d] Block %d, min_step %d, min_d %d, actual_step %d\n", info->rank, block, min_step, min_d, actual_step);
@@ -2511,14 +2543,12 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     uint coord_mine[MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, info->rank, coord_mine);
 
-    // TODO: Move computation of step_to_send and step_to_recv outside of this function
-    // so that it can be reused between reduce-scatter and allgather.
     for(size_t i = 0; i < info->size; i++){
         // In reducescatter I never send my block
         // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
         if(i != info->rank){            
-            retrieve_coord_mapping(coordinates, i, coord_block);        
-            step_to_send[i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates));
+            retrieve_coord_mapping(coordinates, i, coord_block);      
+            step_to_send[i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, port));
         }
     }
     
@@ -2529,7 +2559,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
             int peer = peers[info->rank][step];
             if(i != peer){
                 retrieve_coord_mapping(coordinates, peer, coord_mine);
-                if(get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates) == step){
+                if(get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, port) == step){
                     step_to_recv[i] |= (0x1 << step);
                 }
             }
@@ -2590,7 +2620,6 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{
-        // TODO: All this caching thing might not be needed for the new swing (and for the other algos), so we might keep this only for SWING_OLD_L/B
         SwingInfo info;
         MPI_Type_size(datatype, &info.dtsize);    
         MPI_Comm_size(comm, &info.size);
@@ -2610,7 +2639,8 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         if(info.num_steps > LIBSWING_MAX_STEPS){
             assert("Max steps limit must be increased and constants updated.");
         }
-
+        
+        // TODO Remove this caching thing etc
         if(cache && cached_tmpbuf_bytes != count*info.dtsize){
             if(cached_tmp_buf){
                 free(cached_tmp_buf);

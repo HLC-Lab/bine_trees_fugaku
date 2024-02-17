@@ -37,7 +37,8 @@ algo_names["recdoub_b"] = "RecDoub (B)"
 merge = False
 add_default = True
 
-algos_sota = ["recdoub_l", "recdoub_b", "ring", "lat_old_CONT", "bw_old_CONT"]
+#algos_sota = ["recdoub_l", "recdoub_b", "ring", "lat_old_CONT", "bw_old_CONT"]
+algos_sota = ["recdoub_l", "recdoub_b", "ring"]
 if add_default:
     algos_sota = ["default"] + algos_sota
 #algos_swing = ["bw_BBBN", "lat_old_CONT", "bw_old_CONT"]
