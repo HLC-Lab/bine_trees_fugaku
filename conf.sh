@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="einstein"
+SYSTEM="fugaku"
 
 case $SYSTEM in
   daint)
