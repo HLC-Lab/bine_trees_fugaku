@@ -35,7 +35,6 @@ int main(int argc, char** argv){
     MPI_Op op = MPI_SUM;
     if(strcmp(type, "CHAR") == 0){
         dt = MPI_CHAR;
-        count *= 4;
     }else if(strcmp(type, "FLOAT") == 0){
         dt = MPI_FLOAT;
     }else if(strcmp(type, "INT") == 0){

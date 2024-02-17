@@ -2650,17 +2650,12 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             assert("Max steps limit must be increased and constants updated.");
         }
         
-        if(!multiport){
+        if(!multiport || (algo != ALGO_SWING_B && algo != ALGO_SWING_L)){
             return MPI_Allreduce_split_max_size(sendbuf, recvbuf, count, datatype, op, comm, &info, 0);
         }else{
             // First split the data across the ports.
             // If still to big (> max_size), further split it in chunks of max_size
-            uint num_ports;
-            if(algo == ALGO_SWING_B || algo == ALGO_SWING_L){ // Multiported supported only on Swing
-                num_ports = dimensions_num*2;           
-            }else{
-                num_ports = 1;
-            }
+            uint num_ports = dimensions_num*2;
             uint offsets[MAX_SUPPORTED_DIMENSIONS*2];
             uint counts_per_port[MAX_SUPPORTED_DIMENSIONS*2];
             uint partition_size = count / num_ports;
