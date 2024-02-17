@@ -292,7 +292,10 @@ static int inline is_odd(int x){
 }
 
 // With this we are ok up to 2^20 nodes, add other terms if needed.
-static int rhos[20] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
+#define LIBSWING_MAX_STEPS 20
+static int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
+static int smallest_negabinary[LIBSWING_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
+static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
 
 static inline void compute_peers(uint** peers, int port, int num_steps, uint start_rank, uint num_ranks, uint* dimensions_virtual = NULL){
     if(dimensions_virtual == NULL){
@@ -1917,6 +1920,7 @@ static int32_t negabinary_to_binary(uint32_t neg) {
     return (mask ^ neg) - mask;
 }
 
+/*
 static int32_t smallest_negabinary(uint32_t nbits){
     return -2 * ((pow(2, (nbits / 2)*2) - 1) / 3);
 }
@@ -1929,10 +1933,11 @@ static int32_t largest_negabinary(uint32_t nbits){
         return tmp + pow(2, nbits - 1);
     }
 }
+*/
 
 // Checks if a given number can be represented as a negabinary number with nbits bits
-static int in_range(int x, uint32_t nbits){
-    return x >= smallest_negabinary(nbits) && x <= largest_negabinary(nbits);
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
 }
 
 static inline int is_power_of_two(int x){
@@ -2094,32 +2099,9 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     return res;
 }
 
-static int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
+static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
     uint32_t mask = (1 << n) - 1;
     return (a & mask) == (b & mask);
-}
-
-static inline void skip_send_f(int rank, uint32_t block_idx, int step, SwingInfo* info, int* skip){
-    // x and y are the two distances between source and destination on the ring
-    int x, y;
-    if((!is_odd(rank) && is_odd(block_idx)) || (is_odd(rank) && is_odd(block_idx))){
-        x = block_idx - rank;
-    }else{
-        x = rank - block_idx;        
-    }
-    if(x < 0){
-        y = x + info->size;
-    }else{
-        y = x - info->size;
-    }
-    //DPRINTF("[%d] Step %d, x=%d, y=%d\n", info->rank, step, x, y);
-    if(in_range(x, info->num_steps) && in_range(y, info->num_steps)){ // With the number of bits I have, I can reach the destination with two different combinations of steps.
-        // y = mod(y, info->size);
-        // I am not going to send data that will be received again in the last step.
-        if(step < info->num_steps - 1){
-            *skip = 1;
-        }
-    }
 }
 
 static inline int get_block_distance(int rank, int block){
@@ -2532,6 +2514,10 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         // This is needed for those cases where dimensions are not powers of two. Consider for example a 
         // 10x10 torus. We would perform ceil(log2(10)) + ceil(log2(10)) = 4 + 4 = 8 steps, not ceil(log2(100)) = 7.
         info.num_steps = offset;
+
+        if(info.num_steps > LIBSWING_MAX_STEPS){
+            assert("Max steps limit must be increased and constants updated.");
+        }
 
         if(cache && cached_tmpbuf_bytes != count*info.dtsize){
             if(cached_tmp_buf){
