@@ -2589,7 +2589,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
 
 static int MPI_Allreduce_int(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, uint port){
 
-    printf("[%d] Running an allreduce on %d elements on port %d (starting pointer %p)\n", info->rank, count, port, sendbuf);
+    //printf("[%d] Running an allreduce on %d elements on port %d (starting pointer %p)\n", info->rank, count, port, sendbuf);
 
     if(algo == ALGO_SWING_OLD_L){ // Swing_l
         return MPI_Allreduce_lat_optimal_swing_old(sendbuf, recvbuf, count, datatype, op, comm, info);
