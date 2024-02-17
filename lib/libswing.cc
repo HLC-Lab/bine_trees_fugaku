@@ -979,10 +979,12 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     return res;
 }
 
+/*
 static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
     uint32_t mask = (1 << n) - 1;
     return (a & mask) == (b & mask);
 }
+*/
 
 static inline int get_block_distance(int rank, int block, uint port){
     if(((!is_odd(rank) && is_odd(block)) || (is_odd(rank) && is_odd(block)))){
