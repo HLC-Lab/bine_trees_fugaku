@@ -58,7 +58,7 @@ typedef struct{
 }SwingInfo;
 
 static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
-                    dimensions_num = 1, latency_optimal_threshold = 1024, force_env_reload = 1, env_read = 0,
+                    dimensions_num = 1, force_env_reload = 1, env_read = 0, contiguous_blocks = 0,
                     rdma = 0, max_size = 0; //2097152;
 static Algo algo = ALGO_SWING_B;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
@@ -95,9 +95,9 @@ static inline void read_env(MPI_Comm comm){
             disable_allreduce = atoi(env_str);
         }
 
-        env_str = getenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD");
+        env_str = getenv("LIBSWING_CONTIGUOUS_BLOCKS");
         if(env_str){
-            latency_optimal_threshold = atoi(env_str);
+            contiguous_blocks = atoi(env_str);
         }
        
         env_str = getenv("LIBSWING_RDMA");
@@ -166,7 +166,6 @@ static inline void read_env(MPI_Comm comm){
             printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
             printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
             printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
-            printf("LIBSWING_LATENCY_OPTIMAL_THRESHOLD: %d\n", latency_optimal_threshold);
             printf("LIBSWING_RDMA: %d\n", rdma);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_MAX_SIZE: %d\n", max_size);
@@ -1130,8 +1129,6 @@ static uint get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int nu
                 actual_step += std::min(min_step - 1, info->num_steps_per_dim[d] - 1) + 1;
             }
         }
-
-
         /*
         if(info->rank == 0){
             DPRINTF("eeee going to reach block (%d,%d) at step %d on dim %d actual step %d\n", coord_block[0], coord_block[1], min_step, min_d, actual_step);
@@ -1147,7 +1144,67 @@ static uint get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int nu
 #endif
 }
 
-static int swing_coll_new(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
+static int swing_coll_cont(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
+                           MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                           CollType coll_type, SwingInfo* info, uint** peers, uint port, uint32_t* step_to_send, uint32_t* step_to_recv){
+    int tag;  
+    uint num_steps = info->num_steps;
+
+    if(coll_type == SWING_REDUCE_SCATTER){
+        tag = TAG_SWING_REDUCESCATTER + port;
+    }else{
+        tag = TAG_SWING_ALLGATHER + port;
+    }
+
+    // Iterate over steps
+    size_t next_offset_send = 0, next_offset_recv = 0;
+    for(size_t step = 0; step < num_steps; step++){        
+        size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(num_steps - step - 1);            
+        size_t count_to_send = 0, count_to_recv = 0;
+        for(size_t i = 0; i < (uint) size; i++){
+            int send_block, recv_block;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                send_block = step_to_send[i] & (0x1 << block_step);
+                recv_block = step_to_recv[i] & (0x1 << block_step);
+            }else{
+                recv_block = step_to_send[i] & (0x1 << block_step);
+                send_block = step_to_recv[i] & (0x1 << block_step);
+            }
+            if(send_block){
+                count_to_send += blocks_sizes[i];
+            }
+            if(recv_block){
+                count_to_recv += blocks_sizes[i];
+            }
+        }
+        next_offset_recv = count_to_send;
+
+        int peer = peers[info->rank][block_step];
+        DPRINTF("[%d] Starting step %d peer %d\n", rank, step, peer);
+
+        char* send_data_ptr = ((char*) buf)  + next_offset_send*info->dtsize;
+        char* recv_data_ptr = ((char*) rbuf) + next_offset_recv*info->dtsize;
+        char* aggr_data_ptr = ((char*) buf)  + next_offset_recv*info->dtsize;
+
+        int res = MPI_Sendrecv(send_data_ptr, count_to_send, sendtype, peer, tag, 
+                               recv_data_ptr, count_to_recv, recvtype, peer, tag, comm,
+                               NULL);
+        if(res != MPI_SUCCESS){
+            return res;
+        }        
+        next_offset_send += count_to_send;
+        next_offset_recv += count_to_recv;
+
+        if(coll_type == SWING_REDUCE_SCATTER){
+            MPI_Reduce_local(recv_data_ptr, aggr_data_ptr, count_to_recv, sendtype, op); 
+        }
+    }
+
+    return 0;
+}
+
+
+static int swing_coll(void *buf, void* rbuf, const int *blocks_sizes, const int *blocks_displs, 
                            MPI_Op op, MPI_Comm comm, int size, int rank, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type, SwingInfo* info, uint** peers, uint port, uint32_t* step_to_send, uint32_t* step_to_recv){
     int tag, res;  
@@ -1346,10 +1403,17 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         }
     }
 
-    res = swing_coll_new(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers, port, step_to_send, step_to_recv);
-    if(res != MPI_SUCCESS){return res;} 
-    res = swing_coll_new(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers, port, step_to_send, step_to_recv);
-    if(res != MPI_SUCCESS){return res;}
+    if(contiguous_blocks){
+        res = swing_coll_cont(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers, port, step_to_send, step_to_recv);
+        if(res != MPI_SUCCESS){return res;} 
+        res = swing_coll_cont(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers, port, step_to_send, step_to_recv);
+        if(res != MPI_SUCCESS){return res;}
+    }else{
+        res = swing_coll(recvbuf, rbuf   , recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers, port, step_to_send, step_to_recv);
+        if(res != MPI_SUCCESS){return res;} 
+        res = swing_coll(recvbuf, recvbuf, recvcounts, displs, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers, port, step_to_send, step_to_recv);
+        if(res != MPI_SUCCESS){return res;}
+    }
 
     free(coordinates);
     free(step_to_send);
