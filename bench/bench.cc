@@ -19,7 +19,12 @@ int main(int argc, char** argv){
     double* samples = (double*) malloc(sizeof(double)*iterations);
     double* samples_all;
     long i, r;
-    MPI_Init(&argc, &argv);
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    if(provided < MPI_THREAD_MULTIPLE){
+        printf("The threading support level is lesser than that demanded.\n");
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);

@@ -27,7 +27,12 @@ int main(int argc, char** argv){
     }
 
     // Init
-    MPI_Init(&argc, &argv);
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    if(provided < MPI_THREAD_MULTIPLE){
+        printf("The threading support level is lesser than that demanded.\n");
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();

@@ -31,6 +31,6 @@ if [ "$1" = "ALL" ]; then
     LIBSWING_DIMENSIONS=6,2,2 LD_PRELOAD="./lib/libswing.so" mpirun -n 24 --oversubscribe ./lib/test 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 else
     rm -rf out/*
-    LD_PRELOAD="./lib/libswing.so" mpirun --output-filename out -n $1 --oversubscribe  ./lib/test
+    LD_PRELOAD="./lib/libswing.so" mpirun --output-filename out -n $1 --oversubscribe ./lib/test
     #LD_PRELOAD="./lib/libswing.so" mpirun -n $1 --oversubscribe ./lib/test
 fi
