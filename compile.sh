@@ -5,7 +5,7 @@ RED=$(tput setaf 1)
 NC=$(tput sgr0)
 
 # Normal compilation
-FLAGS="-O3 -g"
+FLAGS="-O3 -g -Wall -pedantic"
 ${MPI_COMPILER} ${FLAGS} -c -fPIC -fopenmp ./lib/libswing.cc -o ./lib/libswing.o ${FLAGS}
 if [ ! -f "./lib/libswing.o" ]; then
     echo "${RED}[Error] libswing.o compilation failed, please check error messages above.${NC}"

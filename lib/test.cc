@@ -22,7 +22,7 @@ int main(int argc, char** argv){
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
 
     // Fill sendbuf with random data
-    for(size_t i = 0; i < count; i++){
+    for(int i = 0; i < count; i++){
         sendbuf[i] = rand() % 1024;
     }
 
@@ -48,7 +48,7 @@ int main(int argc, char** argv){
     }
 
     start = std::chrono::high_resolution_clock::now();
-    for(size_t i = 0; i < iterations; i++){
+    for(int i = 0; i < iterations; i++){
         r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     }
     end = std::chrono::high_resolution_clock::now();
@@ -82,7 +82,7 @@ int main(int argc, char** argv){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         }
         start = std::chrono::high_resolution_clock::now();
-        for(size_t i = 0; i < iterations; i++){
+        for(int i = 0; i < iterations; i++){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         }
         end = std::chrono::high_resolution_clock::now();
@@ -96,7 +96,7 @@ int main(int argc, char** argv){
 #ifndef PROFILE
         // Then validate
         bool valid = true;
-        for(size_t i = 0; i < count; i++){
+        for(int i = 0; i < count; i++){
             if(recvbuf[i] != recvbuf_v[i]){
                 fprintf(stderr, "[%d][%s] Validation failed at index %d (%f but should be %f)\n", rank, algos[algo], (int) i, recvbuf[i], recvbuf_v[i]);
                 valid = false;

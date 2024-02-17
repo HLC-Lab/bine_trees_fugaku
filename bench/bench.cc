@@ -17,7 +17,7 @@ int main(int argc, char** argv){
     int count = atoi(argv[2]);
     int iterations = atoi(argv[3]);
     double* samples = (double*) malloc(sizeof(double)*iterations);
-    double* samples_all;
+    double* samples_all = NULL;
     long i, r;
     int provided;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
