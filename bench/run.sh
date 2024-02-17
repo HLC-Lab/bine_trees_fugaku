@@ -66,8 +66,10 @@ do
         LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv
         LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv        
         # Run bandwidth optimal and lat optimal swing
-        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_CONT.csv
-        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_CONT.csv
+        LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
+        LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
+        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_OLD_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_old_CONT.csv
+        LIBSWING_SENDRECV_TYPE="CONT" LIBSWING_ALGO="SWING_OLD_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_old_CONT.csv	
         echo " ${GREEN}[Done]${NC}"
     done
 done

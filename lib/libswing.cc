@@ -21,7 +21,7 @@
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -71,7 +71,7 @@ static char** cached_my_blocks_matrix = NULL;
 static void* cached_tmp_buf = NULL;
 static uint* cached_blocks_remapping = NULL;
 static uint** cached_peers = NULL;
-static Algo algo = ALGO_SWING_OLD_B;
+static Algo algo = ALGO_SWING_B;
 static SendRecv srtype = SENDRECV_DT;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
 

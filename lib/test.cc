@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <chrono>
 #include <iostream>
+#include <string.h>
 
 int main(int argc, char** argv){
     int r, rank;

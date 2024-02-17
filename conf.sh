@@ -18,6 +18,10 @@ case $SYSTEM in
     source conf/einstein.sh
     ;;
 
+  leonardo)
+    source conf/leonardo.sh
+    ;;
+
   *)
     echo -n "Unknown SYSTEM "$SYSTEM
     ;;
