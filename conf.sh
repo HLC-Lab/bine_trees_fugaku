@@ -22,6 +22,10 @@ case $SYSTEM in
     source conf/leonardo.sh
     ;;
 
+  fugaku)
+    source conf/fugaku.sh
+    ;;
+
   *)
     echo -n "Unknown SYSTEM "$SYSTEM
     ;;
