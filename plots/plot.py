@@ -81,7 +81,7 @@ def plot(arch, p):
                 data_real["Time (us)"] = data_real[colnames_ranks].max(axis=1)
                 data_real["System"] = arch
                 data_real["Nodes"] = p
-                data_real["Size (B)"] = n*4
+                data_real["Size (B)"] = n
                 data_real["Size"] = sizes[n]
                 data_real["Bandwidth (Gb/s)"] = 2*((data_real["Size (B)"]*8) / (data_real["Time (us)"]*1000.0)).astype(float)                
                 if algo == "default":
@@ -187,9 +187,10 @@ ps["daint_sameswitch"] = [4]
 ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
 ps["leonardo"] = [32]
+ps["lumi"] = [16, 62, 64]
 
 #archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
-archs = ["leonardo"]
+archs = ["leonardo", "lumi"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:
@@ -200,7 +201,6 @@ def main():
     for arch in archs:
         for p in ps[arch]:
             plot(arch, p)
-
 
 if __name__ == "__main__":
     main()
