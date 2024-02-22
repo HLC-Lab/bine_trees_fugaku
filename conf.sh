@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="fugaku"
+SYSTEM="lumi"
 
 case $SYSTEM in
   daint)
@@ -26,6 +26,10 @@ case $SYSTEM in
     source conf/fugaku.sh
     ;;
 
+  lumi)
+    source conf/lumi.sh
+    ;;
+  
   *)
     echo -n "Unknown SYSTEM "$SYSTEM
     ;;
