@@ -27,12 +27,7 @@ int main(int argc, char** argv){
     }
 
     // Init
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-    if(provided < MPI_THREAD_MULTIPLE){
-        printf("The threading support level is lesser than that demanded.\n");
-        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-    }
+    MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
@@ -63,8 +58,8 @@ int main(int argc, char** argv){
 #ifdef PROFILE
     const char* algos[1] = {"SWING_B"};
 #else
-    const char* algos[5] = {"SWING_L", "SWING_B", "RING", "RECDOUB_L", "RECDOUB_B"};
-    //const char* algos[1] = {"SWING_B"};
+    //const char* algos[5] = {"SWING_L", "SWING_B", "RING", "RECDOUB_L", "RECDOUB_B"};
+    const char* algos[1] = {"SWING_L"};
 #endif
     for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
         std::cout << "Running " << algos[algo] << std::endl;
@@ -78,9 +73,11 @@ int main(int argc, char** argv){
         setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
         setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
         setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
+        /*
         for(int i = warmup; i >= 0; i--){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         }
+        */
         start = std::chrono::high_resolution_clock::now();
         for(int i = 0; i < iterations; i++){
             r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
