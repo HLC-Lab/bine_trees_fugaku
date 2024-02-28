@@ -4,6 +4,8 @@ GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
 NC=$(tput sgr0)
 
+rm -f ./lib/libswing.o ./lib/libswing.so ./lib/test ./lib/libswing_profile.o ./lib/test_profile ./bench/bench
+
 # Normal compilation
 FLAGS="-O3 -g -Wall -pedantic"
 ${MPI_COMPILER} ${FLAGS} -c -fPIC -fopenmp ./lib/libswing.cc -o ./lib/libswing.o ${FLAGS}

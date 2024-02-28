@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="lumi"
+SYSTEM="local"
 
 case $SYSTEM in
   daint)
@@ -28,6 +28,10 @@ case $SYSTEM in
 
   lumi)
     source conf/lumi.sh
+    ;;
+
+  local)
+    source conf/local.sh
     ;;
   
   *)

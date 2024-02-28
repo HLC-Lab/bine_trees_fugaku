@@ -75,9 +75,8 @@ def plot(arch, p):
                 if len(data_real) == 0:                    
                     continue
                 data_real = data_real.loc[:, ~data_real.columns.str.contains('^Unnamed')]
-                colnames_ranks = []
-                for r in range(p):
-                    colnames_ranks += ["Rank" + str(r) + "Time(us)"]
+
+
                 data_real["Time (us)"] = data_real[colnames_ranks].max(axis=1)
                 data_real["System"] = arch
                 data_real["Nodes"] = p
@@ -132,6 +131,7 @@ def plot(arch, p):
                     if not add_default: # If I didn't normalize bw wrt default, now I normalize wrt Swing
                         best_algo[ba]["Normalized Bandwidth"] = best_algo[ba]["Bandwidth (Gb/s)"] / best_algo["Swing"]["Bandwidth (Gb/s)"].mean()
                     df = pd.concat([df, best_algo[ba]])
+
     if len(df) == 0:
         return
     df_impr_to_sota.reset_index(drop=True, inplace=True)
@@ -196,7 +196,7 @@ def main():
     with open("../data/description.csv", mode='r') as infile:
         reader = csv.reader(infile)    
         global paths
-        paths = {(rows[0],rows[1]):"../data/" + rows[2] for rows in reader}
+        paths = {(rows[0],rows[1]):"../data/" + rows[2] for rows in reader}        
 
     for arch in archs:
         for p in ps[arch]:
