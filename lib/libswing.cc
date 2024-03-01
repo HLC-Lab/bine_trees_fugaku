@@ -26,7 +26,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -1018,24 +1018,23 @@ static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
 }
 */
 
-static inline int get_block_distance(int rank, int block, uint port){
+/*
+static int reverse_bits(int block, int num_steps){
+    int res = 0;
+    for(int i = 0; i < num_steps; i++){
+        if ((block & (1 << i)))
+            res |= 1 << ((num_steps - 1) - i);
+    }
+    return res;
+}
+*/
+
+static inline int get_block_distance(int rank, int block){   
     if(is_odd(block)){
         // TODO: Use *-1 instead of ifs.
-        if(port < dimensions_num){
-            return block - rank;                
-        }else{
-            // If port >= dimensions_num, this is a mirrored collective.
-            // This means that the signs in Eq. 4 would be flipped, as well as the
-            // conditions to determine how to compute the block distance (r-q or q-r)
-            return rank - block;
-        }
+        return block - rank;                
     }else{
-        if(port < dimensions_num){
-            return rank - block;
-        }else{
-            // Mirrored
-            return block - rank;
-        }
+        return rank - block;
     }
 }
 
@@ -1090,11 +1089,19 @@ static inline int get_last_step(uint32_t block_distance){
 }
 
 // Returns the step in which rank will send the block.
-static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info, uint port){
+static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info, uint port){ 
     int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b = 0;
     int block_distance_a, block_distance_b;
     uint32_t block_distance_neg_a = 0, block_distance_neg_b = 0;
-    block_distance_a = get_block_distance(rank, block, port);
+    block_distance_a = get_block_distance(rank, block);
+
+    if(port >= dimensions_num){
+         // If port >= dimensions_num, this is a mirrored collective.
+        // This means that the signs in Eq. 4 would be flipped, as well as the
+        // conditions to determine how to compute the block distance (r-q or q-r)
+        block_distance_a = -block_distance_a;
+    }
+
     if(block_distance_a < 0){
         block_distance_b = block_distance_a + size;
     }else{
@@ -1318,7 +1325,30 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                 step_to_send[p][i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, p));
             }
         }
-        
+
+#if 0
+        // The following works only when num nodes is a power of 2
+        bool* to_recv = (bool*) malloc(sizeof(bool)*info->size);
+        for(int b = 0; b < info->size; b++){
+            to_recv[b] = true;
+        }
+        for(int i = 0; i < info->num_steps; i++){
+            for(int b = 0; b < info->size; b++){
+                if(step_to_send[p][b] & (0x1 << i)){ // If at step i I send block b, then for sure I don't receive it in that step
+                    DPRINTF("[%d] I am going to send block %d at step %d, so I won't receive it in that step\n", info->rank, b, i);
+                    to_recv[b] = false;
+                }
+            }
+
+            for(int b = 0; b < info->size; b++){
+                if(to_recv[b]){
+                    DPRINTF("[%d] I am going to receive block %d at step %d\n", info->rank, b, i);
+                    step_to_recv[p][b] |= (0x1 << i);
+                }
+            }
+        }
+        free(to_recv);
+#else        
         // TODO: Don't like this nested loop, find a way to simplify it...    
         for(size_t i = 0; i < (uint) info->size; i++){        
             retrieve_coord_mapping(coordinates, i, coord_block);        
@@ -1332,8 +1362,8 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                 }
             }
         }
+#endif
     }
-
     res = swing_coll(recvbuf, rbuf   , count, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers_per_port, step_to_send, step_to_recv);
     if(res != MPI_SUCCESS){return res;} 
     res = swing_coll(recvbuf, recvbuf, count, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers_per_port, step_to_send, step_to_recv);
