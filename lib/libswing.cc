@@ -1019,7 +1019,7 @@ static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
 */
 
 static inline int get_block_distance(int rank, int block, uint port){
-    if(((!is_odd(rank) && is_odd(block)) || (is_odd(rank) && is_odd(block)))){ // TODO: This should be equal to is_odd(block) && (is_odd(rank) || !is_odd(rank)) -> is_odd(block)
+    if(is_odd(block)){
         // TODO: Use *-1 instead of ifs.
         if(port < dimensions_num){
             return block - rank;                
@@ -1222,21 +1222,25 @@ static int swing_coll(void *buf, void* rbuf, size_t count,
                     }
                     
                     size_t block_count = partition_size + (i < remaining ? 1 : 0);
-                    size_t block_offset = count_so_far*info->dtsize;
+                    size_t block_within_port_offset = count_so_far*info->dtsize;
                     count_so_far += block_count;
+
+                    // The actual offset is the offset of the data for this port, 
+                    // plus the offset of the block within that data
+                    size_t block_offset = bi.offset + block_within_port_offset; 
 
                     //DPRINTF("[%d] Block %d (send %d recv %d)\n", rank, i, send_block, recv_block);
                     if(send_block){              
                         DPRINTF("[%d] Sending block %d to %d at step %d (coll %d)\n", rank, i, peer, step, coll_type);
-                        res = MPI_Isend(((char*) buf) + bi.offset + block_offset, block_count, sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
+                        res = MPI_Isend(((char*) buf) + block_offset, block_count, sendtype, peer, tag, comm, &(requests_s[num_requests_s]));
                         if(res != MPI_SUCCESS){return res;}
                         ++num_requests_s;
                     }
                     if(recv_block){
                         DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d)\n", rank, i, peer, step, coll_type);
-                        res = MPI_Irecv(((char*) rbuf) + bi.offset + block_offset, block_count, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
+                        res = MPI_Irecv(((char*) rbuf) + block_offset, block_count, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
                         if(res != MPI_SUCCESS){return res;}
-                        req_idx_to_block_idx[num_requests_r].offset = bi.offset + block_offset;
+                        req_idx_to_block_idx[num_requests_r].offset = block_offset;
                         req_idx_to_block_idx[num_requests_r].count = block_count;
                         ++num_requests_r;
                     }
@@ -1336,13 +1340,15 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     if(res != MPI_SUCCESS){return res;}
 
     free(coordinates);
-    free(step_to_send);
-    free(step_to_recv);
     free(rbuf);
     for(size_t p = 0; p < info->num_ports; p++){
         free(peers_per_port[p]);
+        free(step_to_send[p]);
+        free(step_to_recv[p]);
     }
     free(peers_per_port);  
+    free(step_to_send);
+    free(step_to_recv);
     return res;
 }
 
