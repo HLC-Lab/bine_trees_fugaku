@@ -1018,7 +1018,6 @@ static inline int check_last_n_bits_equal(uint32_t a, uint32_t b, uint32_t n){
 }
 */
 
-/*
 static int reverse_bits(int block, int num_steps){
     int res = 0;
     for(int i = 0; i < num_steps; i++){
@@ -1027,7 +1026,6 @@ static int reverse_bits(int block, int num_steps){
     }
     return res;
 }
-*/
 
 static inline int get_block_distance(int rank, int block){   
     if(is_odd(block)){
@@ -1094,9 +1092,9 @@ static int get_step_to_reach(int rank, int block, int num_steps, int size, Swing
     int block_distance_a, block_distance_b;
     uint32_t block_distance_neg_a = 0, block_distance_neg_b = 0;
     block_distance_a = get_block_distance(rank, block);
-
+   
     if(port >= dimensions_num){
-         // If port >= dimensions_num, this is a mirrored collective.
+        // If port >= dimensions_num, this is a mirrored collective.
         // This means that the signs in Eq. 4 would be flipped, as well as the
         // conditions to determine how to compute the block distance (r-q or q-r)
         block_distance_a = -block_distance_a;
@@ -1132,7 +1130,9 @@ static int get_step_to_reach(int rank, int block, int num_steps, int size, Swing
     }else if(first_step_a == first_step_b){ // I can reach it with two different combinations of steps, but they both start at the first step
         return first_step_a;
     }else{ // I can reach it in two different ways, but they start at different steps. We choose the one that arrives later (i.e., in the last step)
-        if(get_last_step(block_distance_neg_a) > get_last_step(block_distance_neg_b)){
+        // To find the last step, we should find the highest bit set to 1. If we
+        // interpret the negabinary block distances as binary numbers, it is enough to check which of the two numbers is the largest.
+        if(block_distance_neg_a > block_distance_neg_b){ // Equivalent to: get_last_step(block_distance_neg_a) > get_last_step(block_distance_neg_b)
             return first_step_a;
         }else{
             return first_step_b;
@@ -1147,8 +1147,6 @@ static uint get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int nu
 #else       
         int min_step = info->num_steps + 1, min_d = MAX_SUPPORTED_DIMENSIONS;
         uint starting_dimension = port % dimensions_num; 
-        // TODO: For now we assume we start from dimension 0 and go forward, fix when moving to multiport.
-        // Fix by starting d = start_dimension and looping thorugh the rest
         for(size_t i = 0; i < dimensions_num; i++){
             size_t d = (i + starting_dimension) % dimensions_num;
             if(coord_block[d] != coord_mine[d]){                
@@ -1166,22 +1164,11 @@ static uint get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int nu
         for(size_t i = 0; i < dimensions_num; i++){
             uint d = (i + starting_dimension) % dimensions_num;
             if(i < (uint) min_d){
-                actual_step += std::min(min_step, info->num_steps_per_dim[d] - 1) + 1;
+                actual_step += std::min(min_step    , info->num_steps_per_dim[d] - 1) + 1;
             }else{
                 actual_step += std::min(min_step - 1, info->num_steps_per_dim[d] - 1) + 1;
             }
         }
-        /*
-        if(info->rank == 0){
-            DPRINTF("eeee going to reach block (%d,%d) at step %d on dim %d actual step %d\n", coord_block[0], coord_block[1], min_step, min_d, actual_step);
-        }
-        */
-
-        /*
-        if(rank == info->rank){
-            DPRINTF("[%d] Block %d, min_step %d, min_d %d, actual_step %d\n", info->rank, block, min_step, min_d, actual_step);
-        }
-        */
         return actual_step;
 #endif
 }
@@ -1327,7 +1314,17 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         }
 
 #if 0
+        retrieve_coord_mapping(coordinates, (info->rank + 1) % info->size, coord_mine);
+        for(size_t i = 0; i < (uint) info->size; i++){
+            // In reducescatter I never send my block
+            // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
+            if(i != (uint) (info->rank + 1) % info->size){                      
+                retrieve_coord_mapping(coordinates, i, coord_block);      
+                step_to_recv[p][i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, p));
+            }
+        }
         // The following works only when num nodes is a power of 2
+        /*
         bool* to_recv = (bool*) malloc(sizeof(bool)*info->size);
         for(int b = 0; b < info->size; b++){
             to_recv[b] = true;
@@ -1348,6 +1345,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
             }
         }
         free(to_recv);
+        */
 #else        
         // TODO: Don't like this nested loop, find a way to simplify it...    
         for(size_t i = 0; i < (uint) info->size; i++){        
