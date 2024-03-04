@@ -26,7 +26,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -59,7 +59,7 @@ typedef struct{
     int size;
     int dtsize;
     int num_steps;
-    int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    size_t num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
     uint num_ports;
     ChunkInfo** chunks; // One per chunk (each of size max_size). Each element has one offset/count per port.
     size_t num_chunks;
@@ -723,14 +723,13 @@ static uint32_t binary_to_negabinary(int32_t bin) {
     return (mask + bin) ^ mask;
 }
 
-/*
+
 static int32_t negabinary_to_binary(uint32_t neg) {
     //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
     //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
     const uint32_t mask = 0xAAAAAAAA;
     return (mask ^ neg) - mask;
 }
-*/
 
 /*
 static int32_t smallest_negabinary(uint32_t nbits){
@@ -748,6 +747,7 @@ static int32_t largest_negabinary(uint32_t nbits){
 */
 
 // Checks if a given number can be represented as a negabinary number with nbits bits
+// TODO: Check this directly on binary representation by comparing with the largest number on nbits!
 static inline int in_range(int x, uint32_t nbits){
     return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
 }
@@ -1027,15 +1027,6 @@ static int reverse_bits(int block, int num_steps){
     return res;
 }
 
-static inline int get_block_distance(int rank, int block){   
-    if(is_odd(block)){
-        // TODO: Use *-1 instead of ifs.
-        return block - rank;                
-    }else{
-        return rank - block;
-    }
-}
-
 #ifdef __GNUC__
 #define ctz(x) __builtin_ctz(x)
 #define clz(x) __builtin_clz(x)
@@ -1084,93 +1075,6 @@ static inline int get_first_step(uint32_t block_distance){
 static inline int get_last_step(uint32_t block_distance){
     // The last step is the position of the most significant bit.
     return 32 - clz(block_distance) - 1;
-}
-
-// Returns the step in which rank will send the block.
-static int get_step_to_reach(int rank, int block, int num_steps, int size, SwingInfo* info, uint port){ 
-    int first_step_a = -1, first_step_b = -1, is_in_range_a = 0, is_in_range_b = 0;
-    int block_distance_a, block_distance_b;
-    uint32_t block_distance_neg_a = 0, block_distance_neg_b = 0;
-    block_distance_a = get_block_distance(rank, block);
-   
-    if(port >= dimensions_num){
-        // If port >= dimensions_num, this is a mirrored collective.
-        // This means that the signs in Eq. 4 would be flipped, as well as the
-        // conditions to determine how to compute the block distance (r-q or q-r)
-        block_distance_a = -block_distance_a;
-    }
-
-    if(block_distance_a < 0){
-        block_distance_b = block_distance_a + size;
-    }else{
-        block_distance_b = block_distance_a - size;
-    }
-
-    is_in_range_a = in_range(block_distance_a, num_steps);
-    is_in_range_b = in_range(block_distance_b, num_steps);
-
-    if(is_in_range_a){
-        block_distance_neg_a = binary_to_negabinary(block_distance_a);
-        first_step_a = get_first_step(block_distance_neg_a);
-    }
-
-    if(is_in_range_b){
-        block_distance_neg_b = binary_to_negabinary(block_distance_b);
-        first_step_b = get_first_step(block_distance_neg_b);
-    }
-    if(rank == info->rank){
-        DPRINTF("[%d] Block %d, distance (%d, %d), distance_neg (%d, %d), is_in_range (%d, %d), first_step (%d, %d)\n", info->rank,  block, block_distance_a, block_distance_b, block_distance_neg_a, block_distance_neg_b, is_in_range_a, is_in_range_b, first_step_a, first_step_b);
-    }
-    
-    assert(!(first_step_a == -1 && first_step_b == -1));
-    if(first_step_a == -1 && first_step_b != -1){ // I can reach it only in one way
-        return first_step_b;
-    }else if(first_step_a != -1 && first_step_b == -1){ // I can reach it only in one way
-        return first_step_a;
-    }else if(first_step_a == first_step_b){ // I can reach it with two different combinations of steps, but they both start at the first step
-        return first_step_a;
-    }else{ // I can reach it in two different ways, but they start at different steps. We choose the one that arrives later (i.e., in the last step)
-        // To find the last step, we should find the highest bit set to 1. If we
-        // interpret the negabinary block distances as binary numbers, it is enough to check which of the two numbers is the largest.
-        if(block_distance_neg_a > block_distance_neg_b){ // Equivalent to: get_last_step(block_distance_neg_a) > get_last_step(block_distance_neg_b)
-            return first_step_a;
-        }else{
-            return first_step_b;
-        }
-    }
-}
-
-
-static uint get_step_to_reach_multid(uint* coord_mine, uint* coord_block, int num_steps, int size, SwingInfo* info, uint* coordinates, uint port){
-#if MAX_SUPPORTED_DIMENSIONS == 1
-        return get_step_to_reach(rank, block, info->num_steps, info->size, info);
-#else       
-        int min_step = info->num_steps + 1, min_d = MAX_SUPPORTED_DIMENSIONS;
-        uint starting_dimension = port % dimensions_num; 
-        for(size_t i = 0; i < dimensions_num; i++){
-            size_t d = (i + starting_dimension) % dimensions_num;
-            if(coord_block[d] != coord_mine[d]){                
-                //DPRINTF("[%d] Rank %d Block %d, coord_block[%d] %d, coord_mine[%d] %d\n", info->rank, rank, block, d, coord_block[d], d, coord_mine[d]);
-                int st = get_step_to_reach(coord_mine[d], coord_block[d], info->num_steps_per_dim[d], dimensions[d], info, port);
-                if(st < min_step){
-                    min_step = st;
-                    min_d = i;
-                }
-            }
-        }
-
-        // Convert from relative to absolute step
-        uint actual_step = 0;
-        for(size_t i = 0; i < dimensions_num; i++){
-            uint d = (i + starting_dimension) % dimensions_num;
-            if(i < (uint) min_d){
-                actual_step += std::min(min_step    , info->num_steps_per_dim[d] - 1) + 1;
-            }else{
-                actual_step += std::min(min_step - 1, info->num_steps_per_dim[d] - 1) + 1;
-            }
-        }
-        return actual_step;
-#endif
 }
 
 static int swing_coll(void *buf, void* rbuf, size_t count,
@@ -1271,11 +1175,74 @@ static int swing_coll(void *buf, void* rbuf, size_t count,
     return 0;
 }
 
+static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int size, char* bitmap_send, size_t port){
+    size_t max_num_blocks = pow(2, (max_steps - step - 1));
+    // Generate all binary strings with a 0 in position step+1 and a 1 in all the bits in position j (j <= step)
+    for(size_t i = 0; i < max_num_blocks; i++){
+        if(!(i & 0x1)){ // Only if it has a 0 as LSB (we generate in one shot bot the string with LSB=0 and that with LSB=1)         
+            int nbin_o = (i << (step + 1)) | ((1 << (step + 1)) - 1); // LSB=1
+            int nbin_z = ~nbin_o & ((1 << max_steps) - 1);            // LSB=0
+
+            // If mirrored collectives, the direction of the communication are inverted
+            // It is thus enough to invert nbin_o and nbin_z
+            if(port >= dimensions_num){
+                int tmp = nbin_o;
+                nbin_o = nbin_z;
+                nbin_z = tmp;
+            }
+
+            int distance_o = negabinary_to_binary(nbin_o); 
+            int distance_z = negabinary_to_binary(nbin_z);
+            int distance_alt_o = (distance_o < 0)?distance_o+size:distance_o-size;
+            int distance_alt_z = (distance_z < 0)?distance_z+size:distance_z-size;
+            int nbin_alt_o = binary_to_negabinary(distance_alt_o);
+            int nbin_alt_z = binary_to_negabinary(distance_alt_z);
+            bool start_same_step_o = get_first_step(nbin_alt_o) == step;
+            bool start_same_step_z = get_first_step(nbin_alt_z) == step;
+
+            // TODO: We added this check on abs(distance_x) because sometimes the alternative distance is > size, rather than pos/neg, not sure it always works, or if there are cases where the two alternatives are both positive (with one > size)
+            if(is_odd(rank)){ // Odd rank
+                // Sum r to all the strings with LSB=0                
+                if(abs(distance_z) < size && (!in_range(distance_alt_z, max_steps) || nbin_alt_z < nbin_z || start_same_step_z)){
+                    bitmap_send[mod(rank + distance_z, size)] = 1; 
+                }else{
+                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank + distance_z, size), distance_z, distance_alt_z);
+                }
+                
+
+                // Subtract from r all the strings with LSB=1
+                if(abs(distance_o) < size && (!in_range(distance_alt_o, max_steps) || nbin_alt_o < nbin_o || start_same_step_o)){
+                    bitmap_send[mod(rank - distance_o, size)] = 1; 
+                }else{
+                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank - distance_o, size), distance_o, distance_alt_o);
+                }
+            }else{ // Even rank
+                // Subtract form r all the strings with LSB=0
+                if(abs(distance_z) < size && (!in_range(distance_alt_z, max_steps) || nbin_alt_z < nbin_z || start_same_step_z)){
+                    bitmap_send[mod(rank - distance_z, size)] = 1;
+                    DPRINTF("[%d] Step %d reaches %d with distance %d \n", rank, step, mod(rank - distance_z, size), distance_z);
+                }else{
+                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank - distance_z, size), distance_z, distance_alt_z);
+                }
+
+                // Sum r to all the strings with LSB=1
+                if(abs(distance_o) < size && (!in_range(distance_alt_o, max_steps) || nbin_alt_o < nbin_o || start_same_step_o)){
+                    bitmap_send[mod(rank + distance_o, size)] = 1;
+                    DPRINTF("[%d] Step %d reaches %d with distance %d \n", rank, step, mod(rank + distance_o, size), distance_o);
+                }else{
+                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank + distance_o, size), distance_o, distance_alt_o);
+                }
+            }
+        }
+    }
+    // I will never send my data
+    bitmap_send[rank] = 0;
+}
 
 static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
     int res;
     uint* coordinates = (uint*) malloc(sizeof(uint)*info->size*dimensions_num);
-    compute_rank_to_coord_mapping(info->size, dimensions, coordinates, info->size); // TODO: Change (per-port) the rank to coordinates mapping and use the same peers instead of computing different peers for each port?
+    compute_rank_to_coord_mapping(info->size, dimensions, coordinates, info->size);
     DPRINTF("[%d] Computing peers\n", info->rank);
     uint** peers_per_port = (uint**) malloc(sizeof(uint*)*info->num_ports);
     for(size_t p = 0; p < info->num_ports; p++){
@@ -1298,70 +1265,124 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         memset(step_to_send[i], 0, sizeof(uint32_t)*info->size);
         memset(step_to_recv[i], 0, sizeof(uint32_t)*info->size); 
     }
-    uint coord_block[MAX_SUPPORTED_DIMENSIONS];
+    uint coord_peer[MAX_SUPPORTED_DIMENSIONS];
     uint coord_mine[MAX_SUPPORTED_DIMENSIONS];    
 
+    getCoordFromId(info->rank, coord_mine, info->size, dimensions);
+
+    char** bitmap_send = (char**) malloc(sizeof(char*)*dimensions_num);
+    char** bitmap_recv = (char**) malloc(sizeof(char*)*dimensions_num);
+    for(size_t d = 0; d < dimensions_num; d++){
+        bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
+        bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
+    }
+#ifdef DEBUG                    
+    char* bitmap_send_merged = (char*) malloc(sizeof(char)*info->size);
+    char* bitmap_recv_merged = (char*) malloc(sizeof(char)*info->size);
+#endif
+    size_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
     for(size_t p = 0; p < info->num_ports; p++){
-        DPRINTF("[%d] Computing block bitmaps for port %d\n", info->rank, p);
-        retrieve_coord_mapping(coordinates, info->rank, coord_mine);
-        for(size_t i = 0; i < (uint) info->size; i++){
-            // In reducescatter I never send my block
-            // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
-            if(i != (uint) info->rank){                      
-                retrieve_coord_mapping(coordinates, i, coord_block);      
-                step_to_send[p][i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, p));
-            }
-        }
+        memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
+        size_t starting_d = p % dimensions_num; 
+        size_t current_d = starting_d;
 
-#if 0
-        retrieve_coord_mapping(coordinates, (info->rank + 1) % info->size, coord_mine);
-        for(size_t i = 0; i < (uint) info->size; i++){
-            // In reducescatter I never send my block
-            // I precompute it so that get_step_to_reach_multid is called only 'size' times rather than 'size x num_steps' times.
-            if(i != (uint) (info->rank + 1) % info->size){                      
-                retrieve_coord_mapping(coordinates, i, coord_block);      
-                step_to_recv[p][i] |= (0x1 << get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, p));
-            }
-        }
-        // The following works only when num nodes is a power of 2
-        /*
-        bool* to_recv = (bool*) malloc(sizeof(bool)*info->size);
-        for(int b = 0; b < info->size; b++){
-            to_recv[b] = true;
-        }
-        for(int i = 0; i < info->num_steps; i++){
-            for(int b = 0; b < info->size; b++){
-                if(step_to_send[p][b] & (0x1 << i)){ // If at step i I send block b, then for sure I don't receive it in that step
-                    DPRINTF("[%d] I am going to send block %d at step %d, so I won't receive it in that step\n", info->rank, b, i);
-                    to_recv[b] = false;
+        for(size_t step = 0; step < (uint) info->num_steps; step++){
+            size_t rel_step = next_step_per_dim[current_d];
+            while(rel_step >= info->num_steps_per_dim[current_d]){
+                current_d = (current_d + 1) % dimensions_num;
+                rel_step = next_step_per_dim[current_d];
+            } 
+            
+            // Get the coordinates of the peer at this step.
+            retrieve_coord_mapping(coordinates, peers_per_port[p][step], coord_peer);
+            
+            // Compute the bitmap for each dimension
+            for(size_t k = 0; k < dimensions_num; k++){
+                size_t d = (k + current_d) % dimensions_num;
+
+                memset(bitmap_send[d], 0, sizeof(char)*dimensions[d]);
+                memset(bitmap_recv[d], 0, sizeof(char)*dimensions[d]);
+
+                // We skip dimension d if we are already beyond this step, or if we are done with that dimension.
+                if(next_step_per_dim[d] > rel_step || next_step_per_dim[d] >= info->num_steps_per_dim[d]){
+                    continue;
+                }
+                            
+                size_t last_step;
+                if(k == 0){
+                    last_step = rel_step + 1;
+                }else{
+                    last_step = info->num_steps_per_dim[d];
+                }
+
+                for(size_t sk = rel_step; sk < last_step; sk++){
+                    get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], p);
+                    get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], p);
                 }
             }
 
-            for(int b = 0; b < info->size; b++){
-                if(to_recv[b]){
-                    DPRINTF("[%d] I am going to receive block %d at step %d\n", info->rank, b, i);
-                    step_to_recv[p][b] |= (0x1 << i);
-                }
-            }
-        }
-        free(to_recv);
-        */
-#else        
-        // TODO: Don't like this nested loop, find a way to simplify it...    
-        for(size_t i = 0; i < (uint) info->size; i++){        
-            retrieve_coord_mapping(coordinates, i, coord_block);        
-            for(size_t step = 0; step < (uint) info->num_steps; step++){
-                uint peer = peers_per_port[p][step];
-                if(i != peer){
-                    retrieve_coord_mapping(coordinates, peer, coord_mine);
-                    if(get_step_to_reach_multid(coord_mine, coord_block, info->num_steps, info->size, info, coordinates, p) == step){
-                        step_to_recv[p][i] |= (0x1 << step);
+            // Combine the per-dimension bitmaps
+            uint coord_block[MAX_SUPPORTED_DIMENSIONS];    
+            for(size_t i = 0; i < (uint) info->size; i++){
+                getCoordFromId(i, coord_block, info->size, dimensions);
+                char set_s = 1, set_r = 1;
+                for(size_t d = 0; d < dimensions_num; d++){
+                    if(coord_peer[d] != coord_mine[d]){
+                        set_s &= bitmap_send[d][coord_block[d]];
+                        set_r &= bitmap_recv[d][coord_block[d]];
                     }
                 }
-            }
-        }
+                if(set_s){
+                    step_to_send[p][i] |= (0x1 << step);
+                }
+                if(set_r){
+                    step_to_recv[p][i] |= (0x1 << step);
+                }
+#ifdef DEBUG                
+                bitmap_send_merged[i] = set_s;
+                bitmap_recv_merged[i] = set_r;
 #endif
+            }
+
+            if(next_step_per_dim[current_d] < info->num_steps_per_dim[current_d]){
+                next_step_per_dim[current_d] += 1;
+            }
+            current_d = (current_d + 1) % dimensions_num;
+
+#ifdef DEBUG                
+            DPRINTF("[%d] Step %d Bitmap send: ", info->rank, step);
+            for(size_t i = 0; i < (uint) info->size; i++){
+                if(bitmap_send_merged[i]){
+                    DPRINTF("1");
+                }else{
+                    DPRINTF("0");
+                }
+            }
+            DPRINTF("\n");
+
+            DPRINTF("[%d] Step %d Bitmap recv: ", info->rank, step);
+            for(size_t i = 0; i < (uint) info->size; i++){
+                if(bitmap_recv_merged[i]){
+                    DPRINTF("1");
+                }else{
+                    DPRINTF("0");
+                }
+            }
+            DPRINTF("\n");
+#endif
+        }
     }
+    for(size_t d = 0; d < dimensions_num; d++){
+        free(bitmap_send[d]);
+        free(bitmap_recv[d]);
+    }
+    free(bitmap_send);
+    free(bitmap_recv);
+#ifdef DEBUG                    
+    free(bitmap_send_merged);
+    free(bitmap_recv_merged);
+#endif
+
     res = swing_coll(recvbuf, rbuf   , count, op, comm, info->size, info->rank, datatype, datatype, SWING_REDUCE_SCATTER, info, peers_per_port, step_to_send, step_to_recv);
     if(res != MPI_SUCCESS){return res;} 
     res = swing_coll(recvbuf, recvbuf, count, op, comm, info->size, info->rank, datatype, datatype, SWING_ALLGATHER     , info, peers_per_port, step_to_send, step_to_recv);
