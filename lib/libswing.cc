@@ -14,7 +14,7 @@
 
 #define MAX_SUPPORTED_DIMENSIONS 6 // We support up to 6D torus
 #define MAX_SUPPORTED_PORTS (MAX_SUPPORTED_DIMENSIONS*2)
-#define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms if needed.
+#define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
 static int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 static int smallest_negabinary[LIBSWING_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
 static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
@@ -1180,57 +1180,89 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
     // Generate all binary strings with a 0 in position step+1 and a 1 in all the bits in position j (j <= step)
     for(size_t i = 0; i < max_num_blocks; i++){
         if(!(i & 0x1)){ // Only if it has a 0 as LSB (we generate in one shot bot the string with LSB=0 and that with LSB=1)         
-            int nbin_o = (i << (step + 1)) | ((1 << (step + 1)) - 1); // LSB=1
-            int nbin_z = ~nbin_o & ((1 << max_steps) - 1);            // LSB=0
+            int nbin[2]; // At position 0, we have the numbers with 0 as LSB, at position 1, the numbers with 1 as LSB
+            nbin[1] = (i << (step + 1)) | ((1 << (step + 1)) - 1); // LSB=1
+            nbin[0] = ~nbin[1]          & ((1 <<  max_steps) - 1); // LSB=0
 
             // If mirrored collectives, the direction of the communication are inverted
-            // It is thus enough to invert nbin_o and nbin_z
+            // It is thus enough to invert nbin_1 and nbin_0
             if(port >= dimensions_num){
-                int tmp = nbin_o;
-                nbin_o = nbin_z;
-                nbin_z = tmp;
+                int tmp = nbin[1];
+                nbin[1] = nbin[0];
+                nbin[0] = tmp;
+            }
+            
+
+            int distance[2] = {negabinary_to_binary(nbin[0]),  // At position 0, we have the numbers with 0 as LSB, 
+                               negabinary_to_binary(nbin[1])}; // at position 1, the numbers with 1 as LSB.
+
+            DPRINTF("[%d] distancee (%d %d) (nbin: %d %d)\n", rank, distance[0], distance[1], nbin[0], nbin[1]);
+
+            char distance_valid[2] = {1, 1};
+            for(size_t q = 0; q < 2; q++){
+                // A rank never sends its data in reduce-scatter.
+                if(mod(distance[q], size) == 0){
+                    distance_valid[q] = 0;
+                    continue;
+                }
+
+                // We know that the distance, when size is not a power of two, can be in the range (-2*size, 2*size)
+                // Thus, there are 4 different negabinary numbers that, modulo size, could give the same distance.
+                // We need to check all the other three alternatives.
+                int alternatives[3];
+                if(distance[q] > size && distance[q] < 2*size){
+                    alternatives[0] = distance[q] - size;
+                    alternatives[1] = distance[q] - 2*size;
+                    alternatives[2] = distance[q] - 3*size;
+                }else if(distance[q] > 0 && distance[q] < size){
+                    alternatives[0] = distance[q] + size;
+                    alternatives[1] = distance[q] - size;
+                    alternatives[2] = distance[q] - 2*size;
+                }else if(distance[q] < 0 && distance[q] > -size){
+                    alternatives[0] = distance[q] + 2*size;
+                    alternatives[1] = distance[q] + size;
+                    alternatives[2] = distance[q] - size;
+                }else if(distance[q] < -size && distance[q] > -2*size){
+                    alternatives[0] = distance[q] + 3*size;
+                    alternatives[1] = distance[q] + 2*size;
+                    alternatives[2] = distance[q] + size;
+                }else{
+                    assert("This should never happen!" && 0);
+                }
+
+                for(size_t k = 0; k < 3; k++){
+                    if(in_range(alternatives[k], max_steps)){ // First of all, check if the corresponding negabinary number can be represented with the given number of bits
+                        int nbin_alt = binary_to_negabinary(alternatives[k]);
+                        int first_step_alt = get_first_step(nbin_alt);
+                        if(first_step_alt != step && first_step_alt > get_first_step(nbin[q])){
+                            //DPRINTF("[%d] Invalid distance %d (nbin %d vs %d) for step %d\n", rank, alternatives[k], nbin_alt, nbin[q], step);
+                            DPRINTF("[%d] Step %d I am skipping block at distance %d %d, I am going to send at step %d (nbin %d %d)\n", rank, step, distance[q], alternatives[k], get_first_step(nbin_alt), nbin[q], nbin_alt);
+                            distance_valid[q] = 0;
+                            break;
+                        }
+                    }
+                }
             }
 
-            int distance_o = negabinary_to_binary(nbin_o); 
-            int distance_z = negabinary_to_binary(nbin_z);
-            int distance_alt_o = (distance_o < 0)?distance_o+size:distance_o-size;
-            int distance_alt_z = (distance_z < 0)?distance_z+size:distance_z-size;
-            int nbin_alt_o = binary_to_negabinary(distance_alt_o);
-            int nbin_alt_z = binary_to_negabinary(distance_alt_z);
-            bool start_same_step_o = get_first_step(nbin_alt_o) == step;
-            bool start_same_step_z = get_first_step(nbin_alt_z) == step;
-
-            // TODO: We added this check on abs(distance_x) because sometimes the alternative distance is > size, rather than pos/neg, not sure it always works, or if there are cases where the two alternatives are both positive (with one > size)
             if(is_odd(rank)){ // Odd rank
                 // Sum r to all the strings with LSB=0                
-                if(abs(distance_z) < size && (!in_range(distance_alt_z, max_steps) || nbin_alt_z < nbin_z || start_same_step_z)){
-                    bitmap_send[mod(rank + distance_z, size)] = 1; 
-                }else{
-                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank + distance_z, size), distance_z, distance_alt_z);
+                if(distance_valid[0]){
+                    bitmap_send[mod(rank + distance[0], size)] = 1; 
                 }
                 
-
                 // Subtract from r all the strings with LSB=1
-                if(abs(distance_o) < size && (!in_range(distance_alt_o, max_steps) || nbin_alt_o < nbin_o || start_same_step_o)){
-                    bitmap_send[mod(rank - distance_o, size)] = 1; 
-                }else{
-                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank - distance_o, size), distance_o, distance_alt_o);
+                if(distance_valid[1]){
+                    bitmap_send[mod(rank - distance[1], size)] = 1; 
                 }
             }else{ // Even rank
                 // Subtract form r all the strings with LSB=0
-                if(abs(distance_z) < size && (!in_range(distance_alt_z, max_steps) || nbin_alt_z < nbin_z || start_same_step_z)){
-                    bitmap_send[mod(rank - distance_z, size)] = 1;
-                    DPRINTF("[%d] Step %d reaches %d with distance %d \n", rank, step, mod(rank - distance_z, size), distance_z);
-                }else{
-                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank - distance_z, size), distance_z, distance_alt_z);
+                if(distance_valid[0]){
+                    bitmap_send[mod(rank - distance[0], size)] = 1;
                 }
 
                 // Sum r to all the strings with LSB=1
-                if(abs(distance_o) < size && (!in_range(distance_alt_o, max_steps) || nbin_alt_o < nbin_o || start_same_step_o)){
-                    bitmap_send[mod(rank + distance_o, size)] = 1;
-                    DPRINTF("[%d] Step %d reaches %d with distance %d \n", rank, step, mod(rank + distance_o, size), distance_o);
-                }else{
-                    DPRINTF("[%d] Step %d Can reach %d with distance both %d and %d\n", rank, step, mod(rank + distance_o, size), distance_o, distance_alt_o);
+                if(distance_valid[1]){
+                    bitmap_send[mod(rank + distance[1], size)] = 1;
                 }
             }
         }
@@ -1270,8 +1302,8 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
 
     getCoordFromId(info->rank, coord_mine, info->size, dimensions);
 
-    char** bitmap_send = (char**) malloc(sizeof(char*)*dimensions_num);
-    char** bitmap_recv = (char**) malloc(sizeof(char*)*dimensions_num);
+    char* bitmap_send[MAX_SUPPORTED_DIMENSIONS];
+    char* bitmap_recv[MAX_SUPPORTED_DIMENSIONS];
     for(size_t d = 0; d < dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
         bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
@@ -1332,12 +1364,8 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                         set_r &= bitmap_recv[d][coord_block[d]];
                     }
                 }
-                if(set_s){
-                    step_to_send[p][i] |= (0x1 << step);
-                }
-                if(set_r){
-                    step_to_recv[p][i] |= (0x1 << step);
-                }
+                if(set_s){step_to_send[p][i] |= (0x1 << step);}
+                if(set_r){step_to_recv[p][i] |= (0x1 << step);}
 #ifdef DEBUG                
                 bitmap_send_merged[i] = set_s;
                 bitmap_recv_merged[i] = set_r;
@@ -1376,8 +1404,6 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         free(bitmap_send[d]);
         free(bitmap_recv[d]);
     }
-    free(bitmap_send);
-    free(bitmap_recv);
 #ifdef DEBUG                    
     free(bitmap_send_merged);
     free(bitmap_recv_merged);
