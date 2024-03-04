@@ -1341,7 +1341,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
             // Combine the per-dimension bitmaps
             uint coord_block[MAX_SUPPORTED_DIMENSIONS];    
             for(size_t i = 0; i < (uint) info->size; i++){
-                getCoordFromId(i, coord_block, info->size, dimensions);
+                retrieve_coord_mapping(coordinates, i, coord_block);
                 char set_s = 1, set_r = 1;
                 for(size_t d = 0; d < dimensions_num; d++){
                     if(coord_peer[d] != coord_mine[d]){
