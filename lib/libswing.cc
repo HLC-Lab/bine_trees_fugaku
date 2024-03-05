@@ -1252,8 +1252,6 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
             }
         }
     }
-    // I will never send my data
-    bitmap_send[rank] = 0;
 }
 
 
@@ -1319,10 +1317,18 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                 memset(bitmap_send[d], 0, sizeof(char)*dimensions[d]);
                 memset(bitmap_recv[d], 0, sizeof(char)*dimensions[d]);
 
-                // We skip dimension d if we are already beyond this step, or if we are done with that dimension.
-                if(next_step_per_dim[d] > rel_step || next_step_per_dim[d] >= info->num_steps_per_dim[d]){
-                    continue;
+                // To deal with the case where I don't move in that dimension.
+                // e.g. if I send on the row dimension to a node with ID 0001,
+                // (i.e., I send on the first step on the row, and never on the column (00))
+                if(k){
+                    bitmap_send[d][coord_mine[d]] = 1;
+                    bitmap_recv[d][coord_peer[d]] = 1;
                 }
+                                
+                // We skip dimension d if we are done with that dimension.
+                if(next_step_per_dim[d] >= info->num_steps_per_dim[d]){
+                    continue;
+                }     
                             
                 size_t last_step;
                 if(k == 0){
@@ -1331,7 +1337,8 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                     last_step = info->num_steps_per_dim[d];
                 }
 
-                for(size_t sk = rel_step; sk < last_step; sk++){
+                //DPRINTF("[%d] step %d port %d target dim %d rel step %d last step %d\n", info->rank, step, p, d, rel_step, last_step);                
+                for(size_t sk = next_step_per_dim[d]; sk < last_step; sk++){
                     get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], p);
                     get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], p);
                 }
@@ -1341,12 +1348,11 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
             uint coord_block[MAX_SUPPORTED_DIMENSIONS];    
             for(size_t i = 0; i < (uint) info->size; i++){
                 retrieve_coord_mapping(coordinates, i, coord_block);
+                //DPRINTF("[%d] Step %d Peer (%d, %d) Block %d coord (%d,%d) bitmap send (%d,%d)\n", info->rank, step, coord_peer[0], coord_peer[1], i, coord_block[0], coord_block[1], bitmap_send[0][coord_block[0]], bitmap_send[1][coord_block[1]]);
                 char set_s = 1, set_r = 1;
                 for(size_t d = 0; d < dimensions_num; d++){
-                    if(coord_peer[d] != coord_mine[d]){
-                        set_s &= bitmap_send[d][coord_block[d]];
-                        set_r &= bitmap_recv[d][coord_block[d]];
-                    }
+                    set_s &= bitmap_send[d][coord_block[d]];
+                    set_r &= bitmap_recv[d][coord_block[d]];
                 }
                 bitmap_send_merged[p][step][i] = set_s;
                 bitmap_recv_merged[p][step][i] = set_r;
@@ -1360,7 +1366,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
 #ifdef DEBUG                
             DPRINTF("[%d] Step %d Bitmap send: ", info->rank, step);
             for(size_t i = 0; i < (uint) info->size; i++){
-                if(bitmap_send_merged[p][s][i]){
+                if(bitmap_send_merged[p][step][i]){
                     DPRINTF("1");
                 }else{
                     DPRINTF("0");
@@ -1370,7 +1376,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
 
             DPRINTF("[%d] Step %d Bitmap recv: ", info->rank, step);
             for(size_t i = 0; i < (uint) info->size; i++){
-                if(bitmap_recv_merged[p][s][i]){
+                if(bitmap_recv_merged[p][step][i]){
                     DPRINTF("1");
                 }else{
                     DPRINTF("0");
