@@ -1254,13 +1254,13 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
     }
 }
 
-static inline void get_blocks_bitmaps_multid(size_t** next_step_per_dim, size_t* current_d, size_t step,
-                                             size_t port, uint* coordinates, uint** peers_per_port, char** bitmap_send, 
-                                             char** bitmap_recv, char*** bitmap_send_merged, char*** bitmap_recv_merged, 
+static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* current_d, size_t step,
+                                             size_t port, uint* coordinates, uint* peers, char** bitmap_send, 
+                                             char** bitmap_recv, char* bitmap_send_merged, char* bitmap_recv_merged, 
                                              uint* coord_mine, SwingInfo* info){
     uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
     // Get the coordinates of the peer at this step.
-    retrieve_coord_mapping(coordinates, peers_per_port[port][step], coord_peer);
+    retrieve_coord_mapping(coordinates, peers[step], coord_peer);
     
     // Compute the bitmap for each dimension
     for(size_t k = 0; k < dimensions_num; k++){
@@ -1278,19 +1278,19 @@ static inline void get_blocks_bitmaps_multid(size_t** next_step_per_dim, size_t*
         }
                         
         // We skip dimension d if we are done with that dimension.
-        if(next_step_per_dim[port][d] >= info->num_steps_per_dim[d]){
+        if(next_step_per_dim[d] >= info->num_steps_per_dim[d]){
             continue;
         }     
                     
         size_t last_step;
         if(k == 0){
-            last_step = next_step_per_dim[port][d] + 1;
+            last_step = next_step_per_dim[d] + 1;
         }else{
             last_step = info->num_steps_per_dim[d];
         }
 
         //DPRINTF("[%d] step %d port %d target dim %d rel step %d last step %d\n", info->rank, step, p, d, rel_step, last_step);                
-        for(size_t sk = next_step_per_dim[port][d]; sk < last_step; sk++){
+        for(size_t sk = next_step_per_dim[d]; sk < last_step; sk++){
             get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], port);
             get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], port);
         }
@@ -1306,14 +1306,68 @@ static inline void get_blocks_bitmaps_multid(size_t** next_step_per_dim, size_t*
             set_s &= bitmap_send[d][coord_block[d]];
             set_r &= bitmap_recv[d][coord_block[d]];
         }
-        bitmap_send_merged[port][step][i] = set_s;
-        bitmap_recv_merged[port][step][i] = set_r;
+        bitmap_send_merged[i] = set_s;
+        bitmap_recv_merged[i] = set_r;
     }
 
-#ifdef DEBUG                
+    // Move to the next dimension for the next step
+    if(step < (size_t) info->num_steps - 1){
+        size_t d = current_d[port];              
+        // Increase the next step, unless we are done with this dimension
+        if(next_step_per_dim[d] < info->num_steps_per_dim[d]){ 
+            next_step_per_dim[d] += 1;
+        }
+        
+        // Select next dimension
+        do{ 
+            current_d[port] = (current_d[port] + 1) % dimensions_num;
+            d = current_d[port];
+        }while(next_step_per_dim[d] >= info->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
+    }
+}
+
+// Same as the one above, but we compute next_step_per_dim and current_d on the fly so that we do not need to do bookeping
+static inline void get_blocks_bitmaps_multid(size_t step, size_t port, uint* coordinates, uint* peers, 
+                                             char* bitmap_send_merged, char* bitmap_recv_merged, 
+                                             uint* coord_mine, SwingInfo* info){
+    size_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    size_t current_d[MAX_SUPPORTED_PORTS];
+    char* bitmap_send[MAX_SUPPORTED_DIMENSIONS];
+    char* bitmap_recv[MAX_SUPPORTED_DIMENSIONS];    
+    for(size_t d = 0; d < dimensions_num; d++){
+        bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
+        bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
+    }
+
+    current_d[port] = port % dimensions_num;
+    memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
+
+    for(size_t i = 0; i < step; i++){
+        // Move to the next dimension for the next step
+        size_t d = current_d[port];              
+        // Increase the next step, unless we are done with this dimension
+        if(next_step_per_dim[d] < info->num_steps_per_dim[d]){ 
+            next_step_per_dim[d] += 1;
+        }
+        
+        // Select next dimension
+        do{ 
+            current_d[port] = (current_d[port] + 1) % dimensions_num;
+            d = current_d[port];
+        }while(next_step_per_dim[d] >= info->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
+    }
+    //DPRINTF("[%d] Going to do step %d on dim %d rel %d\n", info->rank, step, current_d[port], next_step_per_dim[current_d[port]]);    
+    get_blocks_bitmaps_multid(next_step_per_dim, current_d, step, port, coordinates, peers, bitmap_send, bitmap_recv, bitmap_send_merged, bitmap_recv_merged, coord_mine, info);
+    for(size_t d = 0; d < dimensions_num; d++){
+        free(bitmap_send[d]);
+        free(bitmap_recv[d]);   
+    }
+}
+
+static void print_bitmaps(SwingInfo* info, size_t step, char* bitmap_send_merged, char* bitmap_recv_merged){          
     DPRINTF("[%d] Step %d Bitmap send: ", info->rank, step);
     for(size_t i = 0; i < (uint) info->size; i++){
-        if(bitmap_send_merged[port][step][i]){
+        if(bitmap_send_merged[i]){
             DPRINTF("1");
         }else{
             DPRINTF("0");
@@ -1323,29 +1377,65 @@ static inline void get_blocks_bitmaps_multid(size_t** next_step_per_dim, size_t*
 
     DPRINTF("[%d] Step %d Bitmap recv: ", info->rank, step);
     for(size_t i = 0; i < (uint) info->size; i++){
-        if(bitmap_recv_merged[port][step][i]){
+        if(bitmap_recv_merged[i]){
             DPRINTF("1");
         }else{
             DPRINTF("0");
         }
     }
     DPRINTF("\n");
-#endif  
-    // Move to the next dimension for the next step
-    if(step < (size_t) info->num_steps - 1){
-        size_t d = current_d[port];              
-        // Increase the next step, unless we are done with this dimension
-        if(next_step_per_dim[port][d] < info->num_steps_per_dim[d]){ 
-            next_step_per_dim[port][d] += 1;
-        }
+}
+
+static void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
+                  int step, size_t port, int simrank, uint* coordinates, SwingInfo* info){
+    if(nodes.size() < 2){ // Needed for cases with non-power of two sizes (e.g., 6x6)
+        return;
+    }else if(nodes.size() == 2){
+        blocks_remapping[nodes[0]] = start_range;
+        blocks_remapping[nodes[1]] = end_range - 1;
+        assert(end_range == start_range + 2);
+    }else{
+        // Find two partitions of node that talk with each other. If I have n nodes, 
+        // if I see what happens in next step, I have two disjoint sets of nodes.
         
-        // Select next dimension
-        do{ 
-            current_d[port] = (current_d[port] + 1) % dimensions_num;
-            d = current_d[port];
-        }while(next_step_per_dim[port][d] >= info->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
+        char* my_bitmap_send = (char*) malloc(sizeof(char)*info->size);
+        char* my_bitmap_recv = (char*) malloc(sizeof(char)*info->size);
+        char* peer_bitmap_send = (char*) malloc(sizeof(char)*info->size);
+        char* peer_bitmap_recv = (char*) malloc(sizeof(char)*info->size);
+
+        uint* my_peers = (uint*) malloc(sizeof(uint)*info->num_steps);
+        compute_peers(my_peers, port, info->num_steps, simrank, coordinates);
+        uint coord_mine[MAX_SUPPORTED_DIMENSIONS];
+        getCoordFromId(simrank, coord_mine, info->size, dimensions);
+        get_blocks_bitmaps_multid(step, port, coordinates, my_peers, my_bitmap_send, my_bitmap_recv, coord_mine, info);
+
+        uint* peer_peers = (uint*) malloc(sizeof(uint)*info->num_steps);
+        compute_peers(peer_peers, port, info->num_steps, simrank, coordinates);
+
+        std::vector<int> left, right;
+        for(auto n : nodes){
+            if(my_bitmap_send[n] == 0){
+                left.push_back(n);
+            }else{
+                right.push_back(n);
+            }
+        }
+
+        DPRINTF("[%d] step %d NODESIZE %d %d\n", info->rank, step, left.size(), right.size());
+
+        free(my_bitmap_send);
+        free(my_bitmap_recv);
+        free(peer_bitmap_send);
+        free(peer_bitmap_recv);        
+
+        remap(left , start_range             , start_range + left.size(), blocks_remapping, step + 1, port, simrank         , coordinates, info);
+        remap(right, end_range - right.size(), end_range                , blocks_remapping, step + 1, port, peer_peers[step], coordinates, info);
+        
+        free(peer_peers);
+        free(my_peers);
     }
 }
+
 
 static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info){    
     int res;
@@ -1371,7 +1461,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     char** bitmap_recv_merged[MAX_SUPPORTED_PORTS];
     char* bitmap_ready[MAX_SUPPORTED_PORTS]; // For each port and step, if 1, the send/recv bitmaps have been already computed.
     size_t current_d[MAX_SUPPORTED_PORTS]; // For each port, what's the current dimension we are sending in.
-    size_t* next_step_per_dim[MAX_SUPPORTED_PORTS]; // For each port and for each dimension, what's the next step to execute in that dimension.      
+    size_t next_step_per_dim[MAX_SUPPORTED_PORTS][MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.      
     
     for(size_t d = 0; d < dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
@@ -1382,8 +1472,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         bitmap_ready[p] = (char*) malloc(sizeof(char)*info->num_steps);
         memset(bitmap_ready[p], 0, sizeof(char)*info->num_steps);        
         bitmap_send_merged[p] = (char**) malloc(sizeof(char*)*info->num_steps);
-        bitmap_recv_merged[p] = (char**) malloc(sizeof(char*)*info->num_steps);                        
-        next_step_per_dim[p] = (size_t*) malloc(sizeof(size_t)*dimensions_num);        
+        bitmap_recv_merged[p] = (char**) malloc(sizeof(char*)*info->num_steps);                                
     }
 
     /********************/
@@ -1393,6 +1482,20 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     ChunkInfo* req_idx_to_block_idx = (ChunkInfo*) malloc(sizeof(ChunkInfo)*info->size*MAX_SUPPORTED_PORTS);
+
+
+    /*************/
+    /* REMAPPING */
+    /*************/
+    uint* remapping_per_port[MAX_SUPPORTED_PORTS];
+    for(size_t p = 0; p < info->num_ports; p++){
+        std::vector<int> nodes;
+        for(size_t n = 0; n < info->size; n++){
+            nodes.push_back(n);
+        }
+        remapping_per_port[p] = (uint*) malloc(sizeof(uint)*info->size);              
+        remap(nodes, 0, info->size, remapping_per_port[p], 0, p, 0, coordinates, info);
+    }
     
     /******************/
     /* Reduce-scatter */
@@ -1411,8 +1514,26 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
                 if(!bitmap_ready[p][step]){
                     bitmap_send_merged[p][step] = (char*) malloc(sizeof(char)*info->size);
                     bitmap_recv_merged[p][step] = (char*) malloc(sizeof(char)*info->size);
-                    get_blocks_bitmaps_multid(next_step_per_dim, current_d, step, p, coordinates, peers_per_port, bitmap_send, bitmap_recv, bitmap_send_merged, bitmap_recv_merged, coord_mine, info);
+                    
+                    get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, peers_per_port[p], bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], coord_mine, info);
                     bitmap_ready[p][step] = 1;
+
+                    // Remapping
+                    char* tmp_s = (char*) malloc(sizeof(char)*info->size);
+                    char* tmp_r = (char*) malloc(sizeof(char)*info->size);
+                    memcpy(tmp_s, bitmap_send_merged[p][step], sizeof(char)*info->size);
+                    memcpy(tmp_r, bitmap_recv_merged[p][step], sizeof(char)*info->size);
+                    for(size_t i = 0; i < (uint) info->size; i++){
+                        DPRINTF("[%d] Remapping %d to %d\n", info->rank, i, remapping_per_port[p][i]);
+                        bitmap_send_merged[p][step][remapping_per_port[p][i]] = tmp_s[i];
+                        bitmap_recv_merged[p][step][remapping_per_port[p][i]] = tmp_r[i];
+                    }
+                    free(tmp_s);
+                    free(tmp_r);
+
+#ifdef DEBUG
+                    print_bitmaps(info, step, bitmap_send_merged[p][step], bitmap_recv_merged[p][step]);
+#endif
                 }
             }
 
@@ -1452,6 +1573,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         free(bitmap_send_merged[p]);
         free(bitmap_recv_merged[p]);
         free(peers_per_port[p]);
+        free(remapping_per_port[p]); 
     }
     free(peers_per_port);  
     for(size_t d = 0; d < dimensions_num; d++){
