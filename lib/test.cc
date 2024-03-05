@@ -56,10 +56,10 @@ int main(int argc, char** argv){
 #endif
 
 #ifdef PROFILE
-    const char* algos[1] = {"SWING_B"};
+    const char* algos[1] = {"SWING_B_CONT"};
 #else
     //const char* algos[5] = {"SWING_L", "SWING_B", "RING", "RECDOUB_L", "RECDOUB_B"};
-    const char* algos[2] = {"SWING_L", "SWING_B"};
+    const char* algos[2] = {"SWING_L", "SWING_B_CONT"};
 #endif
     for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
         std::cout << "Running " << algos[algo] << std::endl;
