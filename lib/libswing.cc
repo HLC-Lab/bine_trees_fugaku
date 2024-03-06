@@ -1423,15 +1423,8 @@ static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* 
             //printf("[%d] Called with %d %d %d %d\n", info->rank, d, port, coord_mine[d], sk);
             //printf("[%d] Called with %d %d %d %d\n", info->rank, d, port, coord_peer[d], sk);
 
-            // Plain collectives
-            if(port < dimensions_num){
-                get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], port);
-                get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], port);
-            }else{
-                // On mirrored collectives, the direction of the communication is inverted
-                // I.e., this is equivalent to running the collectives of an odd rank if even, and viceversa
-                ;
-            }
+            get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], port);
+            get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], port);
         }
     }
 
