@@ -44,6 +44,7 @@ typedef enum{
     ALGO_DEFAULT = 0,
     ALGO_SWING_L,
     ALGO_SWING_B,
+    ALGO_SWING_B_COALESCE,
     ALGO_SWING_B_CONT,
     ALGO_RING,
     ALGO_RECDOUB_L,
@@ -132,6 +133,8 @@ static inline void read_env(MPI_Comm comm){
                 algo = ALGO_SWING_L;
             }else if(strcmp(env_str, "SWING_B") == 0){
                 algo = ALGO_SWING_B;
+            }else if(strcmp(env_str, "SWING_B_COALESCE") == 0){
+                algo = ALGO_SWING_B_COALESCE;
             }else if(strcmp(env_str, "SWING_B_CONT") == 0){
                 algo = ALGO_SWING_B_CONT;
             }else if(strcmp(env_str, "RING") == 0){
@@ -1246,7 +1249,7 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, size_t count, size_t chunk
 
     if(algo == ALGO_SWING_B){
         return swing_coll_sendrecv_bbb(buf, rbuf, count, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
-    }else if(algo == ALGO_SWING_B_CONT){
+    }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
         return swing_coll_sendrecv_cont(buf, rbuf, count, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else{
         assert("Unknown algo" == 0);
@@ -1545,11 +1548,7 @@ static void get_peer(uint* coord_rank, size_t step, size_t port, SwingInfo* info
         }while(next_step_per_dim[d] >= info->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
     }
     size_t distance = rhos[next_step_per_dim[current_d]];
-    // Flip the sign for odd nodes
-    if(is_odd(coord_rank[current_d])){distance *= -1;}
-    // Mirrored collectives
-    if((uint) port >= dimensions_num){distance *= -1;}
-
+    distance *= get_distance_sign(coord_rank[current_d], port);
     coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
 }
 
@@ -1870,7 +1869,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         // Call the algo
         if(algo == ALGO_SWING_L){ // Swing_l
             return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, &info);
-        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT){ // Swing_b
+        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){ // Swing_b
             return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, &info);
         }else if(algo == ALGO_RING){ // Ring
             // TODO: Implement multiported ring
