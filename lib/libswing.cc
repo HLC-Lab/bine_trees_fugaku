@@ -1553,9 +1553,11 @@ static void get_peer(uint* coord_rank, size_t step, size_t port, SwingInfo* info
     coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
 }
 
+// We pass bitmap_tmp as a parameter only to avoid allocating/deallocating it at each call.
+// Otherwise, it could be local to a call (it is just needed to transform the bitmap into the vector of corresponding nodes).
 static void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
                   int step, size_t port, uint* coord_rank, uint* coordinates, int*** reference_valid_distances,
-                  uint** num_valid_distances, SwingInfo* info){
+                  uint** num_valid_distances, char* bitmap_tmp, SwingInfo* info){
     if(nodes.size() < 2){ // Needed for cases with non-power of two sizes (e.g., 6x6)
         return;
     }else if(nodes.size() == 2){
@@ -1564,18 +1566,16 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
         assert(end_range == start_range + 2);
     }else{
         // Find two partitions of node that talk with each other. If I have n nodes, 
-        // if I see what happens in next step, I have two disjoint sets of nodes.
-        char* my_bitmap_send = (char*) malloc(sizeof(char)*info->size);        
-        
+        // if I see what happens in next step, I have two disjoint sets of nodes.        
         uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
         get_peer(coord_rank, step, port, info, coord_peer);
-        get_blocks_bitmaps_multid(step, port, coordinates, coord_peer, my_bitmap_send, NULL, coord_rank, reference_valid_distances, num_valid_distances, info);
+        get_blocks_bitmaps_multid(step, port, coordinates, coord_peer, bitmap_tmp, NULL, coord_rank, reference_valid_distances, num_valid_distances, info);
 
         std::vector<int> left, right;
         left.reserve(info->size);
         right.reserve(info->size);
         for(auto n : nodes){
-            if(my_bitmap_send[n] == 0){
+            if(bitmap_tmp[n] == 0){
                 left.push_back(n);
             }else{
                 right.push_back(n);
@@ -1584,10 +1584,8 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
 
         DPRINTF("[%d] step %d NODESIZE %d %d\n", info->rank, step, left.size(), right.size());        
 
-        remap(left , start_range             , start_range + left.size(), blocks_remapping, step + 1, port, coord_rank, coordinates, reference_valid_distances, num_valid_distances, info);
-        remap(right, end_range - right.size(), end_range                , blocks_remapping, step + 1, port, coord_peer, coordinates, reference_valid_distances, num_valid_distances, info);
-        
-        free(my_bitmap_send);
+        remap(left , start_range             , start_range + left.size(), blocks_remapping, step + 1, port, coord_rank, coordinates, reference_valid_distances, num_valid_distances, bitmap_tmp, info);
+        remap(right, end_range - right.size(), end_range                , blocks_remapping, step + 1, port, coord_peer, coordinates, reference_valid_distances, num_valid_distances, bitmap_tmp, info);
     }
 }
 
@@ -1700,15 +1698,15 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         std::vector<int> nodes(info->size);
         uint coord_zero[MAX_SUPPORTED_DIMENSIONS];
         memset(coord_zero, 0, sizeof(uint)*dimensions_num);
-        for(size_t n = 0; n < (size_t) info->size; n++){nodes[n] = n;}
-        for(size_t p = 0; p < info->num_ports; p++){
-            remapping_per_port[p] = (uint*) malloc(sizeof(uint)*info->size);              
-            remap(nodes, 0, info->size, remapping_per_port[p], 0, p, coord_zero, coordinates, reference_valid_distances, num_valid_distances, info);
-        }
-    }
-    if(algo == ALGO_SWING_B_CONT){
+        char* bitmap_tmp = (char*) malloc(sizeof(char)*info->size);        
         tmp_s = (char*) malloc(sizeof(char)*info->size);
         tmp_r = (char*) malloc(sizeof(char)*info->size);
+        for(size_t n = 0; n < (size_t) info->size; n++){nodes[n] = n;}
+        for(size_t p = 0; p < info->num_ports; p++){
+            remapping_per_port[p] = (uint*) malloc(sizeof(uint)*info->size);                          
+            remap(nodes, 0, info->size, remapping_per_port[p], 0, p, coord_zero, coordinates, reference_valid_distances, num_valid_distances, bitmap_tmp, info);            
+        }
+        free(bitmap_tmp);
     }
     
     /******************/
