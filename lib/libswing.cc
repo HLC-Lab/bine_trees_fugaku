@@ -1289,26 +1289,20 @@ static int swing_coll(void *buf, void* rbuf, size_t count, size_t chunk, size_t 
     return swing_coll_wait(buf, rbuf, count, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info);
 }
 
-static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int size, char* bitmap_send, size_t port){
+// Returns an array of valid distances (considering a plain collective on an even node)
+static inline void get_valid_distances(int step, int max_steps, int size, int* valid_distances, uint* num_valid_distances){
     size_t max_num_blocks = pow(2, (max_steps - step - 1));
+    *num_valid_distances = 0;
     // Generate all binary strings with a 0 in position step+1 and a 1 in all the bits in position j (j <= step)
     for(size_t i = 0; i < max_num_blocks; i++){
         if(!(i & 0x1)){ // Only if it has a 0 as LSB (we generate in one shot bot the string with LSB=0 and that with LSB=1)         
             int nbin[2]; // At position 0, we have the numbers with 0 as LSB, at position 1, the numbers with 1 as LSB
             nbin[1] = (i << (step + 1)) | ((1 << (step + 1)) - 1); // LSB=1
             nbin[0] = ~nbin[1]          & ((1 <<  max_steps) - 1); // LSB=0
-
-            // If mirrored collectives, the direction of the communication are inverted
-            // It is thus enough to invert nbin_1 and nbin_0
-            if(port >= dimensions_num){
-                int tmp = nbin[1];
-                nbin[1] = nbin[0];
-                nbin[0] = tmp;
-            }
             
             int distance[2] = {negabinary_to_binary(nbin[0]),  // At position 0, we have the numbers with 0 as LSB, 
                                negabinary_to_binary(nbin[1])}; // at position 1, the numbers with 1 as LSB.
-            char distance_valid[2] = {1, 1};
+            char distance_valid_tmp[2] = {1, 1};
             if(!is_power_of_two(size)){ // If size is not a power of two, I need to check for alternative ways of reaching a given distance, to avoid reaching it twice
                 for(size_t q = 0; q < 2; q++){                                     
                     // We know that the distance, when size is not a power of two, can be in the range (-2*size, 2*size)
@@ -1337,7 +1331,7 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
                         assert(distance[q] >= -2*size && distance[q] <= 2*size);
                         assert(distance[q] % size == 0);
 #endif                        
-                        distance_valid[q] = 0;
+                        distance_valid_tmp[q] = 0;
                         continue;
                     }
 
@@ -1346,8 +1340,7 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
                             int nbin_alt = binary_to_negabinary(alternatives[k]);
                             int first_step_alt = get_first_step(nbin_alt);
                             if(first_step_alt != step && first_step_alt > get_first_step(nbin[q])){
-                                DPRINTF("[%d] Step %d I am skipping block at distance %d %d, I am going to send at step %d (nbin %d %d)\n", rank, step, distance[q], alternatives[k], get_first_step(nbin_alt), nbin[q], nbin_alt);
-                                distance_valid[q] = 0;
+                                distance_valid_tmp[q] = 0;
                                 break;
                             }
                         }
@@ -1357,40 +1350,39 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
                 // I still need to check that distance[q] % size != 0
                 for(size_t q = 0; q < 2; q++){ 
                     if(mod(distance[q], size) == 0){
-                        distance_valid[q] = 0;
+                        distance_valid_tmp[q] = 0;
                     }
                 }
             }
 
-            if(is_odd(rank)){ // Odd rank
-                // Sum r to all the strings with LSB=0                
-                if(distance_valid[0]){
-                    bitmap_send[mod(rank + distance[0], size)] = 1; 
-                }
-                
-                // Subtract from r all the strings with LSB=1
-                if(distance_valid[1]){
-                    bitmap_send[mod(rank - distance[1], size)] = 1; 
-                }
-            }else{ // Even rank
-                // Subtract form r all the strings with LSB=0
-                if(distance_valid[0]){
-                    bitmap_send[mod(rank - distance[0], size)] = 1;
-                }
-
-                // Sum r to all the strings with LSB=1
-                if(distance_valid[1]){
-                    bitmap_send[mod(rank + distance[1], size)] = 1;
-                }
+            if(distance_valid_tmp[0]){
+                valid_distances[*num_valid_distances] = -distance[0]; // Subtract form r all the strings with LSB=0
+                (*num_valid_distances)++;
             }
+
+            if(distance_valid_tmp[1]){
+                valid_distances[*num_valid_distances] = +distance[1]; // Sum to r all the strings with LSB=1
+                (*num_valid_distances)++;
+            }            
         }
     }
+}
+
+static inline int get_distance_sign(size_t rank, size_t port){
+    int multiplier = 1;
+    if(is_odd(rank)){ // Invert sign if odd rank
+        multiplier *= -1;
+    }
+    if(port >= dimensions_num){ // Invert sign if mirrored collective
+        multiplier *= -1;     
+    }
+    return multiplier;
 }
 
 static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* current_d, size_t step,
                                              size_t port, uint* coordinates, uint* coord_peer, char** bitmap_send, 
                                              char** bitmap_recv, char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                             uint* coord_mine, SwingInfo* info){    
+                                             uint* coord_mine, int*** reference_valid_distances, uint** num_valid_distances, SwingInfo* info){    
     // Compute the bitmap for each dimension
     for(size_t k = 0; k < dimensions_num; k++){
         size_t d = (k + current_d[port]) % dimensions_num;
@@ -1419,12 +1411,19 @@ static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* 
         }
 
         //DPRINTF("[%d] step %d port %d target dim %d rel step %d last step %d\n", info->rank, step, p, d, rel_step, last_step);                
+        int sign_mine = get_distance_sign(coord_mine[d], port);
+        int sign_peer = get_distance_sign(coord_peer[d], port);
         for(size_t sk = next_step_per_dim[d]; sk < last_step; sk++){
-            //printf("[%d] Called with %d %d %d %d\n", info->rank, d, port, coord_mine[d], sk);
-            //printf("[%d] Called with %d %d %d %d\n", info->rank, d, port, coord_peer[d], sk);
-
-            get_blocks_bitmaps(coord_mine[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_send[d], port);
-            get_blocks_bitmaps(coord_peer[d], sk, info->num_steps_per_dim[d], dimensions[d], bitmap_recv[d], port);
+            // Compute bitmaps for coord_mine and coord_peer. 
+            // I just need to adjust the distance according to the port 
+            // and oddness of the node (reflected in the sign variables).
+            for(size_t i = 0; i < (uint) num_valid_distances[d][sk]; i++){
+                int distance = reference_valid_distances[d][sk][i];
+                int distance_mine = sign_mine*distance;
+                int distance_peer = sign_peer*distance;
+                bitmap_send[d][mod(coord_mine[d] + distance_mine, dimensions[d])] = 1;
+                bitmap_recv[d][mod(coord_peer[d] + distance_peer, dimensions[d])] = 1;
+            }
         }
     }
 
@@ -1467,7 +1466,7 @@ static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* 
 // Same as the one above, but we compute next_step_per_dim and current_d on the fly so that we do not need to do bookeping
 static inline void get_blocks_bitmaps_multid(size_t step, size_t port, uint* coordinates, uint* coord_peer, 
                                              char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                             uint* coord_mine, SwingInfo* info){
+                                             uint* coord_mine, int*** reference_valid_distances, uint** num_valid_distances, SwingInfo* info){
     size_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
     size_t current_d[MAX_SUPPORTED_PORTS];
     char* bitmap_send[MAX_SUPPORTED_DIMENSIONS];
@@ -1495,7 +1494,7 @@ static inline void get_blocks_bitmaps_multid(size_t step, size_t port, uint* coo
         }while(next_step_per_dim[d] >= info->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
     }
     //DPRINTF("[%d] Going to do step %d on dim %d rel %d\n", info->rank, step, current_d[port], next_step_per_dim[current_d[port]]);    
-    get_blocks_bitmaps_multid(next_step_per_dim, current_d, step, port, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged, bitmap_recv_merged, coord_mine, info);
+    get_blocks_bitmaps_multid(next_step_per_dim, current_d, step, port, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged, bitmap_recv_merged, coord_mine, reference_valid_distances, num_valid_distances, info);
     for(size_t d = 0; d < dimensions_num; d++){
         free(bitmap_send[d]);
         free(bitmap_recv[d]);   
@@ -1555,7 +1554,8 @@ static void get_peer(uint* coord_rank, size_t step, size_t port, SwingInfo* info
 }
 
 static void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
-                  int step, size_t port, uint* coord_rank, uint* coordinates, SwingInfo* info){
+                  int step, size_t port, uint* coord_rank, uint* coordinates, int*** reference_valid_distances,
+                  uint** num_valid_distances, SwingInfo* info){
     if(nodes.size() < 2){ // Needed for cases with non-power of two sizes (e.g., 6x6)
         return;
     }else if(nodes.size() == 2){
@@ -1569,7 +1569,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
         
         uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
         get_peer(coord_rank, step, port, info, coord_peer);
-        get_blocks_bitmaps_multid(step, port, coordinates, coord_peer, my_bitmap_send, NULL, coord_rank, info);
+        get_blocks_bitmaps_multid(step, port, coordinates, coord_peer, my_bitmap_send, NULL, coord_rank, reference_valid_distances, num_valid_distances, info);
 
         std::vector<int> left, right;
         left.reserve(info->size);
@@ -1584,8 +1584,8 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
 
         DPRINTF("[%d] step %d NODESIZE %d %d\n", info->rank, step, left.size(), right.size());        
 
-        remap(left , start_range             , start_range + left.size(), blocks_remapping, step + 1, port, coord_rank, coordinates, info);
-        remap(right, end_range - right.size(), end_range                , blocks_remapping, step + 1, port, coord_peer, coordinates, info);
+        remap(left , start_range             , start_range + left.size(), blocks_remapping, step + 1, port, coord_rank, coordinates, reference_valid_distances, num_valid_distances, info);
+        remap(right, end_range - right.size(), end_range                , blocks_remapping, step + 1, port, coord_peer, coordinates, reference_valid_distances, num_valid_distances, info);
         
         free(my_bitmap_send);
     }
@@ -1593,7 +1593,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
 
 static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinates, uint** peers_per_port, char** bitmap_ready, char** bitmap_send, char** bitmap_recv,
                                    size_t next_step_per_dim[MAX_SUPPORTED_PORTS][MAX_SUPPORTED_DIMENSIONS], size_t* current_d, uint* coord_mine, uint** remapping_per_port, char* tmp_s, char* tmp_r,
-                                   char*** bitmap_send_merged, char*** bitmap_recv_merged){
+                                   char*** bitmap_send_merged, char*** bitmap_recv_merged, int*** reference_valid_distances, uint** num_valid_distances){
     for(size_t p = 0; p < info->num_ports; p++){                
         // Compute bitmaps of blocks to send and receive (we do not need to do this for allgather since bitmap_ready would always be 1)
         if(!bitmap_ready[p][step]){
@@ -1603,7 +1603,7 @@ static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinat
             uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
             retrieve_coord_mapping(coordinates, peers_per_port[p][step], coord_peer);
 
-            get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], coord_mine, info);
+            get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], coord_mine, reference_valid_distances, num_valid_distances, info);
             bitmap_ready[p][step] = 1;
 
             // Remapping
@@ -1650,10 +1650,15 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     size_t current_d[MAX_SUPPORTED_PORTS]; // For each port, what's the current dimension we are sending in.
     size_t next_step_per_dim[MAX_SUPPORTED_PORTS][MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
     char *tmp_s = NULL, *tmp_r = NULL;
+    int** reference_valid_distances[MAX_SUPPORTED_DIMENSIONS];
+    uint* num_valid_distances[MAX_SUPPORTED_DIMENSIONS];
     
     for(size_t d = 0; d < dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
         bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
+        reference_valid_distances[d] = (int**) malloc(sizeof(int*)*info->num_steps);
+        memset(reference_valid_distances[d], 0, sizeof(int*)*info->num_steps);
+        num_valid_distances[d] = (uint*) malloc(sizeof(uint)*info->num_steps);
     }
 
     for(size_t p = 0; p < info->num_ports; p++){
@@ -1662,6 +1667,20 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         bitmap_send_merged[p] = (char**) malloc(sizeof(char*)*info->num_steps);
         bitmap_recv_merged[p] = (char**) malloc(sizeof(char*)*info->num_steps);                                
     }
+
+    /*************************/
+    /* Distances calculation */
+    /*************************/
+    // For each dimension, and each step (relative to that dimension), 
+    // we compute all the valid distances at that step (considering a plain collective on an even node)
+    for(size_t d = 0; d < dimensions_num; d++){
+        for(size_t sk = 0; sk < (uint) info->num_steps; sk++){
+            reference_valid_distances[d][sk] = (int*) malloc(sizeof(int)*info->size);
+            get_valid_distances(sk, info->num_steps_per_dim[d], dimensions[d], reference_valid_distances[d][sk], &num_valid_distances[d][sk]);
+        }
+    }
+
+
 
     /********************/
     /** Send/Recv part **/
@@ -1684,7 +1703,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         for(size_t n = 0; n < (size_t) info->size; n++){nodes[n] = n;}
         for(size_t p = 0; p < info->num_ports; p++){
             remapping_per_port[p] = (uint*) malloc(sizeof(uint)*info->size);              
-            remap(nodes, 0, info->size, remapping_per_port[p], 0, p, coord_zero, coordinates, info);
+            remap(nodes, 0, info->size, remapping_per_port[p], 0, p, coord_zero, coordinates, reference_valid_distances, num_valid_distances, info);
         }
     }
     if(algo == ALGO_SWING_B_CONT){
@@ -1703,7 +1722,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
         }
 
         // Compute bitmaps needed to execute next step (step 0)
-        compute_bitmaps(info, 0, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged);
+        compute_bitmaps(info, 0, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
 
         for(size_t step = 0; step < num_steps; step++){        
             // Run reduce-scatter
@@ -1717,7 +1736,7 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
             // While communicating, compute bitmaps needed to execute next step
             // We do not need to do the same for allgather since they have already been computed here
             if(step != num_steps - 1){
-                compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged);
+                compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
             }
             // End overlap
 
@@ -1762,6 +1781,11 @@ static inline int MPI_Allreduce_bw_optimal_swing(const void *sendbuf, void *recv
     for(size_t d = 0; d < dimensions_num; d++){
         free(bitmap_send[d]);
         free(bitmap_recv[d]);
+        for(size_t i = 0; i < info->num_steps_per_dim[d]; i++){
+            free(reference_valid_distances[d][i]);
+        }
+        free(reference_valid_distances[d]);
+        free(num_valid_distances[d]);
     }
     if(tmp_s){free(tmp_s);}
     if(tmp_r){free(tmp_r);}
