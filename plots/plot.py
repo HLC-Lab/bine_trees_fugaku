@@ -29,6 +29,8 @@ algo_names["lat_old_CONT"] = "Swing Old (L) - C"
 algo_names["bw_old_CONT"] = "Swing Old (B) - C"
 algo_names["lat"] = "Swing (L)"
 algo_names["bw"] = "Swing (B)"
+algo_names["bw_cont"] = "Swing (B - CONT)"
+algo_names["bw_coalesce"] = "Swing (B - COAL)"
 algo_names["recdoub_l"] = "RecDoub (L)"
 algo_names["recdoub_b"] = "RecDoub (B)"
 
@@ -42,7 +44,7 @@ algos_sota = ["recdoub_l", "recdoub_b", "ring"]
 if add_default:
     algos_sota = ["default"] + algos_sota
 #algos_swing = ["bw_BBBN", "lat_old_CONT", "bw_old_CONT"]
-algos_swing = ["lat", "bw"]
+algos_swing = ["lat", "bw", "bw_cont", "bw_coalesce"]
 algos = algos_sota + algos_swing # ATTENTION! SWING MUST ALWAYS COME AFTER SOTA FOR THE SCRIPT TO WORK CORRECTLY
 
 best_algo = {}
@@ -75,8 +77,10 @@ def plot(arch, p):
                 if len(data_real) == 0:                    
                     continue
                 data_real = data_real.loc[:, ~data_real.columns.str.contains('^Unnamed')]
-
-
+                colnames_ranks = []
+                for r in range(p):
+                    colnames_ranks += ["Rank" + str(r) + "Time(us)"]
+                data_real = data_real.astype(float)
                 data_real["Time (us)"] = data_real[colnames_ranks].max(axis=1)
                 data_real["System"] = arch
                 data_real["Nodes"] = p
@@ -187,10 +191,10 @@ ps["daint_sameswitch"] = [4]
 ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
 ps["leonardo"] = [32]
-ps["lumi"] = [16, 62, 64]
+ps["lumi"] = [14, 16]
 
 #archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
-archs = ["leonardo", "lumi"]
+archs = ["lumi"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:

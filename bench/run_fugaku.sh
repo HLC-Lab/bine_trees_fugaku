@@ -48,12 +48,16 @@ do
             iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
-        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
+        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
         # Run bandwidth optimal and lat optimal swing
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_multiport.csv
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_multiport.csv
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench VOID ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat_multiport.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_multiport.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce_multiport.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont_multiport.csv
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv
         echo " ${GREEN}[Done]${NC}"
     done
 done
