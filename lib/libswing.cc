@@ -674,7 +674,7 @@ static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI
                   datatype, recv_from, TAG_SWING_ALLREDUCE, MPI_COMM_WORLD, &recv_req);
 
         MPI_Send(segment_send, segment_sizes[send_chunk],
-                MPI_FLOAT, send_to, TAG_SWING_ALLREDUCE, MPI_COMM_WORLD);
+                datatype, send_to, TAG_SWING_ALLREDUCE, MPI_COMM_WORLD);
 
         char *segment_update = &(((char*)recvbuf)[dtsize*segment_ends[recv_chunk] - dtsize*segment_sizes[recv_chunk]]);
 
@@ -1076,10 +1076,12 @@ static inline int get_first_step(uint32_t block_distance){
     }
 }
 
+/*
 static inline int get_last_step(uint32_t block_distance){
     // The last step is the position of the most significant bit.
     return 32 - clz(block_distance) - 1;
 }
+*/
 
 static int swing_coll_sendrecv_bbb(void *buf, void* rbuf, size_t count, size_t chunk, size_t step, 
                               MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, ChunkInfo* req_idx_to_block_idx,
@@ -1199,7 +1201,7 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, size_t count, size_t 
                 }
                 count_s += block_count;
             }
-            if(start_found_s && (!send_block || i == info->size - 1)){ // The train of consecutive blocks is over
+            if(start_found_s && (!send_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
                 DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
                 res = MPI_Isend(((char*) buf) + offset_s, count_s, sendtype, peer, tag, comm, &(requests_s[*num_requests_s]));
                 (*num_requests_s)++;
@@ -1219,7 +1221,7 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, size_t count, size_t 
                 }
                 count_r += block_count;
             }            
-            if(start_found_r && (!recv_block || i == info->size - 1)){ // The train of consecutive blocks is over
+            if(start_found_r && (!recv_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
                 DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
                 req_idx_to_block_idx[*num_requests_r].offset = offset_r;
                 req_idx_to_block_idx[*num_requests_r].count = count_r;
@@ -1250,6 +1252,7 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, size_t count, size_t chunk
         return swing_coll_sendrecv_cont(buf, rbuf, count, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else{
         assert("Unknown algo" == 0);
+        return MPI_ERR_OTHER;
     }
 }
 
@@ -1308,9 +1311,6 @@ static inline void get_blocks_bitmaps(int rank, int step, int max_steps, int siz
 
             int distance[2] = {negabinary_to_binary(nbin[0]),  // At position 0, we have the numbers with 0 as LSB, 
                                negabinary_to_binary(nbin[1])}; // at position 1, the numbers with 1 as LSB.
-
-            DPRINTF("[%d] distancee (%d %d) (nbin: %d %d)\n", rank, distance[0], distance[1], nbin[0], nbin[1]);
-
             char distance_valid[2] = {1, 1};
             for(size_t q = 0; q < 2; q++){
                 // A rank never sends its data in reduce-scatter.
