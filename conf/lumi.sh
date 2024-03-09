@@ -1,5 +1,5 @@
 MPIRUN="srun" # Command for running MPI applications
-MPIRUN_MAP_BY_NODE_FLAG="" # Flag to force ranks to be mapped by node (on this system we do it with "export MPICH_RANK_REORDER_METHOD=0" -- see below)
+MPIRUN_MAP_BY_NODE_FLAG="--cpu-bind=map_cpu=57,25,9,41,49,17,1,33" 
 MPIRUN_ADDITIONAL_FLAGS=""    # Any additional flag that must be used by mpirun
 MPI_COMPILER=CC # MPI Compiler
 EBB=""
