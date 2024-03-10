@@ -1873,16 +1873,19 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             return MPI_Allreduce_bw_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, &info);
         }else if(algo == ALGO_RING){ // Ring
             // TODO: Implement multiported ring
+            assert(dimensions_num == 1 && multiport == 0);
             for(size_t i = 0; i < info.num_chunks; i++){
                 return MPI_Allreduce_ring(((char*) sendbuf) + info.chunks[i][0].offset, ((char*) recvbuf) + info.chunks[i][0].offset, info.chunks[i][0].count, datatype, op, comm);
             }
         }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
             // TODO: Implement multiported recdoub b
+            assert(dimensions_num == 1 && multiport == 0);
             for(size_t i = 0; i < info.num_chunks; i++){
                 return MPI_Allreduce_recdoub_b(((char*) sendbuf) + info.chunks[i][0].offset, ((char*) recvbuf) + info.chunks[i][0].offset, info.chunks[i][0].count, datatype, op, comm);
             }
         }else if(algo == ALGO_RECDOUB_L){ // Recdoub_l
             // TODO: Implement multiported recdoub l
+            assert(dimensions_num == 1 && multiport == 0);
             for(size_t i = 0; i < info.num_chunks; i++){
                 return MPI_Allreduce_recdoub_l(((char*) sendbuf) + info.chunks[i][0].offset, ((char*) recvbuf) + info.chunks[i][0].offset, info.chunks[i][0].count, datatype, op, comm);
             }

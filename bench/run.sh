@@ -64,15 +64,19 @@ do
             iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
-        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default.csv
-        LIBSWING_ALGO="RECDOUB_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_l.csv
-        LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv
-        LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv        
-        # Run bandwidth optimal and lat optimal swing        
-        LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
-        LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
-        LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv
-        LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv
+
+        # Run all the default algorithms
+        for DEFAULT_NAME in ${DEFAULT_ALGOS_ALLREDUCE//,/ }
+        do
+            DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f1)
+            ${EXTRA_VARIABLES} ${EXTRA_VARIABLES_DEFAULT} ${DEFAULT_NAME} LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv
+        done
+
+        # Run Swing algorithms
+        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
+        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
+        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv
+        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv
         echo " ${GREEN}[Done]${NC}"
     done
 done

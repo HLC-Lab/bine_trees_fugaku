@@ -19,12 +19,7 @@ int main(int argc, char** argv){
     double* samples = (double*) malloc(sizeof(double)*iterations);
     double* samples_all = NULL;
     long i, r;
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-    if(provided < MPI_THREAD_MULTIPLE){
-        printf("The threading support level is lesser than that demanded.\n");
-        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-    }
+    MPI_Init(&argc, &argv);
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -50,9 +45,18 @@ int main(int argc, char** argv){
     MPI_Type_size(dt, &dtsize);
     char* sendbuf = (char*) malloc(dtsize*count);
     char* recvbuf = (char*) malloc(dtsize*count);
+    char* recvbuf_validation = (char*) malloc(dtsize*count); // To check correctness of results
     if(rank == 0){
         samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
     }
+
+    // Initialize sendbuf with random values
+    srand(time(NULL));
+    for(i = 0; i < dtsize*count; i++){
+        sendbuf[i] = (char) rand();
+    }
+    PMPI_Allreduce(sendbuf, recvbuf_validation, count, dt, op, MPI_COMM_WORLD);
+
     for(i = -warmup; i < iterations; i++){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
@@ -63,6 +67,15 @@ int main(int argc, char** argv){
             samples[i] = ((MPI_Wtime() - start_time)*1000000.0);
         }
     }
+
+    // Check correctness of results
+    for(i = 0; i < dtsize*count; i++){
+        if(recvbuf[i] != recvbuf_validation[i]){
+            fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
+            return 1;
+        }
+    }
+
     MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if(rank == 0){
         printf("#MessageSize ");

@@ -4,6 +4,14 @@ import csv
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+import matplotlib
+from matplotlib import rcParams
+
+
+matplotlib.rc('pdf', fonttype=42) # To avoid issues with camera-ready submission
+sns.set_style("whitegrid")
+#sns.set_context("paper")
+rcParams['figure.figsize'] = 8,4.5
 
 paths = {}
 
@@ -176,7 +184,27 @@ def plot(arch, p):
     #plt.xscale('log')
     plt.tight_layout()
     plt.subplots_adjust(top=0.75)
-    fig.savefig("out/" + arch + "_" + str(p) + "_line.pdf", format='pdf', dpi=100)
+    fig.savefig("out/" + arch + "_" + str(p) + "_line_bw.pdf", format='pdf', dpi=100)
+    plt.clf()
+
+    # All, lines
+    fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
+    ax = sns.pointplot(data=df, \
+                      x="Size", y="Time (us)", hue="Algo", ax=axes)
+    #plt.xscale('log')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.75)
+    fig.savefig("out/" + arch + "_" + str(p) + "_line_time.pdf", format='pdf', dpi=100)
+    plt.clf()
+
+    # All, lines
+    fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
+    ax = sns.pointplot(data=df, \
+                      x="Size", y="Normalized Bandwidth", hue="Algo", ax=axes)
+    #plt.xscale('log')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.75)
+    fig.savefig("out/" + arch + "_" + str(p) + "_line_normbw.pdf", format='pdf', dpi=100)
     plt.clf()
 
     print("out/" + arch + "_" + str(p) + "_ plotted.")
@@ -190,11 +218,11 @@ ps["daint"] = [18, 30, 32]
 ps["daint_sameswitch"] = [4]
 ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
-ps["leonardo"] = [32]
+ps["leonardo_UCXIBSL1"] = [8]
 ps["lumi"] = [14, 16]
 
 #archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
-archs = ["lumi"]
+archs = ["leonardo_UCXIBSL1", "lumi"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:
