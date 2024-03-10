@@ -76,6 +76,12 @@ do
             (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv)
         done
 
+        # Run manual sota algorithms
+        echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_l.csv)
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv)
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv)
+
         # Run Swing algorithms
         echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv)
