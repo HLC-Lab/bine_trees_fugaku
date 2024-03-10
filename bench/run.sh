@@ -45,6 +45,7 @@ do
 	    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
 	    ;;
     esac
+    TEMP_SOURCE_FILE=$(mktmp)
     for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
         iterations=0
@@ -64,21 +65,26 @@ do
             iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
-
+        
         # Run all the default algorithms
         for DEFAULT_NAME in ${DEFAULT_ALGOS_ALLREDUCE//,/ }
         do
+            echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
+            echo ${EXTRA_VARIABLES_DEFAULT} >> ${TEMP_SOURCE_FILE}
+            echo ${DEFAULT_NAME} >> ${TEMP_SOURCE_FILE}
             DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f1)
-            ${EXTRA_VARIABLES} ${EXTRA_VARIABLES_DEFAULT} ${DEFAULT_NAME} LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv
+            (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv)
         done
 
         # Run Swing algorithms
-        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv
-        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv
-        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv
-        ${EXTRA_VARIABLES} LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv
+        echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv)
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv)
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv)
+        (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench CHAR ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_cont.csv)
         echo " ${GREEN}[Done]${NC}"
     done
+    rm ${TEMP_SOURCE_FILE}
 done
 
 echo "Compressing "${OUT_FOLDER}" ..."
