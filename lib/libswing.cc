@@ -1900,4 +1900,16 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         return MPI_SUCCESS;
     }
 }
+
+/*
+int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    read_env(comm);
+    if(disable_reducescatter || algo == ALGO_DEFAULT){
+        return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
+    }else{  
+        return MPI_SUCCESS;
+    }
+}
+*/
+
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)

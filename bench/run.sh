@@ -67,8 +67,8 @@ do
         echo -n "Running on "${p}" nodes with count="${n}"..."
         
         # Run all the default algorithms
-        for DEFAULT_NAME in ${DEFAULT_ALGOS_ALLREDUCE//,/ }
-        do
+        for DEFAULT_NAME in ${DEFAULT_ALGOS_ALLREDUCE//|/ }
+        do            
             echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
             echo ${EXTRA_VARIABLES_DEFAULT} >> ${TEMP_SOURCE_FILE}
             echo ${DEFAULT_NAME} >> ${TEMP_SOURCE_FILE}
