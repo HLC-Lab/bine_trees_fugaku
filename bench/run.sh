@@ -72,7 +72,7 @@ do
             echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
             echo ${EXTRA_VARIABLES_DEFAULT} >> ${TEMP_SOURCE_FILE}
             echo ${DEFAULT_NAME} >> ${TEMP_SOURCE_FILE}
-            DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f1)
+            DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f2)
             (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv)
         done
 
