@@ -30,10 +30,14 @@ int main(int argc, char** argv){
     MPI_Op op = MPI_SUM;
     if(strcmp(type, "CHAR") == 0){
         dt = MPI_CHAR;
+    }else if(strcmp(type, "BYTE") == 0){
+        dt = MPI_BYTE;
     }else if(strcmp(type, "FLOAT") == 0){
         dt = MPI_FLOAT;
     }else if(strcmp(type, "INT") == 0){
         dt = MPI_INT;
+    }else if(strcmp(type, "INT32") == 0){
+        dt = MPI_INT32_T;
     }else if(strcmp(type, "VOID") == 0){
         dt = MPI_FLOAT;
         op = MPI_VOIDOP;
@@ -53,7 +57,7 @@ int main(int argc, char** argv){
     // Initialize sendbuf with random values
     srand(time(NULL));
     for(i = 0; i < dtsize*count; i++){
-        sendbuf[i] = (char) rand();
+        sendbuf[i] = (char) rand() % 1024;
     }
     PMPI_Allreduce(sendbuf, recvbuf_validation, count, dt, op, MPI_COMM_WORLD);
 
