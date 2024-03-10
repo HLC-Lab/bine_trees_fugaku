@@ -69,21 +69,19 @@ do
         # Run all the default algorithms
         for DEFAULT_NAME in ${DEFAULT_ALGOS_ALLREDUCE//|/ }
         do            
-            echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
-            echo ${EXTRA_VARIABLES_DEFAULT} >> ${TEMP_SOURCE_FILE}
+            echo ${EXTRA_VARIABLES} | tr '|' '\n' > ${TEMP_SOURCE_FILE}
+            echo ${EXTRA_VARIABLES_DEFAULT} | tr '|' '\n' >> ${TEMP_SOURCE_FILE}
             echo ${DEFAULT_NAME} >> ${TEMP_SOURCE_FILE}
             DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f2)
             (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv)
         done
 
         # Run manual sota algorithms
-        echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
+        echo ${EXTRA_VARIABLES} | tr '|' '\n' > ${TEMP_SOURCE_FILE}
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_l.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv)
-
         # Run Swing algorithms
-        echo ${EXTRA_VARIABLES} > ${TEMP_SOURCE_FILE}
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_lat.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv)

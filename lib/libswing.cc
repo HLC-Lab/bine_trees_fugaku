@@ -1801,71 +1801,74 @@ static inline void get_count_and_offset_per_port(const char *sendbuf, char *recv
     }
 }
 
+static SwingInfo init_info(){
+    MPI_Type_size(datatype, &info.dtsize);    
+    MPI_Comm_size(comm, &info.size);
+    MPI_Comm_rank(comm, &info.rank);
+    
+    size_t offset = 0;
+    for(size_t i = 0; i < dimensions_num; i++){
+        info.num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
+        offset += info.num_steps_per_dim[i];
+    }
+    // The number of steps is not ceil(log2(size)) but the sum of the number of steps for each dimension.
+    // This is needed for those cases where dimensions are not powers of two. Consider for example a 
+    // 10x10 torus. We would perform ceil(log2(10)) + ceil(log2(10)) = 4 + 4 = 8 steps, not ceil(log2(100)) = 7.
+    info.num_steps = offset;
+
+    if(info.num_steps > LIBSWING_MAX_STEPS){
+        assert("Max steps limit must be increased and constants updated.");
+    }
+
+    // Split the data if too big (> max_size)
+    size_t remaining_count = count;
+    size_t max_count, next_offset = 0;
+
+    if(!max_size || count*(size_t)info.dtsize <= max_size){
+        max_count = count;
+    }else{
+        max_count = max_size / info.dtsize;
+    }
+
+    uint i = 0;
+    info.num_ports = 1;
+    if(multiport){
+        info.num_ports = dimensions_num*2; // TODO: Always assumes num port is 2*num_dimension, refactor
+    }
+    DPRINTF("[%d] Going to run on %d ports\n", info.rank, info.num_ports);
+    info.num_chunks = (size_t) ceil(count / max_count);
+    info.chunks = (ChunkInfo**) malloc(sizeof(ChunkInfo*) * info.num_chunks);   
+    for(size_t c = 0; c < info.num_chunks; c++){
+        info.chunks[c] = (ChunkInfo*) malloc(sizeof(ChunkInfo) * info.num_ports);
+    }
+
+    do{
+        int next_count = std::min(remaining_count, max_count);
+        char* sendbuf_chunk = ((char*)sendbuf) + next_offset*info.dtsize;
+        char* recvbuf_chunk = ((char*)recvbuf) + next_offset*info.dtsize;
+        get_count_and_offset_per_port(sendbuf_chunk, recvbuf_chunk, next_count, info.dtsize, info.num_ports, info.chunks[i]);
+        next_offset += next_count;
+        remaining_count -= next_count;
+        ++i;
+    }while(remaining_count > 0);   
+
+    assert(info.num_chunks == i);
+#ifdef DEBUG
+    for(size_t i = 0; i < info.num_chunks; i++){
+        for(size_t j = 0; j < info.num_ports; j++){
+            DPRINTF("[%d] Chunk %d Port %d Offset: %d Count: %d\n", info.rank, i, j, info.chunks[i][j].offset, info.chunks[i][j].count);
+        }
+    }
+#endif
+}
+
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
     if(disable_allreduce || algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{
-        SwingInfo info;
-        MPI_Type_size(datatype, &info.dtsize);    
-        MPI_Comm_size(comm, &info.size);
-        MPI_Comm_rank(comm, &info.rank);
-        
-        size_t offset = 0;
-        for(size_t i = 0; i < dimensions_num; i++){
-            info.num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
-            offset += info.num_steps_per_dim[i];
-        }
-        // The number of steps is not ceil(log2(size)) but the sum of the number of steps for each dimension.
-        // This is needed for those cases where dimensions are not powers of two. Consider for example a 
-        // 10x10 torus. We would perform ceil(log2(10)) + ceil(log2(10)) = 4 + 4 = 8 steps, not ceil(log2(100)) = 7.
-        info.num_steps = offset;
-
-        if(info.num_steps > LIBSWING_MAX_STEPS){
-            assert("Max steps limit must be increased and constants updated.");
-        }
-
-        // Split the data if too big (> max_size)
-        size_t remaining_count = count;
-        size_t max_count, next_offset = 0;
-    
-        if(!max_size || count*(size_t)info.dtsize <= max_size){
-            max_count = count;
-        }else{
-            max_count = max_size / info.dtsize;
-        }
-
-        uint i = 0;
-        info.num_ports = 1;
-        if(multiport){
-            info.num_ports = dimensions_num*2; // TODO: Always assumes num port is 2*num_dimension, refactor
-        }
-        DPRINTF("[%d] Going to run on %d ports\n", info.rank, info.num_ports);
-        info.num_chunks = (size_t) ceil(count / max_count);
-        info.chunks = (ChunkInfo**) malloc(sizeof(ChunkInfo*) * info.num_chunks);   
-        for(size_t c = 0; c < info.num_chunks; c++){
-            info.chunks[c] = (ChunkInfo*) malloc(sizeof(ChunkInfo) * info.num_ports);
-        }
- 
-        do{
-            int next_count = std::min(remaining_count, max_count);
-            char* sendbuf_chunk = ((char*)sendbuf) + next_offset*info.dtsize;
-            char* recvbuf_chunk = ((char*)recvbuf) + next_offset*info.dtsize;
-            get_count_and_offset_per_port(sendbuf_chunk, recvbuf_chunk, next_count, info.dtsize, info.num_ports, info.chunks[i]);
-            next_offset += next_count;
-            remaining_count -= next_count;
-            ++i;
-        }while(remaining_count > 0);   
-
-        assert(info.num_chunks == i);
-#ifdef DEBUG
-        for(size_t i = 0; i < info.num_chunks; i++){
-            for(size_t j = 0; j < info.num_ports; j++){
-                DPRINTF("[%d] Chunk %d Port %d Offset: %d Count: %d\n", info.rank, i, j, info.chunks[i][j].offset, info.chunks[i][j].count);
-            }
-        }
-#endif
+        SwingInfo info = init_info();
         // Call the algo
         if(algo == ALGO_SWING_L){ // Swing_l
             return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, &info);
@@ -1901,7 +1904,6 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     }
 }
 
-/*
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
     if(disable_reducescatter || algo == ALGO_DEFAULT){
@@ -1910,6 +1912,5 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
         return MPI_SUCCESS;
     }
 }
-*/
 
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)
