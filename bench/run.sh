@@ -45,7 +45,7 @@ do
 	    ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} cat /etc/cray/xname > ${OUT_FOLDER}/coord_${p}.txt
 	    ;;
     esac
-    TEMP_SOURCE_FILE=$(mktemp)
+    TEMP_SOURCE_FILE=$(mktemp -p .)
     for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
         iterations=0
@@ -72,12 +72,14 @@ do
             echo ${EXTRA_VARIABLES} | tr '|' '\n' > ${TEMP_SOURCE_FILE}
             echo ${EXTRA_VARIABLES_DEFAULT} | tr '|' '\n' >> ${TEMP_SOURCE_FILE}
             echo ${DEFAULT_NAME} >> ${TEMP_SOURCE_FILE}
+            sed -i -e 's/^/export /' ${TEMP_SOURCE_FILE} # Prepend "export " to every line (otherwise source won't work)
             DEFAULT_IDX=$(echo ${DEFAULT_NAME} | cut -d'=' -f2)
             (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_IDX}.csv)
         done
 
         # Run manual sota algorithms
         echo ${EXTRA_VARIABLES} | tr '|' '\n' > ${TEMP_SOURCE_FILE}
+        sed -i -e 's/^/export /' ${TEMP_SOURCE_FILE} # Prepend "export " to every line (otherwise source won't work)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_l.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RECDOUB_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_recdoub_b.csv)
         (source ${TEMP_SOURCE_FILE}; LIBSWING_ALGO="RING" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench INT32 ${n} ${iterations} > ${OUT_FOLDER}/${p}_${n}_ring.csv)
