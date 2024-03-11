@@ -1943,13 +1943,13 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
  */
 static int reducescatter_algo_supported(Algo algo, SwingInfo* info, size_t count){
     if(algo == ALGO_SWING_B){
-        if(count >= info->size){
+        if(count >= (size_t) info->size){
             return 1;
         }else{
             return 0;
         }
     }else if(algo == ALGO_SWING_B_COALESCE && info->num_ports == 1){
-        if(count >= info->size){
+        if(count >= (size_t) info->size){
             return 1;
         }else{
             return 0;
@@ -2001,7 +2001,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
                     DPRINTF("[%d] Port %d Offset %d Count %d\n", info.rank, p, offset_port, count_port);
                 }
 
-                if(i == info.rank){
+                if(i == (size_t) info.rank){
                     my_offset = block_offset;
                 }
 
@@ -2025,6 +2025,16 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             return res;
         }
         return 1;
+    }
+}
+
+int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+    read_env(comm);
+    if(disable_reducescatter || algo == ALGO_DEFAULT){
+        return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+    }else{  
+        SwingInfo info = init_info(sendtype, comm);
+        ;
     }
 }
 

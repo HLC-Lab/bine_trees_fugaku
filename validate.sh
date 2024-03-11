@@ -1,36 +1,62 @@
 #!/bin/bash
-if [ "$1" = "ALL" ]; then
-    for N in 4 8 64 6 10 12 14 18
+#declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter")
+declare -a COLLECTIVES=("MPI_Reduce_scatter")
+
+for COLLECTIVE in "${COLLECTIVES[@]}"
+do
+    #Algos
+    if [ ${COLLECTIVE} = "MPI_Allreduce" ]; then
+        declare -a ALGORITHMS=("SWING_L" "SWING_B" "SWING_B_COALESCE" "SWING_B_CONT")
+    fi
+
+    if [ ${COLLECTIVE} = "MPI_Reduce_scatter" ]; then
+        if [[ ${LIBSWING_DIMENSIONS} = "" && ${LIBSWING_MULTIPORT} = "" ]]; then
+            declare -a ALGORITHMS=("SWING_B" "SWING_B_COALESCE")
+        else
+            declare -a ALGORITHMS=("SWING_B")
+        fi        
+    fi
+    
+    for ALGO in "${ALGORITHMS[@]}"
     do
-        echo "Running with n=${N}..."
-        LD_PRELOAD="./lib/libswing.so" mpirun -n ${N} --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+        echo "Running ${COLLECTIVE} ${ALGO}..."
+        for TYPE in "INT32"
+        do
+            for COUNT in 131072
+            do
+                for ITERATIONS in 4
+                do
+                    for N in 4 8 64 6 10 12 14 18
+                    do
+                        echo "Running with n=${N}..."
+                        LIBSWING_ALGO=${ALGO} mpirun -n ${N} --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+                    done
+
+                    echo "Running with n=2x8x2.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,8,2  mpirun -n 32 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=6x6.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,6  mpirun -n 36 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=10x10.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=10,10  mpirun -n 100 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=4x6x4.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=4,6,4  mpirun -n 96 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=6x2x6.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,2,6  mpirun -n 72 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=2x6x2.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,6,2  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=2x2x6.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,2,6  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running with n=6x2x2.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,2,2  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+                done
+            done
+        done
     done
-
-    echo "Running with n=2x8x2.."
-    LIBSWING_DIMENSIONS=2,8,2 LD_PRELOAD="./lib/libswing.so" mpirun -n 32 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=6x6.."
-    LIBSWING_DIMENSIONS=6,6 LD_PRELOAD="./lib/libswing.so" mpirun -n 36 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=10x10.."
-    LIBSWING_DIMENSIONS=10,10 LD_PRELOAD="./lib/libswing.so" mpirun -n 100 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=4x6x4.."
-    LIBSWING_DIMENSIONS=4,6,4 LD_PRELOAD="./lib/libswing.so" mpirun -n 96 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=6x2x6.."
-    LIBSWING_DIMENSIONS=6,2,6 LD_PRELOAD="./lib/libswing.so" mpirun -n 72 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=2x6x2.."
-    LIBSWING_DIMENSIONS=2,6,2 LD_PRELOAD="./lib/libswing.so" mpirun -n 24 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=2x2x6.."
-    LIBSWING_DIMENSIONS=2,2,6 LD_PRELOAD="./lib/libswing.so" mpirun -n 24 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-
-    echo "Running with n=6x2x2.."
-    LIBSWING_DIMENSIONS=6,2,2 LD_PRELOAD="./lib/libswing.so" mpirun -n 24 --oversubscribe ./lib/test $2 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
-else
-    rm -rf out/*
-    LD_PRELOAD="./lib/libswing.so" mpirun --output-filename out -n $1 --oversubscribe ./lib/test $2
-    #LD_PRELOAD="./lib/libswing.so" mpirun -n $1 --oversubscribe ./lib/test $2
-fi
+done

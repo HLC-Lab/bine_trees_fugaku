@@ -8,7 +8,7 @@
 
 // Only one argument is required: the name of the collective (camelcase as in MPI)
 int main(int argc, char** argv){
-    int r, rank;
+    int r = MPI_SUCCESS, rank;
 #ifdef PROFILE
     int count = 65536;
     int iterations = 100000;
@@ -39,7 +39,7 @@ int main(int argc, char** argv){
         int* recvcounts = (int*) malloc(sizeof(int)*size);
         size_t partition_size = count / size;
         size_t remaining = count % size;                
-        for(size_t i = 0; i < size; i++){
+        for(size_t i = 0; i < (size_t) size; i++){
             size_t count_i = partition_size + (i < remaining ? 1 : 0);
             recvcounts[i] = count_i;
         }
@@ -87,7 +87,7 @@ int main(int argc, char** argv){
                 int* recvcounts = (int*) malloc(sizeof(int)*size);
                 size_t partition_size = count / size;
                 size_t remaining = count % size;                
-                for(size_t i = 0; i < size; i++){
+                for(size_t i = 0; i < (size_t) size; i++){
                     size_t count_i = partition_size + (i < remaining ? 1 : 0);
                     recvcounts[i] = count_i;
                 }

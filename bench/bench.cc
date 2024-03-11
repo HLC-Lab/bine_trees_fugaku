@@ -9,16 +9,49 @@ void voidop(void *invec, void *inoutvec, int *len, MPI_Datatype *datatype){
     return;
 }
 
+typedef enum{
+    RUN_TYPE_VALIDATION = 0,
+    RUN_TYPE_BENCHMARK = 1
+}RunType;
 
-// Usage: ./bench type msgsize(elems) iterations
+int run_collective(RunType rt, const char* collective, const void* sendbuf, void* recvbuf, size_t count, MPI_Datatype dt, MPI_Op op, size_t size){
+    int r = MPI_SUCCESS;
+    if(!strcmp(collective, "MPI_Allreduce")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Allreduce(sendbuf, recvbuf, count, dt, op, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Allreduce(sendbuf, recvbuf, count, dt, op, MPI_COMM_WORLD);
+        }
+    }else if(!strcmp(collective, "MPI_Reduce_scatter")){
+        int* recvcounts = (int*) malloc(sizeof(int)*size);
+        size_t partition_size = count / size;
+        size_t remaining = count % size;                
+        for(size_t i = 0; i < size; i++){
+            size_t count_i = partition_size + (i < remaining ? 1 : 0);
+            recvcounts[i] = count_i;
+        }
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, dt, op, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, dt, op, MPI_COMM_WORLD);
+        }
+        free(recvcounts);
+    }
+    return r;
+}
+
+
+// Usage: ./bench collective type msgsize(elems) iterations
 int main(int argc, char** argv){
     int warmup = 10;    
-    char* type = argv[1];
-    int count = atoi(argv[2]);
-    int iterations = atoi(argv[3]);
+    char* collective = argv[1];
+    char* type = argv[2];
+    int count = atoi(argv[3]);
+    int iterations = atoi(argv[4]);
     double* samples = (double*) malloc(sizeof(double)*iterations);
     double* samples_all = NULL;
-    long i, r;
+    long i;
+    int r;
     MPI_Init(&argc, &argv);
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -59,13 +92,22 @@ int main(int argc, char** argv){
     for(i = 0; i < count; i++){
         sendbuf[i] = (char) rand() % 1024;
     }
-    PMPI_Allreduce(sendbuf, recvbuf_validation, count, dt, op, MPI_COMM_WORLD);
+    r = run_collective(RUN_TYPE_VALIDATION, collective, sendbuf, recvbuf_validation, count, dt, op, comm_size);
+    if(r != MPI_SUCCESS){
+        fprintf(stderr, "Rank %d: Validation failed with error %d\n", rank, r);
+        return 1;
+    }
 
     for(i = -warmup; i < iterations; i++){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
         double start_time = MPI_Wtime();
-        MPI_Allreduce(sendbuf, recvbuf, count, dt, op, MPI_COMM_WORLD);
+        // Run the collective
+        r = run_collective(RUN_TYPE_BENCHMARK, collective, sendbuf, recvbuf, count, dt, op, comm_size);
+        if(r != MPI_SUCCESS){
+            fprintf(stderr, "Rank %d: Benchmark failed with error %d\n", rank, r);
+            return 1;
+        }
 
         if(i >= 0){
             samples[i] = ((MPI_Wtime() - start_time)*1000000.0);
@@ -83,7 +125,7 @@ int main(int argc, char** argv){
     MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if(rank == 0){
         printf("#MessageSize ");
-        for(r = 0; r < comm_size; r++){
+        for(size_t r = 0; r < (size_t) comm_size; r++){
             printf("Rank%ldTime(us) ", r);
         }
         printf("\n");
@@ -91,7 +133,7 @@ int main(int argc, char** argv){
         for(i = 0; i < iterations; i++){
             printf("%d ", count);
             double max_ranks = 0.0;
-            for(r = 0; r < comm_size; r++){
+            for(size_t r = 0; r < (size_t) comm_size; r++){
                 double sample = samples_all[r*iterations + i];
                printf("%f ", sample);
                if(sample > max_ranks){
