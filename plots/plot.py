@@ -41,6 +41,12 @@ algo_names["bw_cont"] = "Swing (B - CONT)"
 algo_names["bw_coalesce"] = "Swing (B - COAL)"
 algo_names["recdoub_l"] = "RecDoub (L)"
 algo_names["recdoub_b"] = "RecDoub (B)"
+algo_names["default_1"] = "Default (1)"
+algo_names["default_2"] = "Default (2)"
+algo_names["default_3"] = "Default (3)"
+algo_names["default_4"] = "Default (4)"
+algo_names["default_5"] = "Default (5)"
+algo_names["default_6"] = "Default (6)"
 
 
 # CONF
@@ -48,7 +54,8 @@ merge = False
 add_default = True
 
 #algos_sota = ["recdoub_l", "recdoub_b", "ring", "lat_old_CONT", "bw_old_CONT"]
-algos_sota = ["recdoub_l", "recdoub_b", "ring"]
+algos_sota = ["recdoub_l", "recdoub_b", "ring", "default_1", "default_2", "default_3", "default_4", "default_5", "default_6"]
+#algos_sota = ["recdoub_l", "recdoub_b", "default"]
 if add_default:
     algos_sota = ["default"] + algos_sota
 #algos_swing = ["bw_BBBN", "lat_old_CONT", "bw_old_CONT"]
@@ -104,7 +111,7 @@ def plot(arch, p):
                     best_sota_bw = bw_mean
                 if not merge and algo in algos_swing:
                     df_tmp = pd.DataFrame()
-                    name = algo_names[algo]                
+                    name = algo_names[algo]            
                     df_tmp["Improvement (%)"] = ((data_real["Bandwidth (Gb/s)"] - best_sota_bw)/best_sota_bw)*100.0
                     df_tmp["Size"] = sizes[n]
                     df_tmp["Algorithm"] = name
@@ -199,8 +206,8 @@ def plot(arch, p):
 
     # All, lines
     fig, axes = plt.subplots(rows, cols, figsize=(10,10), sharex=False, sharey=False)
-    ax = sns.pointplot(data=df, \
-                      x="Size", y="Normalized Bandwidth", hue="Algo", ax=axes)
+    ax = sns.lineplot(data=df, \
+                      x="Size", y="Normalized Bandwidth", hue="Algo", style="Algo", ax=axes, markers=True)
     #plt.xscale('log')
     plt.tight_layout()
     plt.subplots_adjust(top=0.75)
@@ -220,9 +227,10 @@ ps["daint_twocabs"] = [8]
 ps["daint_twocabs_ad3"] = [8]
 ps["leonardo_UCXIBSL1"] = [8]
 ps["lumi"] = [14, 16]
+ps["leonardo_ONENIC"] = [6, 8, 14]
 
 #archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
-archs = ["leonardo_UCXIBSL1", "lumi"]
+archs = ["leonardo_ONENIC"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:
