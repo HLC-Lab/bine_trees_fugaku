@@ -26,7 +26,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__)
@@ -1719,10 +1719,11 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         buf_r[1] = recvbuf;
         collectives_to_run_num = 2;
     }else{
-        // TODO: Check how to do with buffers
         collectives_to_run[0] = coll_type;
         collectives_to_run_num = 1;
-    }
+        buf_s[0] = recvbuf;
+        buf_r[0] = rbuf;
+    } // TODO: For reduce scatter pay attention to bitmap computation (so far we always assumed the ones for reduce_scatter were computed first, and thus we might have to revert steps id or send/recv bitmaps)
 
     for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
         for(size_t c = 0; c < info->num_chunks; c++){
@@ -1793,7 +1794,9 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     return res;
 }
 
-
+/**
+ * @param offset In bytes!
+*/
 static inline void get_count_and_offset_per_block(size_t offset, size_t count, SwingInfo* info, BlockInfo* blocks_info){
     // Compute the count and offset of each block(for each port)
     uint partition_size = count / info->size;
@@ -1809,6 +1812,7 @@ static inline void get_count_and_offset_per_block(size_t offset, size_t count, S
 }
 
 // Gets the count and offset for each port.
+// @param offset (in bytes!)
 static inline void get_count_and_offset_per_port(size_t offset, size_t count, SwingInfo* info, BlockInfo** ci){
     uint partition_size = count / info->num_ports;
     uint remaining = count % info->num_ports;
@@ -1847,7 +1851,7 @@ static inline BlockInfo*** get_blocks_info(size_t count, SwingInfo& info){
     uint c = 0;    
     do{
         int next_count = std::min(remaining_count, max_count);
-        get_count_and_offset_per_port(next_offset, next_count, &info, blocks_info[c]);
+        get_count_and_offset_per_port(next_offset*info.dtsize, next_count, &info, blocks_info[c]);
         next_offset += next_count;
         remaining_count -= next_count;
         ++c;
@@ -1931,12 +1935,96 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     }
 }
 
+/**
+ * SWING_CONT and SWING_COALESCE are not supported for Reduce_scatter if we are 
+ * using the multiported version. Indeed, in that case, consecutive blocks on
+ * a given port will not be contiguous in memory, since we split the buffers
+ * first by block, and then by port (rather than the other way around like in allreduce).
+ */
+static int reducescatter_algo_supported(Algo algo, SwingInfo* info, size_t count){
+    if(algo == ALGO_SWING_B){
+        if(count >= info->size){
+            return 1;
+        }else{
+            return 0;
+        }
+    }else if(algo == ALGO_SWING_B_COALESCE && info->num_ports == 1){
+        if(count >= info->size){
+            return 1;
+        }else{
+            return 0;
+        }
+    }else if(algo == ALGO_SWING_B_CONT && info->num_ports == 1){
+        return 0; // TODO: To let it work, we should simply remap the block id
+    }
+    return 0;
+}
+
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
     if(disable_reducescatter || algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
     }else{  
-        return MPI_SUCCESS;
+        SwingInfo info = init_info(datatype, comm);
+        size_t count = 0;
+        for(size_t i = 0; i < (size_t) info.size; i++){
+            count += recvcounts[i];
+        }
+
+        if(reducescatter_algo_supported(algo, &info, count)){            
+            // For reduce-scatter we do not do chunking (would complicate things too much). 
+            info.num_chunks = 1;
+            // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+            // This is the opposite of what we do in allreduce.
+            // Allocate blocks_info
+            BlockInfo*** blocks_info = (BlockInfo***) malloc(sizeof(BlockInfo**)*info.num_chunks);
+            for(size_t c = 0; c < info.num_chunks; c++){
+                blocks_info[c] = (BlockInfo**) malloc(sizeof(BlockInfo*)*info.num_ports);
+                for(size_t p = 0; p < info.num_ports; p++){
+                    blocks_info[c][p] = (BlockInfo*) malloc(sizeof(BlockInfo)*info.size);
+                }
+            } 
+            size_t count_so_far = 0;
+            size_t my_offset = 0;
+            for(size_t i = 0; i < (size_t) info.size; i++){
+                DPRINTF("[%d] recvcnt %d: %d\n", info.rank, i, recvcounts[i]);
+                size_t partition_size = recvcounts[i] / info.num_ports;
+                size_t remaining = recvcounts[i] % info.num_ports;                
+                size_t block_offset = count_so_far*info.dtsize;
+                size_t block_count_so_far = 0;
+                for(size_t p = 0; p < info.num_ports; p++){
+                    size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                    size_t offset_port = block_offset + block_count_so_far*info.dtsize;
+                    block_count_so_far += count_port;
+                    blocks_info[0][p][i].count = count_port;
+                    blocks_info[0][p][i].offset = offset_port;
+                    DPRINTF("[%d] Port %d Offset %d Count %d\n", info.rank, p, offset_port, count_port);
+                }
+
+                if(i == info.rank){
+                    my_offset = block_offset;
+                }
+
+                count_so_far += recvcounts[i];
+            }
+            assert(count == count_so_far);
+            // Call the actual collective
+            char* tmpbuf = (char*) malloc(count*info.dtsize);
+            int res = swing_collective_block(sendbuf, tmpbuf, count, datatype, op, comm, &info, blocks_info, SWING_REDUCE_SCATTER);
+            DPRINTF("[%d] Copying %d bytes from offset %d into recvbuf\n", info.rank, recvcounts[info.rank]*info.dtsize, my_offset);
+            memcpy(recvbuf, tmpbuf + my_offset, recvcounts[info.rank]*info.dtsize);
+            free(tmpbuf);
+            // Free blocks_info
+            for(size_t c = 0; c < info.num_chunks; c++){
+                for(size_t p = 0; p < info.num_ports; p++){
+                    free(blocks_info[c][p]);
+                }
+                free(blocks_info[c]);
+            }
+            free(blocks_info);
+            return res;
+        }
+        return 1;
     }
 }
 

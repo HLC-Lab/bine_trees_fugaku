@@ -56,7 +56,7 @@ int main(int argc, char** argv){
 
     // Initialize sendbuf with random values
     srand(time(NULL));
-    for(i = 0; i < dtsize*count; i++){
+    for(i = 0; i < count; i++){
         sendbuf[i] = (char) rand() % 1024;
     }
     PMPI_Allreduce(sendbuf, recvbuf_validation, count, dt, op, MPI_COMM_WORLD);

@@ -6,20 +6,20 @@
 #include <iostream>
 #include <string.h>
 
+// Only one argument is required: the name of the collective (camelcase as in MPI)
 int main(int argc, char** argv){
     int r, rank;
 #ifdef PROFILE
     int count = 65536;
-    int warmup = 0;
     int iterations = 100000;
 #else
-    int count = 16384;
-    int warmup = 0;
-    int iterations = 1;
+    int count = 131072;
+    int iterations = 4;
 #endif
     float* sendbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf = (float*) malloc(sizeof(float)*count);
     float* recvbuf_v = (float*) malloc(sizeof(float)*count);
+    const char* collective = argv[1];
 
     // Fill sendbuf with random data
     for(int i = 0; i < count; i++){
@@ -29,65 +29,75 @@ int main(int argc, char** argv){
     // Init
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    auto start = std::chrono::high_resolution_clock::now();
-    auto end = std::chrono::high_resolution_clock::now();
+    int size;
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 #ifndef PROFILE
-    // Run the original MPI allreduce
-    setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
-    setenv("LIBSWING_ALGO", "DEFAULT", 1);
-    setenv("LIBSWING_DISABLE_REDUCESCATTER", "1", 1);
-    setenv("LIBSWING_DISABLE_ALLGATHERV", "1", 1);
-    setenv("LIBSWING_DISABLE_ALLREDUCE", "1", 1);
-    for(int i = warmup; i > 0; i--){
-        r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+    // Run the original collective
+    if(!strcmp(collective, "MPI_Allreduce")){
+        r = PMPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+    }else if(!strcmp(collective, "MPI_Reduce_scatter")){
+        int* recvcounts = (int*) malloc(sizeof(int)*size);
+        size_t partition_size = count / size;
+        size_t remaining = count % size;                
+        for(size_t i = 0; i < size; i++){
+            size_t count_i = partition_size + (i < remaining ? 1 : 0);
+            recvcounts[i] = count_i;
+        }
+        r = PMPI_Reduce_scatter(sendbuf, recvbuf_v, recvcounts, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        free(recvcounts);
     }
-
-    start = std::chrono::high_resolution_clock::now();
-    for(int i = 0; i < iterations; i++){
-        r = MPI_Allreduce(sendbuf, recvbuf_v, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-    }
-    end = std::chrono::high_resolution_clock::now();
     if(r != MPI_SUCCESS){
-        fprintf(stderr, "Allreduce failed with error %d\n", r);
+        fprintf(stderr, "Collective failed with error %d\n", r);
         return r;
-    }else{
-        std::cout << "Default terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
     }
 #endif
 
+    size_t num_algos = 0;
+    const char** algos;
+
+    if(!strcmp(collective, "MPI_Allreduce")){    
 #ifdef PROFILE
-    const char* algos[1] = {"SWING_B_CONT"};
+        num_algos = 1;
+        algos = (const char**) malloc(num_algos*sizeof(char*));
+        algos[0] = "SWING_B_CONT";
 #else
-    //const char* algos[5] = {"SWING_L", "SWING_B", "RING", "RECDOUB_L", "RECDOUB_B"};
-    const char* algos[4] = {"SWING_L", "SWING_B_CONT", "SWING_B", "SWING_B_COALESCE"};
+        num_algos = 4;
+        algos = (const char**) malloc(num_algos*sizeof(char*));
+        algos[0] = "SWING_L";
+        algos[1] = "SWING_B_CONT";
+        algos[2] = "SWING_B";
+        algos[3] = "SWING_B_COALESCE";
 #endif
-    for(size_t algo = 0; algo < sizeof(algos)/sizeof(char*); algo++){
+    }else if(!strcmp(collective, "MPI_Reduce_scatter")){
+        num_algos = 1;
+        algos = (const char**) malloc(num_algos*sizeof(char*));
+        algos[0] = "SWING_B";
+    }
+
+    for(size_t algo = 0; algo < num_algos; algo++){
         std::cout << "Running " << algos[algo] << std::endl;
         memset(recvbuf, 0, sizeof(float)*count);
         // Run first swing allreduce
         setenv("LIBSWING_FORCE_ENV_RELOAD", "1", 1);
         setenv("LIBSWING_ALGO", algos[algo], 1);
-        setenv("LIBSWING_SENDRECV_TYPE", "CONT", 1);
-        setenv("LIBSWING_CACHE", "1", 1);
-        setenv("LIBSWING_LATENCY_OPTIMAL_THRESHOLD", "0", 1);
-        setenv("LIBSWING_DISABLE_REDUCESCATTER", "0", 1);
-        setenv("LIBSWING_DISABLE_ALLGATHERV", "0", 1);
-        setenv("LIBSWING_DISABLE_ALLREDUCE", "0", 1);
-        /*
-        for(int i = warmup; i >= 0; i--){
-            r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-        }
-        */
-        start = std::chrono::high_resolution_clock::now();
         for(int i = 0; i < iterations; i++){
-            r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+            if(!strcmp(collective, "MPI_Allreduce")){
+                r = MPI_Allreduce(sendbuf, recvbuf, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+            }else if(!strcmp(collective, "MPI_Reduce_scatter")){
+                int* recvcounts = (int*) malloc(sizeof(int)*size);
+                size_t partition_size = count / size;
+                size_t remaining = count % size;                
+                for(size_t i = 0; i < size; i++){
+                    size_t count_i = partition_size + (i < remaining ? 1 : 0);
+                    recvcounts[i] = count_i;
+                }
+                r = MPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+                free(recvcounts);
+            }
         }
-        end = std::chrono::high_resolution_clock::now();
         if(r != MPI_SUCCESS){
-            fprintf(stderr, "Allreduce failed with error %d\n", r);
+            fprintf(stderr, "Collective failed with error %d\n", r);
             return r;
-        }else{
-            std::cout << algos[algo] << " terminated in: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count() / iterations << "ns\n";
         }
 
 #ifndef PROFILE
