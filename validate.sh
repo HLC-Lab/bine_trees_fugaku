@@ -1,20 +1,28 @@
 #!/bin/bash
-#declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter")
-declare -a COLLECTIVES=("MPI_Reduce_scatter")
+#declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter" "MPI_Allgather")
+declare -a COLLECTIVES=("MPI_Allgather")
+COUNT=0
 
 for COLLECTIVE in "${COLLECTIVES[@]}"
 do
     #Algos
     if [ ${COLLECTIVE} = "MPI_Allreduce" ]; then
         declare -a ALGORITHMS=("SWING_L" "SWING_B" "SWING_B_COALESCE" "SWING_B_CONT")
+        declare -a COUNTS=("131072")
     fi
 
     if [ ${COLLECTIVE} = "MPI_Reduce_scatter" ]; then
+        declare -a COUNTS=("1024")
         if [[ ${LIBSWING_DIMENSIONS} = "" && ${LIBSWING_MULTIPORT} = "" ]]; then
             declare -a ALGORITHMS=("SWING_B" "SWING_B_COALESCE")
         else
             declare -a ALGORITHMS=("SWING_B")
         fi        
+    fi
+
+    if [ ${COLLECTIVE} = "MPI_Allgather" ]; then
+        declare -a COUNTS=("1024")
+        declare -a ALGORITHMS=("SWING_B")
     fi
     
     for ALGO in "${ALGORITHMS[@]}"
@@ -22,7 +30,7 @@ do
         echo "Running ${COLLECTIVE} ${ALGO}..."
         for TYPE in "INT32"
         do
-            for COUNT in 131072
+            for COUNT in ${COUNTS[@]}
             do
                 for ITERATIONS in 4
                 do

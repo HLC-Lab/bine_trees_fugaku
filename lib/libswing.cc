@@ -35,7 +35,8 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 #endif
 
 typedef enum{
-    SWING_REDUCE_SCATTER = 0,
+    SWING_NULL = 0, // No collective, useful to force some bookeping data computation
+    SWING_REDUCE_SCATTER,
     SWING_ALLGATHER,
     SWING_ALLREDUCE
 }CollType;
@@ -1240,6 +1241,7 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, BlockInfo** blocks_info, s
                               MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
+    if(coll_type == SWING_NULL){return MPI_SUCCESS;}
 
     if(algo == ALGO_SWING_B){
         return swing_coll_sendrecv_bbb(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
@@ -1255,6 +1257,7 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
                             uint num_requests_s, uint num_requests_r,
                            BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type, SwingInfo* info){
+    if(coll_type == SWING_NULL){return MPI_SUCCESS;}
     int res;
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
@@ -1276,6 +1279,7 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
     return res;
 }
 
+/*
 static int swing_coll(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r, 
                       BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                       CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
@@ -1285,6 +1289,7 @@ static int swing_coll(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chu
     if(res != MPI_SUCCESS){return res;}
     return swing_coll_wait(buf, rbuf, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info);
 }
+*/
 
 // Returns an array of valid distances (considering a plain collective on an even node)
 static inline void get_valid_distances(int step, int max_steps, int size, int* valid_distances, uint* num_valid_distances){
@@ -1630,9 +1635,12 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     }
     DPRINTF("[%d] Peers computed\n", info->rank);
     
-    size_t total_size_bytes = count*info->dtsize;
-    char* rbuf = (char*) malloc(total_size_bytes);
-    memcpy(recvbuf, sendbuf, total_size_bytes);    
+    char* rbuf = NULL;
+    if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
+        size_t total_size_bytes = count*info->dtsize;
+        rbuf = (char*) malloc(total_size_bytes);
+        memcpy(recvbuf, sendbuf, total_size_bytes);    
+    }
     uint coord_mine[MAX_SUPPORTED_DIMENSIONS];    
     getCoordFromId(info->rank, coord_mine, info->size, dimensions);
 
@@ -1710,20 +1718,40 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     CollType collectives_to_run[SWING_MAX_COLLECTIVE_SEQUENCE]; 
     void *buf_s[SWING_MAX_COLLECTIVE_SEQUENCE];
     void *buf_r[SWING_MAX_COLLECTIVE_SEQUENCE];
-    if(coll_type == SWING_ALLREDUCE){
-        collectives_to_run[0] = SWING_REDUCE_SCATTER;
-        collectives_to_run[1] = SWING_ALLGATHER;
-        buf_s[0] = recvbuf;
-        buf_r[0] = rbuf;
-        buf_s[1] = recvbuf;
-        buf_r[1] = recvbuf;
-        collectives_to_run_num = 2;
-    }else{
-        collectives_to_run[0] = coll_type;
-        collectives_to_run_num = 1;
-        buf_s[0] = recvbuf;
-        buf_r[0] = rbuf;
-    } // TODO: For reduce scatter pay attention to bitmap computation (so far we always assumed the ones for reduce_scatter were computed first, and thus we might have to revert steps id or send/recv bitmaps)
+    switch(coll_type){
+        case SWING_ALLREDUCE:{
+            collectives_to_run[0] = SWING_REDUCE_SCATTER;
+            collectives_to_run[1] = SWING_ALLGATHER;
+            buf_s[0] = recvbuf;
+            buf_r[0] = rbuf;
+            buf_s[1] = recvbuf;
+            buf_r[1] = recvbuf;
+            collectives_to_run_num = 2;
+            break;
+        }
+        case SWING_REDUCE_SCATTER:{
+            collectives_to_run[0] = SWING_REDUCE_SCATTER;
+            collectives_to_run_num = 1;
+            buf_s[0] = recvbuf;
+            buf_r[0] = rbuf;
+            break;
+        }
+        case SWING_ALLGATHER:{
+            // We first run a "NULL" collective (to force bookeping data computation), and then the actual allgather 
+            // TODO: Find a better way, avoid the NULL collective
+            collectives_to_run[0] = SWING_NULL;
+            collectives_to_run[1] = SWING_ALLGATHER;
+            collectives_to_run_num = 2;
+            buf_s[1] = recvbuf;
+            buf_r[1] = recvbuf;
+            break;
+        }
+        default:{
+            assert("Unknown collective" == 0);
+            return MPI_ERR_OTHER;
+        }
+    }
+
 
     for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
         for(size_t c = 0; c < info->num_chunks; c++){
@@ -1738,7 +1766,7 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
 
             for(size_t step = 0; step < num_steps; step++){        
                 // Run reduce-scatter
-                uint num_requests_s, num_requests_r;
+                uint num_requests_s = 0, num_requests_r = 0;
                 res = swing_coll_sendrecv(buf_s[collective], buf_r[collective], blocks_info[c], c, step, requests_s, requests_r, &num_requests_s, &num_requests_r, req_idx_to_block_idx,
                                           op, comm, datatype, datatype, 
                                           collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
@@ -1766,7 +1794,9 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     free(requests_r);
     free(req_idx_to_block_idx);
     free(coordinates);
-    free(rbuf);
+    if(rbuf){
+        free(rbuf);
+    }
     for(size_t p = 0; p < info->num_ports; p++){
         for(size_t s = 0; s < (uint) info->num_steps; s++){
             free(bitmap_send_merged[p][s]);
@@ -2024,8 +2054,21 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             free(blocks_info);
             return res;
         }
+        return MPI_ERR_OTHER;
+    }
+}
+
+static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Datatype recvtype, int sendcount, int recvcount){
+    if(sendtype != recvtype){ // Right now not supported if datatypes are different
+        return 0;
+    }
+    if(sendcount != recvcount){ // Right now not supported if counts are different
+        return 0;
+    }
+    if(algo == ALGO_SWING_B){
         return 1;
     }
+    return 0;
 }
 
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
@@ -2033,8 +2076,60 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     if(disable_reducescatter || algo == ALGO_DEFAULT){
         return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
     }else{  
-        SwingInfo info = init_info(sendtype, comm);
-        ;
+        if(allgather_algo_supported(algo, sendtype, recvtype, sendcount, recvcount)){
+            SwingInfo info = init_info(sendtype, comm);
+            // For reduce-scatter we do not do chunking (would complicate things too much). 
+            info.num_chunks = 1;
+            // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+            // This is the opposite of what we do in allreduce.
+            // Allocate blocks_info
+            BlockInfo*** blocks_info = (BlockInfo***) malloc(sizeof(BlockInfo**)*info.num_chunks);
+            for(size_t c = 0; c < info.num_chunks; c++){
+                blocks_info[c] = (BlockInfo**) malloc(sizeof(BlockInfo*)*info.num_ports);
+                for(size_t p = 0; p < info.num_ports; p++){
+                    blocks_info[c][p] = (BlockInfo*) malloc(sizeof(BlockInfo)*info.size);
+                }
+            } 
+            size_t count_so_far = 0;
+            size_t my_offset = 0;
+            for(size_t i = 0; i < (size_t) info.size; i++){
+                size_t partition_size = recvcount / info.num_ports;
+                size_t remaining = recvcount % info.num_ports;                
+                size_t block_offset = count_so_far*info.dtsize;
+                size_t block_count_so_far = 0;
+                for(size_t p = 0; p < info.num_ports; p++){
+                    size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                    size_t offset_port = block_offset + block_count_so_far*info.dtsize;
+                    block_count_so_far += count_port;
+                    blocks_info[0][p][i].count = count_port;
+                    blocks_info[0][p][i].offset = offset_port;
+                    DPRINTF("[%d] Port %d Offset %d Count %d\n", info.rank, p, offset_port, count_port);
+                }
+
+                if(i == (size_t) info.rank){
+                    my_offset = block_offset;
+                }
+                count_so_far += recvcount;
+            }
+
+            // Copy my data in the right place in the recvbuf
+            memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*info.dtsize);
+            size_t count = info.size*recvcount*info.dtsize;
+            MPI_Op op = MPI_SUM; // Any op would work, it is not used in allgather anyway
+            int res = swing_collective_block(sendbuf, recvbuf, count, sendtype, op, comm, &info, blocks_info, SWING_ALLGATHER); // TODO: Fix if we want to support different send/recv types
+
+            // Free blocks_info
+            for(size_t c = 0; c < info.num_chunks; c++){
+                for(size_t p = 0; p < info.num_ports; p++){
+                    free(blocks_info[c][p]);
+                }
+                free(blocks_info[c]);
+            }
+            free(blocks_info);        
+            return res;
+        }else{
+            return MPI_ERR_OTHER;
+        }
     }
 }
 

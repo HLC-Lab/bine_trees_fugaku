@@ -24,11 +24,8 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }
     }else if(!strcmp(collective, "MPI_Reduce_scatter")){
         int* recvcounts = (int*) malloc(sizeof(int)*size);
-        size_t partition_size = count / size;
-        size_t remaining = count % size;                
         for(size_t i = 0; i < size; i++){
-            size_t count_i = partition_size + (i < remaining ? 1 : 0);
-            recvcounts[i] = count_i;
+            recvcounts[i] = count;
         }
         if(rt == RUN_TYPE_VALIDATION){
             r = PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, dt, op, MPI_COMM_WORLD);
@@ -36,8 +33,38 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
             r = MPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, dt, op, MPI_COMM_WORLD);
         }
         free(recvcounts);
+    }else if(!strcmp(collective, "MPI_Allgather")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Allgather(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Allgather(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
+        }
     }
     return r;
+}
+
+static inline void allocate_buffers(const char* collective, size_t count, size_t size, size_t dtsize, char** sendbuf, char** recvbuf, char** recvbuf_validation){
+    size_t send_count, recv_count;
+    if(!strcmp(collective, "MPI_Allreduce")){
+        send_count = count;
+        recv_count = count;
+    }else if(!strcmp(collective, "MPI_Reduce_scatter")){
+        send_count = count*size;
+        recv_count = count;
+    }else if(!strcmp(collective, "MPI_Allgather")){
+        send_count = count;
+        recv_count = count*size;
+    }else{
+        fprintf(stderr, "Unknown collective %s\n", collective);
+        exit(-1);
+    }
+    *sendbuf = (char*) malloc(dtsize*send_count);
+    *recvbuf = (char*) malloc(dtsize*recv_count);
+    *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
+    // Initialize sendbuf with random values
+    for(size_t i = 0; i < count; i++){
+        (*sendbuf)[i] = (char) rand() % 1024;
+    }
 }
 
 
@@ -80,18 +107,14 @@ int main(int argc, char** argv){
     }
     int dtsize;
     MPI_Type_size(dt, &dtsize);
-    char* sendbuf = (char*) malloc(dtsize*count);
-    char* recvbuf = (char*) malloc(dtsize*count);
-    char* recvbuf_validation = (char*) malloc(dtsize*count); // To check correctness of results
+    srand(time(NULL));
     if(rank == 0){
         samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
     }
 
-    // Initialize sendbuf with random values
-    srand(time(NULL));
-    for(i = 0; i < count; i++){
-        sendbuf[i] = (char) rand() % 1024;
-    }
+    char *sendbuf, *recvbuf, *recvbuf_validation; // To check correctness of results
+    allocate_buffers(collective, count, comm_size, dtsize, &sendbuf, &recvbuf, &recvbuf_validation);
+
     r = run_collective(RUN_TYPE_VALIDATION, collective, sendbuf, recvbuf_validation, count, dt, op, comm_size);
     if(r != MPI_SUCCESS){
         fprintf(stderr, "Rank %d: Validation failed with error %d\n", rank, r);
