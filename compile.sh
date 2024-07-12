@@ -6,6 +6,11 @@ NC=$(tput sgr0)
 
 rm -f ./lib/libswing.o ./lib/libswing.so ./lib/libswing_profile.o ./bench/bench
 
+# Compile system-specific stuff
+#if [ ${SYSTEM} = "fugaku" ]; then
+#    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -c -fPIC -fopenmp ./lib/fugaku_tnr_stats.c -o ./lib/fugaku_tnr_stats.o
+#fi
+
 # Normal compilation
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -c -fPIC -fopenmp ./lib/libswing.cc -o ./lib/libswing.o ${MPI_COMPILER_FLAGS}
 if [ ! -f "./lib/libswing.o" ]; then
@@ -30,11 +35,5 @@ ${MPI_COMPILER} ${FLAGS_PROFILE} -fopenmp ./bench/bench.cc ./lib/libswing_profil
 
 
 # Bench
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp  -D${SYSTEM^^} ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp ./bench/get_coord_daint.c -o ./bench/get_coord_daint
-
-
-# Compile system-specific stuff
-if [ ${SYSTEM} = "fugaku" ]; then
-    ${MPI_COMPILER} conf/fugaku_tnr_stats.c -o conf/fugaku_tnr_stats
-fi

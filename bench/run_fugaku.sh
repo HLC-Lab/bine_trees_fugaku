@@ -29,7 +29,7 @@ do
     echo ${SYSTEM}${EXTRA},${p},${OUT_FOLDER} >> ../data/description.csv
     ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} hostname > ${OUT_FOLDER}/hostnames_${p}.txt
     
-    for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+    for n in 1 #8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
         iterations=0
         if [ $n -le 512 ]
