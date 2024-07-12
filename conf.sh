@@ -1,5 +1,5 @@
 #!/bin/bash
-SYSTEM="local"
+SYSTEM="fugaku"
 
 case $SYSTEM in
   daint)
