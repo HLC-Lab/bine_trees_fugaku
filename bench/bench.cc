@@ -4,7 +4,7 @@
 #include <time.h>
 #include <string.h>
 #include <unistd.h>
-
+#include <assert.h>
 
 
 #ifdef FUGAKU
@@ -78,13 +78,18 @@ void diff_tnr_stats(uint64_t start[NUM_TNR][PA_LEN], uint64_t stop[NUM_TNR][PA_L
 
 
 char port_name[NUM_TNR][3] = {"A", "C", "B-", "B+", "X-", "X+", "Y-", "Y+", "Z-", "Z+" };
-void print_tnr_stats(uint64_t reading[NUM_TNR][PA_LEN], uint rank, FILE* stream){
-  fprintf(stream, "rank,port_name,zero_credit_cycles_vc0,zero_credit_cycles_vc1,zero_credit_cycles_vc2,zero_credit_cycles_vc3,sent_pkts,sent_bytes,recvd_pkts,recvd_bytes\n");
+void print_tnr_stats(uint64_t reading[NUM_TNR][PA_LEN], uint rank){
+  char filename[100];
+  snprintf(filename, sizeof(filename), "tnr_stats_%d.csv", rank);  
+  FILE *f = fopen(filename, "w");
+  fprintf(f, "rank,port_name,zero_credit_cycles_vc0,zero_credit_cycles_vc1,zero_credit_cycles_vc2,zero_credit_cycles_vc3,sent_pkts,sent_bytes,recvd_pkts,recvd_bytes\n");
   int port_no;
   for(port_no = 0; port_no < NUM_TNR; port_no++){
-    fprintf(stream, "%d,%s,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n",
+    fprintf(f, "%d,%s,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n",
             rank,port_name[port_no], reading[port_no][0], reading[port_no][1], reading[port_no][2], reading[port_no][3], reading[port_no][6], reading[port_no][7]*16, reading[port_no][16], reading[port_no][17]*16);
   }
+  fflush(f);
+  fclose(f);
 }
 #endif
 
@@ -212,7 +217,7 @@ int main(int argc, char** argv){
     uint64_t tnr_start[NUM_TNR][PA_LEN];
     uint64_t tnr_stop[NUM_TNR][PA_LEN];
     uint64_t tnr_diff[NUM_TNR][PA_LEN];
-    read_tnr_stats(tnr_start);
+    assert(read_tnr_stats(tnr_start)==0);
 #endif
 
     
@@ -241,9 +246,9 @@ int main(int argc, char** argv){
     }
 
 #ifdef FUGAKU
-    read_tnr_stats(tnr_stop);
+    assert(read_tnr_stats(tnr_stop)==0);
     diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
-    print_tnr_stats(tnr_diff, rank, stdout);
+    print_tnr_stats(tnr_diff, rank);
 #endif    
 
     MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -270,6 +275,7 @@ int main(int argc, char** argv){
         avg_iteration /= iterations;
         printf("Average runtime: %f\n", avg_iteration);
     }
+    MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     free(sendbuf);
     free(recvbuf);

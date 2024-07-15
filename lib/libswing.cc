@@ -1,4 +1,7 @@
 #include <mpi.h>
+#ifdef FUGAKU
+#include <mpi-ext.h>
+#endif
 #include <algorithm>
 #include <stddef.h>
 #include <stdio.h>
@@ -210,16 +213,31 @@ static inline void getCoordFromId(int id, uint* coord, int nnodes, uint* dimensi
         dimensions_virtual = dimensions;
     }
 
+//#ifdef FUGAKU
+#if 0
+    // TODO: It only works for COMM_WORLD
+    FJMPI_Topology_get_coords(MPI_COMM_WORLD, id, FJMPI_LOGICAL, dimensions_num, (int*) coord);
+#else
     for (uint i = 0; i < dimensions_num; i++) {
         nnodes = nnodes / dimensions_virtual[i];
         coord[i] = id / nnodes;
         id = id % nnodes;
     }
+#endif
 }
 
 // Convert d-dimensional coordinates into a rank id (adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c)
 // Dimensions are (rows, cols, depth)
 static inline int getIdFromCoord(uint* coords, uint* dimensions, uint dimensions_num){
+//#ifdef FUGAKU
+#if 0
+  // TODO: It only works for COMM_WORLD
+  int maxppn = 1; // TODO: Right now we assume PPN=1
+  int outppn; // Ignored
+  int ranks[1]; // TODO: Change from 1 to maxppn
+  assert(FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, (int*) coords, maxppn, &outppn, ranks) == FJMPI_SUCCESS);
+  return ranks[0];
+#else
     int rank = 0;
     int multiplier = 1;
     uint coord;
@@ -238,6 +256,7 @@ static inline int getIdFromCoord(uint* coords, uint* dimensions, uint dimensions
         multiplier *= dimensions[i];
     }
     return rank;
+#endif
 }
 
 static int inline is_odd(int x){
@@ -1261,10 +1280,23 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
     int res;
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
+//#define ALWAYS_WAITALL
+#ifdef ALWAYS_WAITALL
+#ifdef FUGAKU
+      //FJMPI_Progress_stop();
+#endif
+      
+      res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
+#endif
+      
         int index;
         for(size_t i = 0; i < num_requests_r; i++){
-            res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);
+#ifndef ALWAYS_WAITALL	  
+            res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);	    
             if(res != MPI_SUCCESS){return res;}
+#else
+	    index = i;
+#endif	    
             void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
             DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", info->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
@@ -1775,9 +1807,15 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
                 // Start overlap
                 // While communicating, compute bitmaps needed to execute next step
                 // We do not need to do the same for allgather since they have already been computed here
+#ifdef FUGAKU
+		//FJMPI_Progress_start();
+#endif
                 if(step != num_steps - 1){
                     compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
                 }
+#ifdef FUGAKU
+		//		FJMPI_Progress_stop();
+#endif
                 // End overlap
 
                 res = swing_coll_wait(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
