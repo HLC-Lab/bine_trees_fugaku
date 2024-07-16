@@ -1,6 +1,7 @@
 #include <mpi.h>
 #ifdef FUGAKU
 #include <mpi-ext.h>
+#include "fugaku/rdma_utofu_comlib.h"
 #endif
 #include <algorithm>
 #include <stddef.h>
@@ -50,6 +51,7 @@ typedef enum{
     ALGO_SWING_B,
     ALGO_SWING_B_COALESCE,
     ALGO_SWING_B_CONT,
+    ALGO_SWING_B_UTOFU,
     ALGO_RING,
     ALGO_RECDOUB_L,
     ALGO_RECDOUB_B,
@@ -68,14 +70,17 @@ typedef struct{
     size_t num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
     uint num_ports;
     size_t num_chunks;
+#ifdef FUGAKU
+    rdma_comlib_data* utofu_handles[MAX_SUPPORTED_PORTS];
+#endif
 }SwingInfo;
 
-static unsigned int disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, 
-                    dimensions_num = 1, force_env_reload = 1, env_read = 0, contiguous_blocks = 0,
-                    rdma = 0, max_size = 0; //2097152;
+static unsigned int /*disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, */
+                    dimensions_num = 1, force_env_reload = 1, env_read = 0, /* contiguous_blocks = 0,*/
+                    max_size = 0; //2097152;
 static Algo algo = ALGO_SWING_B;
 static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
-static int multiport = 0; // If 1, assumes that the number of ports is equal to twice the number of dimensions
+static int num_ports = 1;
 
 static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
@@ -88,6 +93,7 @@ static inline void read_env(MPI_Comm comm){
     if(!env_read || force_env_reload){
         env_read = 1;
 
+        /*
         env_str = getenv("LIBSWING_DISABLE_REDUCESCATTER");
         if(env_str){
             disable_reducescatter = atoi(env_str);
@@ -117,15 +123,16 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             rdma = atoi(env_str);
         }
+        */
         
         env_str = getenv("LIBSWING_MAX_SIZE");
         if(env_str){
             max_size = atoi(env_str);
         }
 
-        env_str = getenv("LIBSWING_MULTIPORT");
+        env_str = getenv("LIBSWING_NUM_PORTS");
         if(env_str){
-            multiport = atoi(env_str);
+            num_ports = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_ALGO");
@@ -140,6 +147,8 @@ static inline void read_env(MPI_Comm comm){
                 algo = ALGO_SWING_B_COALESCE;
             }else if(strcmp(env_str, "SWING_B_CONT") == 0){
                 algo = ALGO_SWING_B_CONT;
+            }else if(strcmp(env_str, "SWING_B_UTOFU") == 0){
+                algo = ALGO_SWING_B_UTOFU;
             }else if(strcmp(env_str, "RING") == 0){
                 algo = ALGO_RING;
             }else if(strcmp(env_str, "RECDOUB_L") == 0){
@@ -179,11 +188,11 @@ static inline void read_env(MPI_Comm comm){
         if(rank == 0){
             printf("Libswing called. Environment:\n");
             printf("------------------------------------\n");
-            printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
-            printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
-            printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
-            printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
-            printf("LIBSWING_RDMA: %d\n", rdma);
+            //printf("LIBSWING_DISABLE_REDUCESCATTER: %d\n", disable_reducescatter);
+            //printf("LIBSWING_DISABLE_ALLGATHERV: %d\n", disable_allgatherv);
+            //printf("LIBSWING_DISABLE_ALLGATHER: %d\n", disable_allgather);
+            //printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
+            //printf("LIBSWING_RDMA: %d\n", rdma);
             printf("LIBSWING_ALGO: %d\n", algo);
             printf("LIBSWING_MAX_SIZE: %d\n", max_size);
             printf("LIBSWING_DIMENSIONS: ");
@@ -199,6 +208,39 @@ static inline void read_env(MPI_Comm comm){
 #endif
     }
 }
+
+#ifdef FUGAKU
+void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
+    if(datatype == MPI_INT){
+        const int *in = (const int *)inbuf;
+        int *inout = (int *)inoutbuf;
+#pragma omp parallel for
+        for (int i = 0; i < count; i++) {
+            if(op == MPI_SUM){
+                inout[i] += in[i];
+            }else{
+                fprintf(stderr, "Unknown reduction operation\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }else if(datatype == MPI_CHAR){
+        const char *in = (const char *)inbuf;
+        char *inout = (char *)inoutbuf;
+#pragma omp parallel for
+        for (int i = 0; i < count; i++) {
+            if(op == MPI_SUM){
+                inout[i] += in[i];
+            }else{
+                fprintf(stderr, "Unknown reduction operation\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }else{
+        fprintf(stderr, "Unknown reduction datatype\n");
+        exit(EXIT_FAILURE);
+    }
+}
+#endif
 
 static inline int mod(int a, int b){
     int r = a % b;
@@ -1182,6 +1224,7 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
     *num_requests_r = 0;           
     memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
+
     for(size_t port = 0; port < info->num_ports; port++){
         uint peer = peers_per_port[port][block_step];
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", info->rank, step, port, info->num_ports, peer);                
@@ -1219,8 +1262,8 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
             if(start_found_s && (!send_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
                 DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
                 res = MPI_Isend(((char*) buf) + offset_s, count_s, sendtype, peer, tag, comm, &(requests_s[*num_requests_s]));
-                (*num_requests_s)++;
                 if(res != MPI_SUCCESS){return res;}
+                (*num_requests_s)++;
 
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
@@ -1241,9 +1284,8 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
                 req_idx_to_block_idx[*num_requests_r].offset = offset_r;
                 req_idx_to_block_idx[*num_requests_r].count = count_r;
                 res = MPI_Irecv(((char*) rbuf) + offset_r, count_r, recvtype, peer, tag, comm, &(requests_r[*num_requests_r]));
-                (*num_requests_r)++;
                 if(res != MPI_SUCCESS){return res;}
-
+                (*num_requests_r)++;
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks
                 count_r = 0;
@@ -1256,6 +1298,125 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
     return MPI_SUCCESS;
 }
 
+#ifdef FUGAKU
+static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
+                              MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
+                              MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                              CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
+    size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1); 
+    memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
+    memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
+    memset(info->utofu_handles, 0, sizeof(info->utofu_handles));
+    size_t offset_s_m[MAX_SUPPORTED_PORTS], tofu_count_m[MAX_SUPPORTED_PORTS];
+
+    for(size_t port = 0; port < info->num_ports; port++){
+        uint peer = peers_per_port[port][block_step];
+        DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", info->rank, step, port, info->num_ports, peer);                
+
+        // Sendrecv + aggregate
+        // Search for the blocks that must be sent.
+        bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
+        size_t offset_s, offset_r, count_s = 0, count_r = 0;
+        for(size_t i = 0; i < (uint) info->size; i++){
+            int send_block, recv_block;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                send_block = bitmap_send[port][block_step][i];
+                recv_block = bitmap_recv[port][block_step][i];
+            }else{                
+                send_block = bitmap_recv[port][block_step][i];
+                recv_block = bitmap_send[port][block_step][i];
+            }
+            
+            size_t block_count = blocks_info[port][i].count;
+            size_t block_offset = blocks_info[port][i].offset;
+
+            if(send_block){
+                if(!start_found_s){
+                    start_found_s = true;
+                    offset_s = block_offset;
+                }
+                count_s += block_count;
+            }
+            if(start_found_s && (!send_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
+                if(sent_on_port){
+                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                    exit(-1);
+                }
+                sent_on_port = true;
+                DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
+                size_t tofu_count = count_s*info->dtsize;
+                if(!info->utofu_handles[port]){ // Handle for this port not yet created by irecv side
+                    info->utofu_handles[port] = (rdma_comlib_data*) create_rdma_comlib_data();
+                    int tni_id = port;                    
+                    rdma_comlib_new(info->utofu_handles[port], (const int*) &tni_id, (const int*) &peer, (const int*) &peer, (const size_t*) &tofu_count); // TODO: What if I send and receive different number of bytes? (e.g., for non power of 2)
+                }
+                offset_s_m[port] = offset_s;
+                tofu_count_m[port] = tofu_count;
+                //memcpy(get_sbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), ((char*) buf) + offset_s, tofu_count); // Is there anyway to avoid memcpy?
+                //rdma_comlib_isend(info->utofu_handles[port]);
+
+                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+                // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
+                count_s = 0;
+                offset_s = 0;
+                start_found_s = false;
+            }
+
+            if(recv_block){
+                if(!start_found_r){
+                    start_found_r = true;
+                    offset_r = block_offset;
+                }
+                count_r += block_count;
+            }            
+            if(start_found_r && (!recv_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
+                if(recvd_from_port){
+                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                    exit(-1);
+                }
+                recvd_from_port = true;
+                DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
+                req_idx_to_block_idx[port].offset = offset_r;
+                req_idx_to_block_idx[port].count = count_r;
+                if(!info->utofu_handles[port]){ // Handle for this port not yet created by isend side
+                    info->utofu_handles[port] = (rdma_comlib_data*) create_rdma_comlib_data();
+                    int tni_id = port;
+                    size_t tofu_count = count_r*info->dtsize;
+                    rdma_comlib_new(info->utofu_handles[port], (const int*) &tni_id, (const int*) &peer, (const int*) &peer, (const size_t*) &tofu_count); // TODO: What if I send and receive different number of bytes? (e.g., for non power of 2)                    
+                }
+                // TODO: This does not work if I need to issue multiple send/recv on the same port
+                //rdma_comlib_irecv(info->utofu_handles[port]);            
+                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+                // Reset everything in case we need to send another train of blocks
+                count_r = 0;
+                offset_r = 0;
+                start_found_r = false;
+            }
+        }
+    }
+
+#pragma omp parallel for num_threads(info->num_ports)
+    for(size_t port = 0; port < info->num_ports; port++){
+        if(info->utofu_handles[port]){
+            memcpy(get_sbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), ((char*) buf) + offset_s_m[port], tofu_count_m[port]); // Is there anyway to avoid memcpy?            
+            rdma_comlib_isend(info->utofu_handles[port]);            
+            rdma_comlib_irecv(info->utofu_handles[port]);            
+        }
+    }
+
+    DPRINTF("[%d] Issued %d send requests and %d receive requests\n", info->rank, *num_requests_s, *num_requests_r);
+    return MPI_SUCCESS;
+}
+#else
+static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
+                              MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
+                              MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                              CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
+    fprintf(stderr, "uTofu can only be used on Fugaku.\n");
+    exit(-1);
+}
+#endif
+
 static int swing_coll_sendrecv(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
                               MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
@@ -1266,18 +1427,56 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, BlockInfo** blocks_info, s
         return swing_coll_sendrecv_bbb(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
         return swing_coll_sendrecv_cont(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
+    }else if(algo == ALGO_SWING_B_UTOFU){
+        return swing_coll_sendrecv_utofu(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else{
         assert("Unknown algo" == 0);
         return MPI_ERR_OTHER;
     }
 }
 
+#ifdef FUGAKU
+static int swing_coll_wait_utofu(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
+                            uint num_requests_s, uint num_requests_r,
+                           BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                           CollType coll_type, SwingInfo* info){
+    // TODO: It breaks everything except _CONT (because UTOFU is only used for _CONT)
+    // TODO: We assume one and only one request per port
+#pragma omp parallel for num_threads(info->num_ports)
+    for(size_t port = 0; port < info->num_ports; port++){
+        if(info->utofu_handles[port]){
+            rdma_comlib_recv_wait(info->utofu_handles[port]);
+            void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[port].offset);  
+            if(coll_type == SWING_REDUCE_SCATTER){
+                //MPI_Reduce_local(get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), buf_block, req_idx_to_block_idx[port].count, sendtype, op); 
+                reduce_local(get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), buf_block, req_idx_to_block_idx[port].count, sendtype, op);
+            }else{
+                memcpy(buf_block, get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), req_idx_to_block_idx[port].count*info->dtsize);
+            }
+
+            rdma_comlib_send_wait(info->utofu_handles[port]);
+            destroy_rdma_comlib_data(info->utofu_handles[port]);
+            rdma_comlib_delete(info->utofu_handles[port]);
+        }
+    }
+    return MPI_SUCCESS;
+}
+#else
+static int swing_coll_wait_utofu(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
+                            uint num_requests_s, uint num_requests_r,
+                           BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                           CollType coll_type, SwingInfo* info){
+    fprintf(stderr, "uTofu can only be used on Fugaku\n");
+    exit(-1);
+}
+#endif
+
 static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
                             uint num_requests_s, uint num_requests_r,
                            BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type, SwingInfo* info){
     if(coll_type == SWING_NULL){return MPI_SUCCESS;}
-    int res;
+    int res = MPI_SUCCESS;
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
 //#define ALWAYS_WAITALL
@@ -1304,9 +1503,11 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
         }
     }else{
         res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
-        if(res != MPI_SUCCESS){return res;}        
+        if(res != MPI_SUCCESS){return res;}            
     }
-    // Wait for all the sends to be over
+
+
+    // Wait for all the sends to be over    
     res = MPI_Waitall(num_requests_s, requests_s, MPI_STATUSES_IGNORE);
     return res;
 }
@@ -1631,11 +1832,12 @@ static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinat
             uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
             retrieve_coord_mapping(coordinates, peers_per_port[p][step], coord_peer);
 
-            get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], coord_mine, reference_valid_distances, num_valid_distances, info);
+            get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], 
+                                      coord_mine, reference_valid_distances, num_valid_distances, info);
             bitmap_ready[p][step] = 1;
 
             // Remapping
-            if(algo == ALGO_SWING_B_CONT){
+            if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
                 memcpy(tmp_s, bitmap_send_merged[p][step], sizeof(char)*info->size);
                 memcpy(tmp_r, bitmap_recv_merged[p][step], sizeof(char)*info->size);
                 for(size_t i = 0; i < (uint) info->size; i++){
@@ -1729,7 +1931,7 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     /* REMAPPING */
     /*************/
     uint* remapping_per_port[MAX_SUPPORTED_PORTS];
-    if(algo == ALGO_SWING_B_CONT){
+    if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
         DPRINTF("[%d] Remapping\n", info->rank);
         std::vector<int> nodes(info->size);
         uint coord_zero[MAX_SUPPORTED_DIMENSIONS];
@@ -1784,9 +1986,14 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         }
     }
 
-
     for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
         for(size_t c = 0; c < info->num_chunks; c++){
+            /*
+            double starttime;
+            if(info->rank == 0){
+                starttime = MPI_Wtime();
+            }
+            */
             // Reset info for the next series of steps        
             for(size_t p = 0; p < info->num_ports; p++){                
                 memset(next_step_per_dim[p], 0, sizeof(size_t)*dimensions_num);
@@ -1795,13 +2002,17 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
 
             // Compute bitmaps needed to execute next step (step 0)
             compute_bitmaps(info, 0, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
-
+            /*
+            if(info->rank == 0){
+                printf("Core time %d,%d %lf\n", collective, c, (MPI_Wtime() - starttime)*1000000.0);
+            }
+            */
             for(size_t step = 0; step < num_steps; step++){        
                 // Run reduce-scatter
                 uint num_requests_s = 0, num_requests_r = 0;
                 res = swing_coll_sendrecv(buf_s[collective], buf_r[collective], blocks_info[c], c, step, requests_s, requests_r, &num_requests_s, &num_requests_r, req_idx_to_block_idx,
-                                          op, comm, datatype, datatype, 
-                                          collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
+                                            op, comm, datatype, datatype, 
+                                            collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
                 if(res != MPI_SUCCESS){return res;} 
 
                 // Start overlap
@@ -1817,13 +2028,16 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
 		//		FJMPI_Progress_stop();
 #endif
                 // End overlap
-
-                res = swing_coll_wait(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
+                if(algo == ALGO_SWING_B_UTOFU){
+                    res = swing_coll_wait_utofu(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
+                }else{
+                    res = swing_coll_wait(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
+                }
                 if(res != MPI_SUCCESS){return res;} 
             }
-        }
+        }        
     }
-    
+   
 
     /********/
     /* Free */
@@ -1843,7 +2057,7 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         free(bitmap_send_merged[p]);
         free(bitmap_recv_merged[p]);
         free(peers_per_port[p]);
-        if(algo == ALGO_SWING_B_CONT){
+        if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
             free(remapping_per_port[p]); 
         }
     }
@@ -1956,22 +2170,19 @@ static inline SwingInfo init_info(MPI_Datatype datatype, MPI_Comm comm){
     if(info.num_steps > LIBSWING_MAX_STEPS){
         assert("Max steps limit must be increased and constants updated.");
     }
-    info.num_ports = 1;
-    if(multiport){
-        info.num_ports = dimensions_num*2; // TODO: Always assumes num port is 2*num_dimension, refactor
-    }
+    info.num_ports = num_ports;
     return info;
 }
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(disable_allreduce || algo == ALGO_DEFAULT){
+    if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
         if(algo == ALGO_SWING_L){ // Swing_l
             SwingInfo info = init_info(datatype, comm);
             return MPI_Allreduce_lat_optimal_swing(sendbuf, recvbuf, count, datatype, op, comm, &info);
-        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){ // Swing_b
+        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU){ // Swing_b
             SwingInfo info = init_info(datatype, comm);
             BlockInfo*** blocks_info = get_blocks_info(count, info);
             int res = swing_collective_block(sendbuf, recvbuf, count, datatype, op, comm, &info, blocks_info, SWING_ALLREDUCE);
@@ -1986,20 +2197,19 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             return res;
         }else if(algo == ALGO_RING){ // Ring
             // TODO: Implement multiported ring, and chunking
-            assert(dimensions_num == 1 && multiport == 0 && max_size == 0);
+            assert(dimensions_num == 1 && num_ports == 1 && max_size == 0);
             return MPI_Allreduce_ring((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
             // TODO: Implement multiported ring, and chunking
-            assert(dimensions_num == 1 && multiport == 0 && max_size == 0);
+            assert(dimensions_num == 1 && num_ports == 1 && max_size == 0);
             return MPI_Allreduce_recdoub_b((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         }else if(algo == ALGO_RECDOUB_L){ // Recdoub_l
             // TODO: Implement multiported ring, and chunking
-            assert(dimensions_num == 1 && multiport == 0 && max_size == 0);
+            assert(dimensions_num == 1 && num_ports == 1 && max_size == 0);
             return MPI_Allreduce_recdoub_l((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         }else{
             return 1;
         }
-        return MPI_SUCCESS;
     }
 }
 
@@ -2022,7 +2232,7 @@ static int reducescatter_algo_supported(Algo algo, SwingInfo* info, size_t count
         }else{
             return 0;
         }
-    }else if(algo == ALGO_SWING_B_CONT && info->num_ports == 1){
+    }else if((algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU) && info->num_ports == 1){
         return 0; // TODO: To let it work, we should simply remap the block id
     }
     return 0;
@@ -2030,7 +2240,7 @@ static int reducescatter_algo_supported(Algo algo, SwingInfo* info, size_t count
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(disable_reducescatter || algo == ALGO_DEFAULT){
+    if(/*disable_reducescatter || */ algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
     }else{  
         SwingInfo info = init_info(datatype, comm);
@@ -2109,9 +2319,29 @@ static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Dataty
     return 0;
 }
 
+#ifdef FUGAKU
+int MPI_Init(int *argc, char ***argv){
+    int r = PMPI_Init(argc, argv);
+    rdma_comlib_init();
+
+    int dtsize;
+    MPI_Type_size(MPI_INT, &dtsize);
+    assert(dtsize == sizeof(int)); // This is needed in the reduce_local function since we assume MPI_INT is int
+
+    MPI_Type_size(MPI_CHAR, &dtsize);
+    assert(dtsize == sizeof(char)); // This is needed in the reduce_local function since we assume MPI_INT is int
+    return r;
+}
+
+int MPI_Finalize(void){
+    rdma_comlib_finalize();
+    return PMPI_Finalize();
+}
+#endif
+
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(disable_reducescatter || algo == ALGO_DEFAULT){
+    if(/*disable_reducescatter || */ algo == ALGO_DEFAULT){
         return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
     }else{  
         if(allgather_algo_supported(algo, sendtype, recvtype, sendcount, recvcount)){

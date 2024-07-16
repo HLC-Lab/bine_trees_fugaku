@@ -10,12 +10,13 @@ NC=$(tput sgr0)
 NODES=""
 EXTRA=""
 DIMENSIONS=""
-while getopts n:e:d: flag
+while getopts n:e:d:p: flag
 do
     case "${flag}" in
         n) NODES=($(echo "${OPTARG}" | tr ',' '\n'));;
         e) EXTRA="_"${OPTARG};;
         d) DIMENSIONS=${OPTARG};;
+        p) PORTS=${OPTARG};;
     esac
 done
 
@@ -33,7 +34,7 @@ for p in "${NODES[@]}"
 do
     echo ${SYSTEM}${EXTRA},${p},${OUT_FOLDER} >> ../data/description.csv
     
-    for n in 8388608 67108864 #1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+    for n in 1048576 8388608 67108864 #1 8 64 512 2048 16384 131072 1048576 8388608 67108864
     do
         iterations=0
         if [ $n -le 512 ]
@@ -52,52 +53,37 @@ do
             iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
-        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
         mkdir ${OUT_FOLDER}/${p}_${n}_default_stats/
         mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_default_stats/
 	
         # Run bandwidth optimal and lat optimal swing
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_multiport.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-	mkdir ${OUT_FOLDER}/${p}_${n}_lat_multiport_stats/
-	mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_lat_multiport_stats/
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+	    mkdir ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
+	    mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
 	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations} 
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_lat_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_lat_stats/	
-
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_multiport.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_bw_multiport_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_multiport_stats/	
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+        mkdir ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/
+        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/	
 	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-        mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_bw_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_stats/	
+        #LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+	    #mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+	    #mkdir ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
+        #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
 	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_coalesce_multiport.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-	mkdir ${OUT_FOLDER}/${p}_${n}_bw_coalesce_multiport_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_coalesce_multiport_stats/
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
+	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+        mkdir ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/
+        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/	
 	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations}
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_coalesce.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_bw_coalesce_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_coalesce_stats/	
-	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=1 LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations} 
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_cont_multiport.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_bw_cont_multiport_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_cont_multiport_stats/	
-	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_MULTIPORT=0 LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} CHAR ${n} ${iterations} 
-	mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_cont.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_bw_cont_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_cont_stats/	
-	
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_UTOFU" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
+	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
+        mkdir ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/
+        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/	
+		
         echo " ${GREEN}[Done]${NC}"
     done
 done
