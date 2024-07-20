@@ -16,7 +16,8 @@ typedef struct{
 }swing_utofu_comm_descriptor;
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, uint peer, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r);
+swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r);
+void swing_utofu_exchange_addr(swing_utofu_comm_descriptor* desc, uint peer);
 
 // teardown communication
 void swing_utofu_destroy_communication(swing_utofu_comm_descriptor* desc);

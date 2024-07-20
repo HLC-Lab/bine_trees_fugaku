@@ -24,11 +24,8 @@ void parse_edata(uint64_t edata, size_t* step, size_t* chunk){
 }
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, uint peer, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r){
+swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r){
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
-    memset(desc->completed_send_local, 0, sizeof(char)*MAX_NUM_CHUNKS);
-    memset(desc->completed_send, 0, sizeof(char)*MAX_NUM_CHUNKS);
-    memset(desc->completed_recv, 0, sizeof(char)*MAX_NUM_CHUNKS);
     // TODO: We can do just once at the beginning. We can communicate alltoall all the base addresses of the vectors, and then just add offsets at each step.
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
@@ -39,28 +36,27 @@ swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_
     // register memory regions and get their STADDs
     assert(utofu_reg_mem(desc->vcq_hdl, send_buffer, length_s, 0, &(desc->lcl_send_stadd)) == UTOFU_SUCCESS);
     assert(utofu_reg_mem(desc->vcq_hdl, recv_buffer, length_r, 0, &(desc->lcl_recv_stadd)) == UTOFU_SUCCESS);
+    return desc;
+}
 
+void swing_utofu_exchange_addr(swing_utofu_comm_descriptor* desc, uint peer){
+    memset(desc->completed_send_local, 0, sizeof(char)*MAX_NUM_CHUNKS);
+    memset(desc->completed_send, 0, sizeof(char)*MAX_NUM_CHUNKS);
+    memset(desc->completed_recv, 0, sizeof(char)*MAX_NUM_CHUNKS);
     // notify peer processes of the VCQ ID and the STADD
     uint64_t tmp_s_buffer[2] = {desc->lcl_vcq_id, desc->lcl_recv_stadd};
     uint64_t tmp_r_buffer[2];
-    assert(MPI_Sendrecv(tmp_s_buffer, 2, MPI_UINT64_T, peer, 0,
-                        tmp_r_buffer, 2, MPI_UINT64_T, peer, 0,
-                        MPI_COMM_WORLD, MPI_STATUS_IGNORE) == MPI_SUCCESS);
+#pragma omp critical // TODO: Find a better way, maybe alltoall before starting?
+    {
+        assert(MPI_Sendrecv(tmp_s_buffer, 2, MPI_UINT64_T, peer, 0,
+                            tmp_r_buffer, 2, MPI_UINT64_T, peer, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE) == MPI_SUCCESS);
+    }
     desc->rmt_vcq_id = tmp_r_buffer[0];
     desc->rmt_recv_stadd = tmp_r_buffer[1];
-    /*
-    // Logically equivalent to the following, we just did one sendrecv rather than two.
-    MPI_Sendrecv(&(desc->lcl_vcq_id), 1, MPI_UINT64_T, peer, 0,
-                 &(desc->rmt_vcq_id), 1, MPI_UINT64_T, peer, 0,
-                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    MPI_Sendrecv(&(desc->lcl_recv_stadd), 1, MPI_UINT64_T, peer, 0,
-                 &(desc->rmt_recv_stadd), 1, MPI_UINT64_T, peer, 0,
-                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    */
+
     // embed the default communication path coordinates into the received VCQ ID.
     assert(utofu_set_vcq_id_path(&(desc->rmt_vcq_id), NULL) == UTOFU_SUCCESS);
-    MPI_Barrier(MPI_COMM_WORLD);
-    return desc;
 }
 
 // teardown communication
@@ -95,7 +91,6 @@ void swing_utofu_wait_tcq(swing_utofu_comm_descriptor* desc){
     assert(rc == UTOFU_SUCCESS);
     //assert((uintptr_t)cbdata == cbvalue);
 }
-
 
 void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, size_t expected_step){
     size_t step, chunk;    

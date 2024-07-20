@@ -71,9 +71,6 @@ typedef struct{
     size_t num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
     uint num_ports;
     size_t num_chunks;
-#ifdef FUGAKU
-    swing_utofu_comm_descriptor* utofu_descriptors[MAX_SUPPORTED_PORTS];
-#endif
 }SwingInfo;
 
 static unsigned int /*disable_reducescatter = 0, disable_allgatherv = 0, disable_allgather = 0, disable_allreduce = 0, */
@@ -1297,14 +1294,11 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
 }
 
 #ifdef FUGAKU
-static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
-                              MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
+static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
+                              BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1); 
-    memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    memset(info->utofu_descriptors, 0, sizeof(info->utofu_descriptors));
     size_t offsets_s[MAX_SUPPORTED_PORTS], counts_s[MAX_SUPPORTED_PORTS];
     size_t offsets_r[MAX_SUPPORTED_PORTS], counts_r[MAX_SUPPORTED_PORTS];
     memset(offsets_s, 0, sizeof(offsets_s));
@@ -1312,143 +1306,130 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
     memset(offsets_r, 0, sizeof(offsets_r));
     memset(counts_r, 0, sizeof(counts_r));
 
-    for(size_t port = 0; port < info->num_ports; port++){     
-        // Sendrecv + aggregate
-        // Search for the blocks that must be sent.
-        bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
-        size_t offset_s, offset_r, count_s = 0, count_r = 0;
-        for(size_t i = 0; i < (uint) info->size; i++){
-            int send_block, recv_block;
-            if(coll_type == SWING_REDUCE_SCATTER){
-                send_block = bitmap_send[port][block_step][i];
-                recv_block = bitmap_recv[port][block_step][i];
-            }else{                
-                send_block = bitmap_recv[port][block_step][i];
-                recv_block = bitmap_send[port][block_step][i];
-            }
-            
-            size_t block_count = blocks_info[port][i].count;
-            size_t block_offset = blocks_info[port][i].offset;
 
-            if(send_block){
-                if(!start_found_s){
-                    start_found_s = true;
-                    offset_s = block_offset;
-                }
-                count_s += block_count;
-            }
-            if(start_found_s && (!send_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
-                if(sent_on_port){
-                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                    exit(-1);
-                }
-                sent_on_port = true;
-                DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
-                offsets_s[port] = offset_s;
-                counts_s[port] = count_s;
+    // Sendrecv + aggregate
+    // Search for the blocks that must be sent.
+    bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
+    size_t offset_s, offset_r, count_s = 0, count_r = 0;
+    for(size_t i = 0; i < (uint) info->size; i++){
+        int send_block, recv_block;
+        if(coll_type == SWING_REDUCE_SCATTER){
+            send_block = bitmap_send[port][block_step][i];
+            recv_block = bitmap_recv[port][block_step][i];
+        }else{                
+            send_block = bitmap_recv[port][block_step][i];
+            recv_block = bitmap_send[port][block_step][i];
+        }
+        
+        size_t block_count = blocks_info[port][i].count;
+        size_t block_offset = blocks_info[port][i].offset;
 
-                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-                // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
-                count_s = 0;
-                offset_s = 0;
-                start_found_s = false;
+        if(send_block){
+            if(!start_found_s){
+                start_found_s = true;
+                offset_s = block_offset;
             }
+            count_s += block_count;
+        }
+        if(start_found_s && (!send_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
+            if(sent_on_port){
+                fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                exit(-1);
+            }
+            sent_on_port = true;
+            DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
+            offsets_s[port] = offset_s;
+            counts_s[port] = count_s;
 
-            if(recv_block){
-                if(!start_found_r){
-                    start_found_r = true;
-                    offset_r = block_offset;
-                }
-                count_r += block_count;
-            }            
-            if(start_found_r && (!recv_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
-                if(recvd_from_port){
-                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                    exit(-1);
-                }
-                recvd_from_port = true;
-                DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
-                req_idx_to_block_idx[port].offset = offset_r;
-                req_idx_to_block_idx[port].count = count_r;
-                offsets_r[port] = offset_r;
-                counts_r[port] = count_r;
-                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-                // Reset everything in case we need to send another train of blocks
-                count_r = 0;
-                offset_r = 0;
-                start_found_r = false;
+            // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+            // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
+            count_s = 0;
+            offset_s = 0;
+            start_found_s = false;
+        }
+
+        if(recv_block){
+            if(!start_found_r){
+                start_found_r = true;
+                offset_r = block_offset;
             }
+            count_r += block_count;
+        }            
+        if(start_found_r && (!recv_block || i == (size_t) info->size - 1)){ // The train of consecutive blocks is over
+            if(recvd_from_port){
+                fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                exit(-1);
+            }
+            recvd_from_port = true;
+            DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
+            req_idx_to_block_idx[port].offset = offset_r;
+            req_idx_to_block_idx[port].count = count_r;
+            offsets_r[port] = offset_r;
+            counts_r[port] = count_r;
+            // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+            // Reset everything in case we need to send another train of blocks
+            count_r = 0;
+            offset_r = 0;
+            start_found_r = false;
         }
     }
 
-    // This can't be parallelized due to the sendrecv, but we can probably just do it at the beginning by letting everyone exchanging their base pointers with anyone else
-    for(size_t port = 0; port < info->num_ports; port++){
-        if(counts_s[port]){
-            uint peer = peers_per_port[port][block_step];
-            char* buf_block = ((char*) buf) + offsets_s[port];
-            char* rbuf_block = ((char*) rbuf) + offsets_r[port];
-            info->utofu_descriptors[port] = swing_utofu_setup_communication(port, peer, buf_block, counts_s[port]*info->dtsize, rbuf_block, counts_r[port]*info->dtsize);                        
+    uint peer = peers_per_port[port][block_step];
+    swing_utofu_exchange_addr(utofu_descriptor, peer);
+    size_t max_count = floor(MAX_PUTGET_SIZE / info->dtsize);
+    char issued_sends = 0, issued_recvs = 0;
+    size_t offset = offsets_s[port];        
+    size_t count = 0;     
+    // We first enqueue all the send. Then, we receive and aggregate
+    // Aggregation and reception of next block should be overlapped
+    // Issue isends for all the blocks
+    if(counts_s[port]){ 
+        size_t remaining = counts_s[port];
+        size_t bytes_to_send = 0;
+        // Split the transmission into chunks < MAX_PUTGET_SIZE
+        while(remaining){
+            assert(issued_sends <= MAX_NUM_CHUNKS);
+            count = remaining < max_count ? remaining : max_count;
+            bytes_to_send = count*info->dtsize;
+            swing_utofu_isend(utofu_descriptor, step, issued_sends, offset, bytes_to_send); 
+            offset += bytes_to_send;
+            remaining -= count;
+            ++issued_sends;
         }
     }
-#pragma omp parallel for num_threads(info->num_ports)
-    for(size_t port = 0; port < info->num_ports; port++){
+    // Receive and aggregate
+    offset = 0;
+    if(counts_r[port]){ 
         char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
         char* rbuf_block = ((char*) rbuf) + req_idx_to_block_idx[port].offset;
-        size_t max_count = floor(MAX_PUTGET_SIZE / info->dtsize);
-        char issued_sends = 0, issued_recvs = 0;
-        size_t offset = 0;        
-        size_t count = 0;     
-        // We first enqueue all the send. Then, we receive and aggregate
-        // Aggregation and reception of next block should be overlapped
-        // Issue isends for all the blocks
-        if(counts_s[port]){ 
-            size_t remaining = counts_s[port];
-            size_t bytes_to_send = 0;
-            // Split the transmission into chunks < MAX_PUTGET_SIZE
-            while(remaining){
-                assert(issued_sends <= MAX_NUM_CHUNKS);
-                count = remaining < max_count ? remaining : max_count;
-                bytes_to_send = count*info->dtsize;
-                swing_utofu_isend(info->utofu_descriptors[port], step, issued_sends, offset, bytes_to_send); 
-                offset += bytes_to_send;
-                remaining -= count;
-                ++issued_sends;
+        size_t remaining = counts_r[port];
+        size_t bytes_to_recv = 0;
+        // Split the transmission into chunks < MAX_PUTGET_SIZE
+        while(remaining){
+            assert(issued_recvs <= MAX_NUM_CHUNKS);
+            count = remaining < max_count ? remaining : max_count;
+            bytes_to_recv = count*info->dtsize;
+            swing_utofu_wait_recv(utofu_descriptor, step, issued_recvs);
+            if(coll_type == SWING_REDUCE_SCATTER){
+                reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
             }
-        }
-        // Receive and aggregate
-        offset = 0;
-        if(counts_r[port]){ 
-            size_t remaining = counts_r[port];
-            size_t bytes_to_recv = 0;
-            // Split the transmission into chunks < MAX_PUTGET_SIZE
-            while(remaining){
-                assert(issued_recvs <= MAX_NUM_CHUNKS);
-                count = remaining < max_count ? remaining : max_count;
-                bytes_to_recv = count*info->dtsize;
-                swing_utofu_wait_recv(info->utofu_descriptors[port], step, issued_recvs);
-                if(coll_type == SWING_REDUCE_SCATTER){
-                    reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
-                }
-                offset += bytes_to_recv;
-                remaining -= count;
-                ++issued_recvs;
-            }            
-        }
-        // Wait for send completion and destroy
-        if(counts_s[port] || counts_r[port]){
-            if(counts_s[port]){
-                swing_utofu_wait_sends(info->utofu_descriptors[port], step, issued_sends);
-            }
-            swing_utofu_destroy_communication(info->utofu_descriptors[port]);
+            offset += bytes_to_recv;
+            remaining -= count;
+            ++issued_recvs;
+        }            
+    }
+    // Wait for send completion
+    if(counts_s[port] || counts_r[port]){
+        if(counts_s[port]){
+            swing_utofu_wait_sends(utofu_descriptor, step, issued_sends);
         }
     }
 
-    DPRINTF("[%d] Issued %d send requests and %d receive requests\n", info->rank, *num_requests_s, *num_requests_r);
     return MPI_SUCCESS;
 }
 #else
 static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
-                              MPI_Request* requests_s, MPI_Request* requests_r, uint* num_requests_s, uint* num_requests_r, BlockInfo* req_idx_to_block_idx,
+                              BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
@@ -1466,8 +1447,6 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, BlockInfo** blocks_info, s
         return swing_coll_sendrecv_bbb(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
         return swing_coll_sendrecv_cont(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
-    }else if(algo == ALGO_SWING_B_UTOFU){
-        return swing_coll_sendrecv_utofu(buf, rbuf, blocks_info, chunk, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, sendtype, recvtype, coll_type, info, peers_per_port, bitmap_send, bitmap_recv);
     }else{
         assert("Unknown algo" == 0);
         return MPI_ERR_OTHER;
@@ -1915,8 +1894,6 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         }
     }
 
-
-
     /********************/
     /** Send/Recv part **/
     /********************/
@@ -1924,7 +1901,6 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*info->size*MAX_SUPPORTED_PORTS);
-
 
     /*************/
     /* REMAPPING */
@@ -1985,50 +1961,78 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         }
     }
 
-    for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
-        for(size_t c = 0; c < info->num_chunks; c++){
-            /*
-            double starttime;
-            if(info->rank == 0){
-                starttime = MPI_Wtime();
+    if(algo == ALGO_SWING_B_UTOFU){        
+        // Setup all the communications
+        swing_utofu_comm_descriptor* utofu_descriptors[MAX_SUPPORTED_PORTS][SWING_MAX_COLLECTIVE_SEQUENCE];
+        for(size_t port = 0; port < info->num_ports; port++){            
+            memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
+            current_d[port] = port % dimensions_num;
+            for(size_t collective = 0; collective < collectives_to_run_num; collective++){                        
+                utofu_descriptors[port][collective] = swing_utofu_setup_communication(port, buf_s[collective], count*info->dtsize, buf_r[collective], count*info->dtsize);
             }
-            */
-            // Reset info for the next series of steps        
-            for(size_t p = 0; p < info->num_ports; p++){                
-                memset(next_step_per_dim[p], 0, sizeof(size_t)*dimensions_num);
-                current_d[p] = p % dimensions_num;
-            }
+        }
+        // Needed to be sure everyone registered the buffers
+        MPI_Barrier(MPI_COMM_WORLD);
+        
+        // Compute all bitmaps // TODO: Refactor to do this step by step while waiting the data (overlap)
+        for(size_t step = 0; step < num_steps; step++){        
+            compute_bitmaps(info, step, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);                        
+        }            
 
-            // Compute bitmaps needed to execute next step (step 0)
-            compute_bitmaps(info, 0, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
-            /*
-            if(info->rank == 0){
-                printf("Core time %d,%d %lf\n", collective, c, (MPI_Wtime() - starttime)*1000000.0);
-            }
-            */
-            for(size_t step = 0; step < num_steps; step++){        
-                // Run reduce-scatter
-                uint num_requests_s = 0, num_requests_r = 0;
-                //double start = MPI_Wtime();            
-                res = swing_coll_sendrecv(buf_s[collective], buf_r[collective], blocks_info[c], c, step, requests_s, requests_r, &num_requests_s, &num_requests_r, req_idx_to_block_idx,
-                                            op, comm, datatype, datatype, 
-                                            collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
-                //printf("sendrecv %lf us\n", (MPI_Wtime() - start)*1000000.0);                
-                if(res != MPI_SUCCESS){return res;} 
-
-                // Start overlap
-                // While communicating, compute bitmaps needed to execute next step
-                // We do not need to do the same for allgather since they have already been computed here
-                if(step != num_steps - 1){
-                    compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
+#pragma omp parallel for num_threads(info->num_ports)
+        for(size_t port = 0; port < info->num_ports; port++){            
+            for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+                for(size_t c = 0; c < info->num_chunks; c++){
+                    // Reset info for the next series of steps        
+                    memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
+                    current_d[port] = port % dimensions_num;
+                    for(size_t step = 0; step < num_steps; step++){        
+                        res = swing_coll_sendrecv_utofu(port, utofu_descriptors[port][collective], buf_s[collective], buf_r[collective], blocks_info[c], c, step, req_idx_to_block_idx,
+                                                        op, comm, datatype, datatype, 
+                                                        collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
+                        assert(res == MPI_SUCCESS);
+                    }
                 }
-                // End overlap
-                if(algo != ALGO_SWING_B_UTOFU){ // For uTofu we do everything in the sendrecv
+            }
+        }
+        // Cleanup utofu resources
+        for(size_t port = 0; port < info->num_ports; port++){            
+            for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+                swing_utofu_destroy_communication(utofu_descriptors[port][collective]);
+            }
+        }
+    }else{
+        for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+            for(size_t c = 0; c < info->num_chunks; c++){
+                // Reset info for the next series of steps        
+                for(size_t p = 0; p < info->num_ports; p++){                
+                    memset(next_step_per_dim[p], 0, sizeof(size_t)*dimensions_num);
+                    current_d[p] = p % dimensions_num;
+                }
+
+                // Compute bitmaps needed to execute next step (step 0)
+                compute_bitmaps(info, 0, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
+            
+                for(size_t step = 0; step < num_steps; step++){        
+                    uint num_requests_s = 0, num_requests_r = 0;
+                    //double start = MPI_Wtime();            
+                    res = swing_coll_sendrecv(buf_s[collective], buf_r[collective], blocks_info[c], c, step, requests_s, requests_r, &num_requests_s, &num_requests_r, req_idx_to_block_idx,
+                                                op, comm, datatype, datatype, 
+                                                collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
+                    //printf("sendrecv %lf us\n", (MPI_Wtime() - start)*1000000.0);                
+                    if(res != MPI_SUCCESS){return res;} 
+                    // End overlap
+                    // Start overlap
+                    // While communicating, compute bitmaps needed to execute next step
+                    // We do not need to do the same for allgather since they have already been computed here
+                    if(step != num_steps - 1){
+                        compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
+                    }
                     res = swing_coll_wait(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
+                    if(res != MPI_SUCCESS){return res;} 
                 }
-                if(res != MPI_SUCCESS){return res;} 
-            }
-        }        
+            }        
+        }
     }
    
 
