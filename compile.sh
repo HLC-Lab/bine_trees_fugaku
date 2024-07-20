@@ -45,4 +45,4 @@ fi
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp  -D${SYSTEM^^} ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp ./bench/get_coord_daint.c -o ./bench/get_coord_daint
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp  -D${SYSTEM^^} ./bench/bench_dummy_utofu.c -o ./bench/bench_dummy_utofu ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+#${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -fopenmp  -D${SYSTEM^^} ./bench/bench_dummy_utofu.c -o ./bench/bench_dummy_utofu ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}

@@ -216,7 +216,7 @@ void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype dat
         const int *in = (const int *)inbuf;
         int *inout = (int *)inoutbuf;
         if(op == MPI_SUM){
-#pragma omp parallel for             
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
             for (int i = 0; i < count; i++) {
                 inout[i] += in[i];
             }
@@ -228,7 +228,7 @@ void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype dat
         const char *in = (const char *)inbuf;
         char *inout = (char *)inoutbuf;
         if(op == MPI_SUM){
-#pragma omp parallel for             
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
             for (int i = 0; i < count; i++) {
                 inout[i] += in[i];
             }
@@ -1305,12 +1305,12 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
     memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     memset(info->utofu_descriptors, 0, sizeof(info->utofu_descriptors));
-    size_t offsets_s[MAX_SUPPORTED_PORTS], bytes_s[MAX_SUPPORTED_PORTS];
-    size_t offsets_r[MAX_SUPPORTED_PORTS], bytes_r[MAX_SUPPORTED_PORTS];
+    size_t offsets_s[MAX_SUPPORTED_PORTS], counts_s[MAX_SUPPORTED_PORTS];
+    size_t offsets_r[MAX_SUPPORTED_PORTS], counts_r[MAX_SUPPORTED_PORTS];
     memset(offsets_s, 0, sizeof(offsets_s));
-    memset(bytes_s, 0, sizeof(bytes_s));
+    memset(counts_s, 0, sizeof(counts_s));
     memset(offsets_r, 0, sizeof(offsets_r));
-    memset(bytes_r, 0, sizeof(bytes_r));
+    memset(counts_r, 0, sizeof(counts_r));
 
     for(size_t port = 0; port < info->num_ports; port++){     
         // Sendrecv + aggregate
@@ -1345,7 +1345,7 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
                 sent_on_port = true;
                 DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
                 offsets_s[port] = offset_s;
-                bytes_s[port] = count_s*info->dtsize;
+                counts_s[port] = count_s;
 
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
@@ -1371,7 +1371,7 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
                 req_idx_to_block_idx[port].offset = offset_r;
                 req_idx_to_block_idx[port].count = count_r;
                 offsets_r[port] = offset_r;
-                bytes_r[port] = count_r*info->dtsize;
+                counts_r[port] = count_r;
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks
                 count_r = 0;
@@ -1383,31 +1383,62 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
 
     // This can't be parallelized due to the sendrecv, but we can probably just do it at the beginning by letting everyone exchanging their base pointers with anyone else
     for(size_t port = 0; port < info->num_ports; port++){
-        if(bytes_s[port]){
+        if(counts_s[port]){
             uint peer = peers_per_port[port][block_step];
             char* buf_block = ((char*) buf) + offsets_s[port];
             char* rbuf_block = ((char*) rbuf) + offsets_r[port];
-            info->utofu_descriptors[port] = swing_utofu_setup_communication(port, peer, buf_block, bytes_s[port], rbuf_block, bytes_r[port]);            
+            info->utofu_descriptors[port] = swing_utofu_setup_communication(port, peer, buf_block, counts_s[port]*info->dtsize, rbuf_block, counts_r[port]*info->dtsize);                        
         }
     }
 #pragma omp parallel for num_threads(info->num_ports)
     for(size_t port = 0; port < info->num_ports; port++){
-        if(bytes_s[port]){
-            char* buf_block = ((char*) buf) + offsets_r[port];
-            char* rbuf_block = ((char*) rbuf) + offsets_r[port];
-            // We use the step as edata. It can have 256 possible values. 
-            // Since the step is logarithmic in the number of nodes, we can 
-            // support up to 2^256 nodes (or 2^128 if we consider both reduce-scatter+allgather).
-            // I do not need to include the port in the edata since each port is manage on a different VCQ already.
-            swing_utofu_isend(info->utofu_descriptors[port], step); 
-            //swing_utofu_waitrecv(info->utofu_descriptors[port]);
-            swing_utofu_wait(info->utofu_descriptors[port], step);
-            if(coll_type == SWING_REDUCE_SCATTER){
-                // TODO: It also does a parallel for, how do they interact?
-                reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[port].count, sendtype, op);
-                //MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[port].count, sendtype, op);
+        char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
+        char* rbuf_block = ((char*) rbuf) + req_idx_to_block_idx[port].offset;
+        size_t max_count = floor(MAX_PUTGET_SIZE / info->dtsize);
+        char issued_sends = 0, issued_recvs = 0;
+        size_t offset = 0;        
+        size_t count = 0;     
+        // We first enqueue all the send. Then, we receive and aggregate
+        // Aggregation and reception of next block should be overlapped
+        // Issue isends for all the blocks
+        if(counts_s[port]){ 
+            size_t remaining = counts_s[port];
+            size_t bytes_to_send = 0;
+            // Split the transmission into chunks < MAX_PUTGET_SIZE
+            while(remaining){
+                assert(issued_sends <= MAX_NUM_CHUNKS);
+                count = remaining < max_count ? remaining : max_count;
+                bytes_to_send = count*info->dtsize;
+                swing_utofu_isend(info->utofu_descriptors[port], step, issued_sends, offset, bytes_to_send); 
+                offset += bytes_to_send;
+                remaining -= count;
+                ++issued_sends;
             }
-            //swing_utofu_waitsend(info->utofu_descriptors[port]);            
+        }
+        // Receive and aggregate
+        offset = 0;
+        if(counts_r[port]){ 
+            size_t remaining = counts_r[port];
+            size_t bytes_to_recv = 0;
+            // Split the transmission into chunks < MAX_PUTGET_SIZE
+            while(remaining){
+                assert(issued_recvs <= MAX_NUM_CHUNKS);
+                count = remaining < max_count ? remaining : max_count;
+                bytes_to_recv = count*info->dtsize;
+                swing_utofu_wait_recv(info->utofu_descriptors[port], step, issued_recvs);
+                if(coll_type == SWING_REDUCE_SCATTER){
+                    reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
+                }
+                offset += bytes_to_recv;
+                remaining -= count;
+                ++issued_recvs;
+            }            
+        }
+        // Wait for send completion and destroy
+        if(counts_s[port] || counts_r[port]){
+            if(counts_s[port]){
+                swing_utofu_wait_sends(info->utofu_descriptors[port], step, issued_sends);
+            }
             swing_utofu_destroy_communication(info->utofu_descriptors[port]);
         }
     }
@@ -1978,9 +2009,11 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
             for(size_t step = 0; step < num_steps; step++){        
                 // Run reduce-scatter
                 uint num_requests_s = 0, num_requests_r = 0;
+                //double start = MPI_Wtime();            
                 res = swing_coll_sendrecv(buf_s[collective], buf_r[collective], blocks_info[c], c, step, requests_s, requests_r, &num_requests_s, &num_requests_r, req_idx_to_block_idx,
                                             op, comm, datatype, datatype, 
                                             collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
+                //printf("sendrecv %lf us\n", (MPI_Wtime() - start)*1000000.0);                
                 if(res != MPI_SUCCESS){return res;} 
 
                 // Start overlap

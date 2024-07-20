@@ -2,18 +2,33 @@
 
 // TODO: Add cache injection?
 #define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
-#define MAX_PUTGET_SIZE 16777215
+
+// edata can be at most 8 bits. 
+// We use the first 4 bits to encode the step we are, and the remaining 4 bits to encode the id of the chunk
+// we are transmitting (large data must be chunked).
+// - Regarding the step, this means we support up to 2^4 (16) steps which, in turn, means we support up to
+// 2^16 nodes. In practice, we should be fine even with a larger number of nodes, since the probability to receive
+// the same edata twice from two different steps should be negligible.abort
+// - Regarding the chunk id, it means we can support up to 2^4 chunks. The maximum transmission size is around
+// 16MiB. Moreover, we send at most half of the vector. Thus, we can reduce vectors of at most 16MiB*2^4*2 = 511MiB
+// In principle we could modify the bit partitioning to support larger networks or larger vectors. Moreover,
+// we could still split larger vectors into separate allreduce.
+// I do not need to include the port in the edata since each port is manage on a different VCQ already.
+uint64_t build_edata(size_t step, size_t chunk){
+    return step << 4 | chunk;
+}
+
+void parse_edata(uint64_t edata, size_t* step, size_t* chunk){
+    *step = (edata >> 4) & 0xF;
+    *chunk = edata & 0xF;
+}
 
 // setup send/recv communication
 swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, uint peer, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r){
-    if(length_s > MAX_PUTGET_SIZE || length_r > MAX_PUTGET_SIZE){
-        fprintf(stderr, "Put maximum length exceeded (%ld,%ld) vs. %ld.\n", length_s, length_r, MAX_PUTGET_SIZE);
-        exit(-1);
-    }
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
-    desc->length_s = length_s;
-    desc->send_complete = 0;
-    desc->recv_complete = 0;
+    memset(desc->completed_send_local, 0, sizeof(char)*MAX_NUM_CHUNKS);
+    memset(desc->completed_send, 0, sizeof(char)*MAX_NUM_CHUNKS);
+    memset(desc->completed_recv, 0, sizeof(char)*MAX_NUM_CHUNKS);
     // TODO: We can do just once at the beginning. We can communicate alltoall all the base addresses of the vectors, and then just add offsets at each step.
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
@@ -57,104 +72,65 @@ void swing_utofu_destroy_communication(swing_utofu_comm_descriptor* desc){
 }
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint64_t edata){
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, size_t step, size_t chunk, size_t offset, size_t length){    
+    if(length > MAX_PUTGET_SIZE){
+        fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
+        exit(-1);
+    }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
+    uint64_t edata = build_edata(step, chunk);
     // instruct the TNI to perform a Put communication
     utofu_put(desc->vcq_hdl, desc->rmt_vcq_id, 
-              desc->lcl_send_stadd, desc->rmt_recv_stadd, desc->length_s,
+              desc->lcl_send_stadd + offset, desc->rmt_recv_stadd + offset, length,
               edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
 }
 
-void swing_utofu_wait(swing_utofu_comm_descriptor* desc, uint64_t edata){
+void swing_utofu_wait_tcq(swing_utofu_comm_descriptor* desc){
     int rc;    
     // confirm the TCQ notification
-    if (SWING_UTOFU_POST_FLAGS & UTOFU_ONESIDED_FLAG_TCQ_NOTICE) {
-        void *cbdata;
-        do {
-            rc = utofu_poll_tcq(desc->vcq_hdl, 0, &cbdata);
-        } while (rc == UTOFU_ERR_NOT_FOUND);
-        assert(rc == UTOFU_SUCCESS);
-    }
-    // At this point I could modify the sbuff
-    
+    void *cbdata;
+    do {
+        rc = utofu_poll_tcq(desc->vcq_hdl, 0, &cbdata);
+    } while (rc == UTOFU_ERR_NOT_FOUND);
+    assert(rc == UTOFU_SUCCESS);
+    //assert((uintptr_t)cbdata == cbvalue);
+}
+
+
+void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, size_t expected_step){
+    size_t step, chunk;    
+    int rc;    
     // confirm the local MRQ notification
     struct utofu_mrq_notice notice;
-    rc = UTOFU_ERR_NOT_FOUND;
-    assert(!desc->send_complete && !desc->recv_complete);
-    while (rc == UTOFU_ERR_NOT_FOUND) {
+    do {
         rc = utofu_poll_mrq(desc->vcq_hdl, 0, &notice);
-        if(rc == UTOFU_SUCCESS){
-            if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed
-                desc->recv_complete = 1;
-                assert(notice.edata == edata);
-                rc = UTOFU_ERR_NOT_FOUND; // So we keep polling
-            }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-                desc->send_complete = 1;
-                assert(notice.edata == edata);
-                rc = UTOFU_ERR_NOT_FOUND;  // So we keep polling
-            }
-        }else if(rc != UTOFU_ERR_NOT_FOUND){
-            fprintf(stderr, "Unknown return status %d.\n", rc);
-            exit(-1);
-        }
-        if(desc->recv_complete && desc->send_complete){
-            return;
-        }
-    };
+    } while (rc == UTOFU_ERR_NOT_FOUND);
+    assert(rc == UTOFU_SUCCESS);
+    parse_edata(notice.edata, &step, &chunk);
+    if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed
+        desc->completed_recv[chunk] = 1;
+    }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){
+        desc->completed_send[chunk] = 1;
+    }else{
+        fprintf(stderr, "Unknown notice type.\n");
+        exit(-1);
+    }
+    assert(step == expected_step);
 }
 
-void swing_utofu_waitsend(swing_utofu_comm_descriptor* desc){
-    if(desc->send_complete){return;}
-    int rc;    
-    // confirm the TCQ notification
-    if (SWING_UTOFU_POST_FLAGS & UTOFU_ONESIDED_FLAG_TCQ_NOTICE) {
-        void *cbdata;
-        do {
-            rc = utofu_poll_tcq(desc->vcq_hdl, 0, &cbdata);
-        } while (rc == UTOFU_ERR_NOT_FOUND);
-        assert(rc == UTOFU_SUCCESS);
-        //assert((uintptr_t)cbdata == cbvalue);
+void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, size_t expected_step, char expected_count){
+    for(size_t i = 0; i < expected_count; i++){
+        swing_utofu_wait_tcq(desc);
     }
-    // confirm the local MRQ notification
-    if (SWING_UTOFU_POST_FLAGS & UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE) {
-rewait_s:
-        struct utofu_mrq_notice notice;
-        do {
-            rc = utofu_poll_mrq(desc->vcq_hdl, 0, &notice);
-        } while (rc == UTOFU_ERR_NOT_FOUND);
-        assert(rc == UTOFU_SUCCESS);
-        if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed
-            desc->recv_complete = 1;
-            goto rewait_s;
-        }else{
-            assert(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT);
+    for(size_t i = 0; i < expected_count; i++){
+        while(!desc->completed_send[i]){
+            swing_utofu_wait_rmq(desc, expected_step);
         }
-        //assert(notice.edata == edata);
     }
 }
 
-// confirm receiving data
-void swing_utofu_waitrecv(swing_utofu_comm_descriptor* desc){
-    if(desc->recv_complete){return;}
-    //uint64_t edata = 0; // Unused
-    int rc;
-    // confirm the remote MRQ notification or the memory update
-    if (SWING_UTOFU_POST_FLAGS & UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE) {
-rewait_r:
-        struct utofu_mrq_notice notice;
-        do {
-            rc = utofu_poll_mrq(desc->vcq_hdl, 0, &notice);
-        } while (rc == UTOFU_ERR_NOT_FOUND);
-        assert(rc == UTOFU_SUCCESS);
-        if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-            desc->send_complete = 1;
-            goto rewait_r;
-        }else{
-            assert(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT);
-        }
-        //assert(notice.edata == edata);
-        //assert(*recv_buffer == expected_value);
-    } else {
-        //while (*(desc->recv_buffer) != expected_value);
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, size_t expected_step, char expected_chunk){
+    while(!desc->completed_recv[expected_chunk]){
+        swing_utofu_wait_rmq(desc, expected_step);
     }
 }
