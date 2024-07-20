@@ -4,19 +4,16 @@ GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
 NC=$(tput sgr0)
 
-rm -f ./lib/libswing.o ./lib/libswing.so ./lib/libswing_profile.o ./lib/fugaku/*.a ./lib/fugaku/*.o ./bench/bench ./bench/bench_dummy_utofu
+rm -f ./lib/libswing.o ./lib/libswing.so ./lib/libswing_profile.o ./lib/fugaku/*.o ./bench/bench ./bench/bench_dummy_utofu
 
 EXTRA_LIBS=""
 
 # Compile system-specific stuff
 if [ ${SYSTEM} = "fugaku" ]; then
     ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} ./bench/get_coord_fugaku.c -o ./bench/get_coord_fugaku
-
     # Compile uTofu helpers
-    pushd ./lib/fugaku
-    CC=${MPI_COMPILER} make
-    popd
-    EXTRA_LIBS="-ltofucom -L./lib/fugaku/ -lrdma_comlib"
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC ./lib/fugaku/swing_utofu.c -o ./lib/fugaku/swing_utofu.o
+    EXTRA_LIBS="-ltofucom ./lib/fugaku/swing_utofu.o"
 fi
 
 # Normal compilation

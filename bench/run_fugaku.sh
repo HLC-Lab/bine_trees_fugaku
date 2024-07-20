@@ -53,16 +53,20 @@ do
             iterations=4
         fi
         echo -n "Running on "${p}" nodes with count="${n}"..."
-        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+
+	if [ ${PORTS} -le 1 ]
+	then
+            LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
 	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        mkdir ${OUT_FOLDER}/${p}_${n}_default_stats/
-        mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_default_stats/
+            mkdir ${OUT_FOLDER}/${p}_${n}_default_stats/
+            mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_default_stats/
 	
-        # Run bandwidth optimal and lat optimal swing
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+            # Run bandwidth optimal and lat optimal swing
+            LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
 	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
 	    mkdir ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
 	    mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
+	fi
 	
         LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
 	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*

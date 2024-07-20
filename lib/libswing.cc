@@ -1,7 +1,7 @@
 #include <mpi.h>
 #ifdef FUGAKU
 #include <mpi-ext.h>
-#include "fugaku/rdma_utofu_comlib.h"
+#include "fugaku/swing_utofu.h"
 #endif
 #include <algorithm>
 #include <stddef.h>
@@ -15,6 +15,7 @@
 #include <iostream>
 #include <vector>
 #include <inttypes.h>
+#include <unistd.h>
 
 #define MAX_SUPPORTED_DIMENSIONS 6 // We support up to 6D torus
 #define MAX_SUPPORTED_PORTS (MAX_SUPPORTED_DIMENSIONS*2)
@@ -71,7 +72,7 @@ typedef struct{
     uint num_ports;
     size_t num_chunks;
 #ifdef FUGAKU
-    rdma_comlib_data* utofu_handles[MAX_SUPPORTED_PORTS];
+    swing_utofu_comm_descriptor* utofu_descriptors[MAX_SUPPORTED_PORTS];
 #endif
 }SwingInfo;
 
@@ -214,30 +215,27 @@ void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype dat
     if(datatype == MPI_INT){
         const int *in = (const int *)inbuf;
         int *inout = (int *)inoutbuf;
-#pragma omp parallel for
-        for (int i = 0; i < count; i++) {
-            if(op == MPI_SUM){
+        if(op == MPI_SUM){
+#pragma omp parallel for             
+            for (int i = 0; i < count; i++) {
                 inout[i] += in[i];
-            }else{
-                fprintf(stderr, "Unknown reduction operation\n");
-                exit(EXIT_FAILURE);
             }
+        }else{
+            fprintf(stderr, "Unknown reduction operation\n");
+            exit(EXIT_FAILURE);
         }
     }else if(datatype == MPI_CHAR){
         const char *in = (const char *)inbuf;
         char *inout = (char *)inoutbuf;
-#pragma omp parallel for
-        for (int i = 0; i < count; i++) {
-            if(op == MPI_SUM){
+        if(op == MPI_SUM){
+#pragma omp parallel for             
+            for (int i = 0; i < count; i++) {
                 inout[i] += in[i];
-            }else{
-                fprintf(stderr, "Unknown reduction operation\n");
-                exit(EXIT_FAILURE);
             }
+        }else{
+            fprintf(stderr, "Unknown reduction datatype\n");
+            exit(EXIT_FAILURE);
         }
-    }else{
-        fprintf(stderr, "Unknown reduction datatype\n");
-        exit(EXIT_FAILURE);
     }
 }
 #endif
@@ -1306,13 +1304,15 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1); 
     memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
     memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    memset(info->utofu_handles, 0, sizeof(info->utofu_handles));
-    size_t offset_s_m[MAX_SUPPORTED_PORTS], tofu_count_m[MAX_SUPPORTED_PORTS];
+    memset(info->utofu_descriptors, 0, sizeof(info->utofu_descriptors));
+    size_t offsets_s[MAX_SUPPORTED_PORTS], bytes_s[MAX_SUPPORTED_PORTS];
+    size_t offsets_r[MAX_SUPPORTED_PORTS], bytes_r[MAX_SUPPORTED_PORTS];
+    memset(offsets_s, 0, sizeof(offsets_s));
+    memset(bytes_s, 0, sizeof(bytes_s));
+    memset(offsets_r, 0, sizeof(offsets_r));
+    memset(bytes_r, 0, sizeof(bytes_r));
 
-    for(size_t port = 0; port < info->num_ports; port++){
-        uint peer = peers_per_port[port][block_step];
-        DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", info->rank, step, port, info->num_ports, peer);                
-
+    for(size_t port = 0; port < info->num_ports; port++){     
         // Sendrecv + aggregate
         // Search for the blocks that must be sent.
         bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
@@ -1344,16 +1344,8 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
                 }
                 sent_on_port = true;
                 DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
-                size_t tofu_count = count_s*info->dtsize;
-                if(!info->utofu_handles[port]){ // Handle for this port not yet created by irecv side
-                    info->utofu_handles[port] = (rdma_comlib_data*) create_rdma_comlib_data();
-                    int tni_id = port;                    
-                    rdma_comlib_new(info->utofu_handles[port], (const int*) &tni_id, (const int*) &peer, (const int*) &peer, (const size_t*) &tofu_count); // TODO: What if I send and receive different number of bytes? (e.g., for non power of 2)
-                }
-                offset_s_m[port] = offset_s;
-                tofu_count_m[port] = tofu_count;
-                //memcpy(get_sbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), ((char*) buf) + offset_s, tofu_count); // Is there anyway to avoid memcpy?
-                //rdma_comlib_isend(info->utofu_handles[port]);
+                offsets_s[port] = offset_s;
+                bytes_s[port] = count_s*info->dtsize;
 
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
@@ -1378,14 +1370,8 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
                 DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
                 req_idx_to_block_idx[port].offset = offset_r;
                 req_idx_to_block_idx[port].count = count_r;
-                if(!info->utofu_handles[port]){ // Handle for this port not yet created by isend side
-                    info->utofu_handles[port] = (rdma_comlib_data*) create_rdma_comlib_data();
-                    int tni_id = port;
-                    size_t tofu_count = count_r*info->dtsize;
-                    rdma_comlib_new(info->utofu_handles[port], (const int*) &tni_id, (const int*) &peer, (const int*) &peer, (const size_t*) &tofu_count); // TODO: What if I send and receive different number of bytes? (e.g., for non power of 2)                    
-                }
-                // TODO: This does not work if I need to issue multiple send/recv on the same port
-                //rdma_comlib_irecv(info->utofu_handles[port]);            
+                offsets_r[port] = offset_r;
+                bytes_r[port] = count_r*info->dtsize;
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
                 // Reset everything in case we need to send another train of blocks
                 count_r = 0;
@@ -1395,12 +1381,34 @@ static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_i
         }
     }
 
+    // This can't be parallelized due to the sendrecv, but we can probably just do it at the beginning by letting everyone exchanging their base pointers with anyone else
+    for(size_t port = 0; port < info->num_ports; port++){
+        if(bytes_s[port]){
+            uint peer = peers_per_port[port][block_step];
+            char* buf_block = ((char*) buf) + offsets_s[port];
+            char* rbuf_block = ((char*) rbuf) + offsets_r[port];
+            info->utofu_descriptors[port] = swing_utofu_setup_communication(port, peer, buf_block, bytes_s[port], rbuf_block, bytes_r[port]);            
+        }
+    }
 #pragma omp parallel for num_threads(info->num_ports)
     for(size_t port = 0; port < info->num_ports; port++){
-        if(info->utofu_handles[port]){
-            memcpy(get_sbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), ((char*) buf) + offset_s_m[port], tofu_count_m[port]); // Is there anyway to avoid memcpy?            
-            rdma_comlib_isend(info->utofu_handles[port]);            
-            rdma_comlib_irecv(info->utofu_handles[port]);            
+        if(bytes_s[port]){
+            char* buf_block = ((char*) buf) + offsets_r[port];
+            char* rbuf_block = ((char*) rbuf) + offsets_r[port];
+            // We use the step as edata. It can have 256 possible values. 
+            // Since the step is logarithmic in the number of nodes, we can 
+            // support up to 2^256 nodes (or 2^128 if we consider both reduce-scatter+allgather).
+            // I do not need to include the port in the edata since each port is manage on a different VCQ already.
+            swing_utofu_isend(info->utofu_descriptors[port], step); 
+            //swing_utofu_waitrecv(info->utofu_descriptors[port]);
+            swing_utofu_wait(info->utofu_descriptors[port], step);
+            if(coll_type == SWING_REDUCE_SCATTER){
+                // TODO: It also does a parallel for, how do they interact?
+                reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[port].count, sendtype, op);
+                //MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[port].count, sendtype, op);
+            }
+            //swing_utofu_waitsend(info->utofu_descriptors[port]);            
+            swing_utofu_destroy_communication(info->utofu_descriptors[port]);
         }
     }
 
@@ -1435,42 +1443,6 @@ static int swing_coll_sendrecv(void *buf, void* rbuf, BlockInfo** blocks_info, s
     }
 }
 
-#ifdef FUGAKU
-static int swing_coll_wait_utofu(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
-                            uint num_requests_s, uint num_requests_r,
-                           BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                           CollType coll_type, SwingInfo* info){
-    // TODO: It breaks everything except _CONT (because UTOFU is only used for _CONT)
-    // TODO: We assume one and only one request per port
-#pragma omp parallel for num_threads(info->num_ports)
-    for(size_t port = 0; port < info->num_ports; port++){
-        if(info->utofu_handles[port]){
-            rdma_comlib_recv_wait(info->utofu_handles[port]);
-            void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[port].offset);  
-            if(coll_type == SWING_REDUCE_SCATTER){
-                //MPI_Reduce_local(get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), buf_block, req_idx_to_block_idx[port].count, sendtype, op); 
-                reduce_local(get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), buf_block, req_idx_to_block_idx[port].count, sendtype, op);
-            }else{
-                memcpy(buf_block, get_rbuff_ptr_rdma_comlib_data(info->utofu_handles[port]), req_idx_to_block_idx[port].count*info->dtsize);
-            }
-
-            rdma_comlib_send_wait(info->utofu_handles[port]);
-            destroy_rdma_comlib_data(info->utofu_handles[port]);
-            rdma_comlib_delete(info->utofu_handles[port]);
-        }
-    }
-    return MPI_SUCCESS;
-}
-#else
-static int swing_coll_wait_utofu(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
-                            uint num_requests_s, uint num_requests_r,
-                           BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                           CollType coll_type, SwingInfo* info){
-    fprintf(stderr, "uTofu can only be used on Fugaku\n");
-    exit(-1);
-}
-#endif
-
 static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI_Request* requests_s, MPI_Request* requests_r,
                             uint num_requests_s, uint num_requests_r,
                            BlockInfo* req_idx_to_block_idx, MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
@@ -1480,11 +1452,7 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
 //#define ALWAYS_WAITALL
-#ifdef ALWAYS_WAITALL
-#ifdef FUGAKU
-      //FJMPI_Progress_stop();
-#endif
-      
+#ifdef ALWAYS_WAITALL     
       res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
 #endif
       
@@ -1494,7 +1462,7 @@ static int swing_coll_wait(void *buf, void* rbuf, size_t chunk, size_t step, MPI
             res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);	    
             if(res != MPI_SUCCESS){return res;}
 #else
-	    index = i;
+	        index = i;
 #endif	    
             void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
@@ -2018,19 +1986,11 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
                 // Start overlap
                 // While communicating, compute bitmaps needed to execute next step
                 // We do not need to do the same for allgather since they have already been computed here
-#ifdef FUGAKU
-		//FJMPI_Progress_start();
-#endif
                 if(step != num_steps - 1){
                     compute_bitmaps(info, step + 1, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);
                 }
-#ifdef FUGAKU
-		//		FJMPI_Progress_stop();
-#endif
                 // End overlap
-                if(algo == ALGO_SWING_B_UTOFU){
-                    res = swing_coll_wait_utofu(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
-                }else{
+                if(algo != ALGO_SWING_B_UTOFU){ // For uTofu we do everything in the sendrecv
                     res = swing_coll_wait(buf_s[collective], buf_r[collective], c, step, requests_s, requests_r, num_requests_s, num_requests_r, req_idx_to_block_idx, op, comm, datatype, datatype, collectives_to_run[collective], info);
                 }
                 if(res != MPI_SUCCESS){return res;} 
@@ -2322,8 +2282,6 @@ static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Dataty
 #ifdef FUGAKU
 int MPI_Init(int *argc, char ***argv){
     int r = PMPI_Init(argc, argv);
-    rdma_comlib_init();
-
     int dtsize;
     MPI_Type_size(MPI_INT, &dtsize);
     assert(dtsize == sizeof(int)); // This is needed in the reduce_local function since we assume MPI_INT is int
@@ -2334,7 +2292,6 @@ int MPI_Init(int *argc, char ***argv){
 }
 
 int MPI_Finalize(void){
-    rdma_comlib_finalize();
     return PMPI_Finalize();
 }
 #endif
