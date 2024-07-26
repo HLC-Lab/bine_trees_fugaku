@@ -16,6 +16,8 @@
 #include <vector>
 #include <inttypes.h>
 #include <unistd.h>
+#include <omp.h>
+
 
 #define MAX_SUPPORTED_DIMENSIONS 6 // We support up to 6D torus
 #define MAX_SUPPORTED_PORTS (MAX_SUPPORTED_DIMENSIONS*2)
@@ -1375,7 +1377,9 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
     }
 
     uint peer = peers_per_port[port][block_step];
+    printf("Address exchange\n"); fflush(stdout);
     swing_utofu_exchange_addr(utofu_descriptor, peer);
+    printf("Address exchanged\n"); fflush(stdout);
     size_t max_count = floor(MAX_PUTGET_SIZE / info->dtsize);
     char issued_sends = 0, issued_recvs = 0;
     size_t offset = offsets_s[port];        
@@ -1409,7 +1413,9 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
             assert(issued_recvs <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_recv = count*info->dtsize;
+            printf("Waiting recv port %d, step %d\n", port, step); fflush(stdout);
             swing_utofu_wait_recv(utofu_descriptor, step, issued_recvs);
+            printf("Waited recv port %d, step %d\n", port, step); fflush(stdout);
             if(coll_type == SWING_REDUCE_SCATTER){
                 reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
             }
@@ -1419,10 +1425,10 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
         }            
     }
     // Wait for send completion
-    if(counts_s[port] || counts_r[port]){
-        if(counts_s[port]){
-            swing_utofu_wait_sends(utofu_descriptor, step, issued_sends);
-        }
+    if(counts_s[port]){
+        printf("Waiting send port %d, step %d\n", port, step); fflush(stdout);
+        swing_utofu_wait_sends(utofu_descriptor, step, issued_sends);
+        printf("Waited send port %d, step %d\n", port, step); fflush(stdout);
     }
 
     return MPI_SUCCESS;
@@ -1979,6 +1985,15 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
             compute_bitmaps(info, step, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);                        
         }            
 
+        /*
+        std::unordered_map<std::pair<port, peer>, std::pair<uint64_t, uint64_t> > map;
+        for(size_t port = 0; port < info->num_ports; port++){
+            for(size_t step = 0; step < num_steps; step++){
+                uint peer = peers_per_port[port][step];
+            }
+        }
+        */
+
 #pragma omp parallel for num_threads(info->num_ports)
         for(size_t port = 0; port < info->num_ports; port++){            
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
@@ -1986,7 +2001,8 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
                     // Reset info for the next series of steps        
                     memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
                     current_d[port] = port % dimensions_num;
-                    for(size_t step = 0; step < num_steps; step++){        
+                    for(size_t step = 0; step < num_steps; step++){       
+                        printf("T%d Calling with port %d coll %d chunk %d step %d\n", omp_get_thread_num(), port, collective, c, step); fflush(stdout); 
                         res = swing_coll_sendrecv_utofu(port, utofu_descriptors[port][collective], buf_s[collective], buf_r[collective], blocks_info[c], c, step, req_idx_to_block_idx,
                                                         op, comm, datatype, datatype, 
                                                         collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);

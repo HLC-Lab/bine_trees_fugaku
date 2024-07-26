@@ -5,14 +5,16 @@
 
 #define MAX_PUTGET_SIZE 16777215
 #define MAX_NUM_CHUNKS 16
+#define MAX_NUM_STEPS 16
+#define MAX_COLL_SEQUENCE 2
 
 typedef struct{
     utofu_vcq_hdl_t vcq_hdl;
     utofu_vcq_id_t lcl_vcq_id, rmt_vcq_id;
     utofu_stadd_t lcl_send_stadd, lcl_recv_stadd, rmt_recv_stadd;
-    char completed_send_local[MAX_NUM_CHUNKS];
-    char completed_send[MAX_NUM_CHUNKS];
-    char completed_recv[MAX_NUM_CHUNKS];
+    char completed_send_local[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
+    char completed_send[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
+    char completed_recv[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
 }swing_utofu_comm_descriptor;
 
 // setup send/recv communication
