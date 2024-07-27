@@ -2,32 +2,42 @@
 #include <assert.h>
 #include <mpi.h>
 #include <utofu.h>
+#include <vector>
+#include <unordered_map>
+#include "../libswing.h"
 
+// TODO: Grab from libswing.h
 #define MAX_PUTGET_SIZE 16777215
 #define MAX_NUM_CHUNKS 16
-#define MAX_NUM_STEPS 16
-#define MAX_COLL_SEQUENCE 2
+#define MAX_EDATA 255 // 8 bits
 
 typedef struct{
-    utofu_vcq_hdl_t vcq_hdl;
-    utofu_vcq_id_t lcl_vcq_id, rmt_vcq_id;
-    utofu_stadd_t lcl_send_stadd, lcl_recv_stadd, rmt_recv_stadd;
-    char completed_send_local[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
-    char completed_send[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
-    char completed_recv[MAX_NUM_CHUNKS][MAX_NUM_STEPS];
+    utofu_vcq_id_t vcq_id;
+    utofu_stadd_t send_stadd;
+    utofu_stadd_t recv_stadd;
+}swing_utofu_remote_info;
+
+typedef struct{
+    uint num_ports;
+    uint** peers_per_port;
+    uint64_t next_edata[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
+    uint64_t expected_edata_s[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
+    uint64_t expected_edata_r[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
+    utofu_vcq_hdl_t vcq_hdl[LIBSWING_MAX_SUPPORTED_PORTS]; // One handle per port
+    utofu_vcq_id_t lcl_vcq_id[LIBSWING_MAX_SUPPORTED_PORTS]; // One local VCQ per port
+    utofu_stadd_t lcl_send_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_recv_stadd[LIBSWING_MAX_SUPPORTED_PORTS]; // One local STADD per port
+    std::unordered_map<uint, swing_utofu_remote_info>* rmt_info[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a map mapping the peer to the addresses
+    
+    char completed_send[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];
+    char completed_recv[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];
 }swing_utofu_comm_descriptor;
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup_communication(utofu_tni_id_t tni_id, void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r);
-void swing_utofu_exchange_addr(swing_utofu_comm_descriptor* desc, uint peer);
-
+swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
+                                               uint num_ports, uint num_steps, uint** peers_per_port);
 // teardown communication
-void swing_utofu_destroy_communication(swing_utofu_comm_descriptor* desc);
-
-// Even if I registered the entire buffer, I might want to send only part of it
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, size_t step, size_t chunk, size_t offset, size_t length);
-void swing_utofu_wait_tcq(swing_utofu_comm_descriptor* desc); // sbuff can be modify after this
-void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, size_t expected_step); // local data successfully wrote in remote memory, or remote data successfully wrote in local memory. Corresponds to completion of send (or recv)
-void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, size_t expected_step, char expected_count);
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, size_t expected_step, char expected_chunk);
-
+void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t step, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather);
+// Sends and recv are waited in the same order they are posted
+void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port);

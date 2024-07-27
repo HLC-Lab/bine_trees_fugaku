@@ -17,18 +17,15 @@
 #include <inttypes.h>
 #include <unistd.h>
 #include <omp.h>
+#include "libswing.h"
 
-
-#define MAX_SUPPORTED_DIMENSIONS 6 // We support up to 6D torus
-#define MAX_SUPPORTED_PORTS (MAX_SUPPORTED_DIMENSIONS*2)
-#define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
 static int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 static int smallest_negabinary[LIBSWING_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
 static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
 
-#define TAG_SWING_REDUCESCATTER (0x7FFF - MAX_SUPPORTED_PORTS*1)
-#define TAG_SWING_ALLGATHER     (0x7FFF - MAX_SUPPORTED_PORTS*2)
-#define TAG_SWING_ALLREDUCE     (0x7FFF - MAX_SUPPORTED_PORTS*3)
+#define TAG_SWING_REDUCESCATTER (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*1)
+#define TAG_SWING_ALLGATHER     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*2)
+#define TAG_SWING_ALLREDUCE     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*3)
 
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
@@ -36,7 +33,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 //#define DEBUG
 
 #ifdef DEBUG
-#define DPRINTF(...) printf(__VA_ARGS__)
+#define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
 #else
 #define DPRINTF(...) 
 #endif
@@ -70,7 +67,7 @@ typedef struct{
     int size;
     int dtsize;
     int num_steps;
-    size_t num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint num_ports;
     size_t num_chunks;
 }SwingInfo;
@@ -79,7 +76,7 @@ static unsigned int /*disable_reducescatter = 0, disable_allgatherv = 0, disable
                     dimensions_num = 1, force_env_reload = 1, env_read = 0, /* contiguous_blocks = 0,*/
                     max_size = 0; //2097152;
 static Algo algo = ALGO_SWING_B;
-static uint dimensions[MAX_SUPPORTED_DIMENSIONS];
+static uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
 static int num_ports = 1;
 
 static inline void read_env(MPI_Comm comm){
@@ -318,15 +315,15 @@ static inline void compute_peers(uint* peers, int port, int num_steps, uint rank
     if(dimensions_virtual == NULL){
         dimensions_virtual = dimensions;
     }
-    bool terminated_dimensions_bitmap[MAX_SUPPORTED_DIMENSIONS];
-    int num_steps_per_dim[MAX_SUPPORTED_DIMENSIONS];
-    uint8_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
-    memset(next_step_per_dim, 0, sizeof(uint8_t)*MAX_SUPPORTED_DIMENSIONS);
+    bool terminated_dimensions_bitmap[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    int num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    uint8_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    memset(next_step_per_dim, 0, sizeof(uint8_t)*LIBSWING_MAX_SUPPORTED_DIMENSIONS);
     for(size_t i = 0; i < dimensions_num; i++){
         num_steps_per_dim[i] = ceil(log2(dimensions_virtual[i]));
     }
     // Compute default directions
-    uint coord[MAX_SUPPORTED_DIMENSIONS];
+    uint coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, rank, coord);
     for(size_t i = 0; i < dimensions_num; i++){
         terminated_dimensions_bitmap[i] = false;            
@@ -836,8 +833,8 @@ static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, in
                                           char* tmpbuf, SwingInfo* info, uint* dimensions_virtual, 
                                           uint* coordinates, int* idle,
                                           int* rank_virtual, int* all_p2_dimensions){    
-    uint coord_peer[MAX_SUPPORTED_DIMENSIONS];
-    uint coord[MAX_SUPPORTED_DIMENSIONS];
+    uint coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    uint coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, info->rank, coord);
     *all_p2_dimensions = 1;
 
@@ -894,9 +891,9 @@ static inline int shrink_non_power_of_two(const void *sendbuf, void *recvbuf, in
 
 static inline int enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype datatype, 
                                            MPI_Op op, MPI_Comm comm, SwingInfo* info, uint* coordinates){
-    uint coord[MAX_SUPPORTED_DIMENSIONS];
+    uint coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, info->rank, coord);
-    uint coord_peer[MAX_SUPPORTED_DIMENSIONS];
+    uint coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     //for(size_t d = 0; d < dimensions_num; d++){
     for(int d = dimensions_num - 1; d >= 0; d--){
         // This dimensions was a non-power of two, enlarge it
@@ -944,19 +941,19 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
     char* tmpbuf = (char*) malloc(count*info->dtsize); // Temporary buffer (to avoid overwriting sendbuf)
     // To avoid memcpying, the first recv+aggregation and the subsequent ones use different buffers
     // (see MPI_Allreduce_lat_optimal_swing_sendrecv). This variable keeps track of that.
-    uint dimensions_virtual[MAX_SUPPORTED_DIMENSIONS];   
+    uint dimensions_virtual[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
 
     // Compute real and virtual coordinates
     uint *coordinates, *coordinates_virtual;
     coordinates = (uint*) malloc(sizeof(uint)*info->size*dimensions_num);
     coordinates_virtual = (uint*) malloc(sizeof(uint)*info->size*dimensions_num);
     compute_rank_to_coord_mapping(info->size, dimensions, coordinates, info->size);
-    uint coord[MAX_SUPPORTED_DIMENSIONS];
+    uint coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     retrieve_coord_mapping(coordinates, info->rank, coord);
     memcpy(dimensions_virtual, dimensions, sizeof(dimensions));
 
     // Compute data offset per port
-    BlockInfo buf_info[MAX_SUPPORTED_PORTS];
+    BlockInfo buf_info[LIBSWING_MAX_SUPPORTED_PORTS];
     uint partition_size = count / info->num_ports;
     uint remaining = count % info->num_ports;
     uint count_so_far = 0;
@@ -999,8 +996,8 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
         DPRINTF("[%d] Peers computed\n", info->rank);
 
         // Do the step-by-step communication on the shrunk topology.
-        MPI_Request requests_s[MAX_SUPPORTED_PORTS];
-        MPI_Request requests_r[MAX_SUPPORTED_PORTS];
+        MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
+        MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
         const void *sendbuf_real, *aggbuff_a;
         void *aggbuff_b, *recvbuf_real;
          
@@ -1014,7 +1011,7 @@ static inline int MPI_Allreduce_lat_optimal_swing(const void *sendbuf, void *rec
                 //DPRINTF("[%d] Chunk %d, step %d, port %d, offset %d count %d\n", info->rank, c, step, p, info->collectives[c][p].offset, info->collectives[c][p].count);
                 // Get the peer
                 int virtual_peer = peers_per_port[p][step]; 
-                uint coord_peer[MAX_SUPPORTED_DIMENSIONS];
+                uint coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
                 retrieve_coord_mapping(coordinates_virtual, virtual_peer, coord_peer);
                 int peer = getIdFromCoord(coord_peer, dimensions, dimensions_num);
                 DPRINTF("[%d] Sending to %d\n", info->rank, peer);
@@ -1163,8 +1160,8 @@ static int swing_coll_sendrecv_bbb(void *buf, void* rbuf, BlockInfo** blocks_inf
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1);            
     *num_requests_s = 0;
     *num_requests_r = 0;
-    memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
+    memset(requests_s, 0, sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
+    memset(requests_r, 0, sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
     for(size_t port = 0; port < info->num_ports; port++){
         uint peer = peers_per_port[port][block_step];
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", info->rank, step, port, info->num_ports, peer);                
@@ -1219,8 +1216,8 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1); 
     *num_requests_s = 0;
     *num_requests_r = 0;           
-    memset(requests_s, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    memset(requests_r, 0, sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
+    memset(requests_s, 0, sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
+    memset(requests_r, 0, sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
 
     for(size_t port = 0; port < info->num_ports; port++){
         uint peer = peers_per_port[port][block_step];
@@ -1296,13 +1293,13 @@ static int swing_coll_sendrecv_cont(void *buf, void* rbuf, BlockInfo** blocks_in
 }
 
 #ifdef FUGAKU
-static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
+static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
                               BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER)?step:(info->num_steps - step - 1); 
-    size_t offsets_s[MAX_SUPPORTED_PORTS], counts_s[MAX_SUPPORTED_PORTS];
-    size_t offsets_r[MAX_SUPPORTED_PORTS], counts_r[MAX_SUPPORTED_PORTS];
+    size_t offsets_s[LIBSWING_MAX_SUPPORTED_PORTS], counts_s[LIBSWING_MAX_SUPPORTED_PORTS];
+    size_t offsets_r[LIBSWING_MAX_SUPPORTED_PORTS], counts_r[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(offsets_s, 0, sizeof(offsets_s));
     memset(counts_s, 0, sizeof(counts_s));
     memset(offsets_r, 0, sizeof(offsets_r));
@@ -1339,7 +1336,7 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
                 exit(-1);
             }
             sent_on_port = true;
-            DPRINTF("[%d] Sending offset %d count %d at step %d (coll %d)\n", info->rank, offset_s, count_s, step, coll_type);            
+            DPRINTF("[%d] Port %d Sending offset %d count %d at step %d (coll %d)\n", info->rank, port, offset_s, count_s, step, coll_type);            
             offsets_s[port] = offset_s;
             counts_s[port] = count_s;
 
@@ -1363,7 +1360,7 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
                 exit(-1);
             }
             recvd_from_port = true;
-            DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", info->rank, offset_r, count_r, step, coll_type);
+            DPRINTF("[%d] Port %d Receiving offset %d count %d at step %d (coll %d)\n", info->rank, port, offset_r, count_r, step, coll_type);
             req_idx_to_block_idx[port].offset = offset_r;
             req_idx_to_block_idx[port].count = count_r;
             offsets_r[port] = offset_r;
@@ -1376,14 +1373,26 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
         }
     }
 
-    uint peer = peers_per_port[port][block_step];
-    printf("Address exchange\n"); fflush(stdout);
-    swing_utofu_exchange_addr(utofu_descriptor, peer);
-    printf("Address exchanged\n"); fflush(stdout);
     size_t max_count = floor(MAX_PUTGET_SIZE / info->dtsize);
     char issued_sends = 0, issued_recvs = 0;
     size_t offset = offsets_s[port];        
     size_t count = 0;     
+    assert(counts_s[port] == counts_r[port]); // TODO: Not sure if everything works when this is not true (e.g., chunking, offset_rs_r, etc.)
+    size_t utofu_offset_r = offset;
+
+    
+    // In reduce-scatter, if some rank are faster than others,
+    // one executing a later step might write the data in the destination
+    // rank earlier than a rank executing a previous step.
+    // As a result, the first put would be lost. To avoid that, 
+    // instead of writing in the actual offset, we force the offsets
+    // to be different, since anyway the data must be moved from the receive
+    // buffer when aggregating it.
+    if(coll_type == SWING_REDUCE_SCATTER){
+        utofu_offset_r = req_idx_to_block_idx[port].offset;
+    }
+
+    double starttt = MPI_Wtime();
     // We first enqueue all the send. Then, we receive and aggregate
     // Aggregation and reception of next block should be overlapped
     // Issue isends for all the blocks
@@ -1395,8 +1404,9 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
             assert(issued_sends <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*info->dtsize;
-            swing_utofu_isend(utofu_descriptor, step, issued_sends, offset, bytes_to_send); 
+            swing_utofu_isend(utofu_descriptor, port, block_step, issued_sends, offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
             offset += bytes_to_send;
+            utofu_offset_r += bytes_to_send;
             remaining -= count;
             ++issued_sends;
         }
@@ -1405,7 +1415,7 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
     offset = 0;
     if(counts_r[port]){ 
         char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
-        char* rbuf_block = ((char*) rbuf) + req_idx_to_block_idx[port].offset;
+        char* rbuf_block = ((char*) rbuf) + offsets_s[port]; // TODO: Explain why
         size_t remaining = counts_r[port];
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
@@ -1413,28 +1423,27 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
             assert(issued_recvs <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_recv = count*info->dtsize;
-            printf("Waiting recv port %d, step %d\n", port, step); fflush(stdout);
-            swing_utofu_wait_recv(utofu_descriptor, step, issued_recvs);
-            printf("Waited recv port %d, step %d\n", port, step); fflush(stdout);
+            swing_utofu_wait_recv(utofu_descriptor, port);
+
             if(coll_type == SWING_REDUCE_SCATTER){
                 reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
             }
+
             offset += bytes_to_recv;
             remaining -= count;
             ++issued_recvs;
         }            
     }
+    //printf("[%d] Issued %d sends and %d recvs (%d and %d elems) in %lf us\n", omp_get_thread_num(), issued_sends, issued_recvs, counts_s[port], counts_r[port], (MPI_Wtime() - starttt)*1000000.0);
     // Wait for send completion
     if(counts_s[port]){
-        printf("Waiting send port %d, step %d\n", port, step); fflush(stdout);
-        swing_utofu_wait_sends(utofu_descriptor, step, issued_sends);
-        printf("Waited send port %d, step %d\n", port, step); fflush(stdout);
+        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
     }
 
     return MPI_SUCCESS;
 }
 #else
-static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t chunk, size_t step, 
+static int swing_coll_sendrecv_utofu(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
                               BlockInfo* req_idx_to_block_idx,
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type, SwingInfo* info, uint** peers_per_port, char*** bitmap_send, char*** bitmap_recv){
@@ -1647,7 +1656,7 @@ static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* 
     }
 
     // Combine the per-dimension bitmaps
-    uint coord_block[MAX_SUPPORTED_DIMENSIONS];    
+    uint coord_block[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
     for(size_t i = 0; i < (uint) info->size; i++){
         retrieve_coord_mapping(coordinates, i, coord_block);
         //DPRINTF("[%d] Step %d Peer (%d, %d) Block %d coord (%d,%d) bitmap send (%d,%d)\n", info->rank, step, coord_peer[0], coord_peer[1], i, coord_block[0], coord_block[1], bitmap_send[0][coord_block[0]], bitmap_send[1][coord_block[1]]);
@@ -1686,10 +1695,10 @@ static inline void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* 
 static inline void get_blocks_bitmaps_multid(size_t step, size_t port, uint* coordinates, uint* coord_peer, 
                                              char* bitmap_send_merged, char* bitmap_recv_merged, 
                                              uint* coord_mine, int*** reference_valid_distances, uint** num_valid_distances, SwingInfo* info){
-    size_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
-    size_t current_d[MAX_SUPPORTED_PORTS];
-    char* bitmap_send[MAX_SUPPORTED_DIMENSIONS];
-    char* bitmap_recv[MAX_SUPPORTED_DIMENSIONS];    
+    size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    size_t current_d[LIBSWING_MAX_SUPPORTED_PORTS];
+    char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
     for(size_t d = 0; d < dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
         bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
@@ -1745,7 +1754,7 @@ static void print_bitmaps(SwingInfo* info, size_t step, char* bitmap_send_merged
 #endif
 
 static void get_peer(uint* coord_rank, size_t step, size_t port, SwingInfo* info, uint* coord_peer){
-    size_t next_step_per_dim[MAX_SUPPORTED_DIMENSIONS];
+    size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     size_t current_d = port % dimensions_num;
     memcpy(coord_peer, coord_rank, sizeof(uint)*dimensions_num);
     memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
@@ -1782,7 +1791,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
     }else{
         // Find two partitions of node that talk with each other. If I have n nodes, 
         // if I see what happens in next step, I have two disjoint sets of nodes.        
-        uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
+        uint coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
         get_peer(coord_rank, step, port, info, coord_peer);
         get_blocks_bitmaps_multid(step, port, coordinates, coord_peer, bitmap_tmp, NULL, coord_rank, reference_valid_distances, num_valid_distances, info);
 
@@ -1805,7 +1814,7 @@ static void remap(const std::vector<int>& nodes, uint start_range, uint end_rang
 }
 
 static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinates, uint** peers_per_port, char** bitmap_ready, char** bitmap_send, char** bitmap_recv,
-                                   size_t next_step_per_dim[MAX_SUPPORTED_PORTS][MAX_SUPPORTED_DIMENSIONS], size_t* current_d, uint* coord_mine, uint** remapping_per_port, char* tmp_s, char* tmp_r,
+                                   size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, uint* coord_mine, uint** remapping_per_port, char* tmp_s, char* tmp_r,
                                    char*** bitmap_send_merged, char*** bitmap_recv_merged, int*** reference_valid_distances, uint** num_valid_distances){
     for(size_t p = 0; p < info->num_ports; p++){                
         // Compute bitmaps of blocks to send and receive (we do not need to do this for allgather since bitmap_ready would always be 1)
@@ -1813,7 +1822,7 @@ static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinat
             bitmap_send_merged[p][step] = (char*) malloc(sizeof(char)*info->size);
             bitmap_recv_merged[p][step] = (char*) malloc(sizeof(char)*info->size);
             
-            uint coord_peer[MAX_SUPPORTED_DIMENSIONS];   
+            uint coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
             retrieve_coord_mapping(coordinates, peers_per_port[p][step], coord_peer);
 
             get_blocks_bitmaps_multid(next_step_per_dim[p], current_d, step, p, coordinates, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged[p][step], bitmap_recv_merged[p][step], 
@@ -1859,19 +1868,19 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         rbuf = (char*) malloc(total_size_bytes);
         memcpy(recvbuf, sendbuf, total_size_bytes);    
     }
-    uint coord_mine[MAX_SUPPORTED_DIMENSIONS];    
+    uint coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
     getCoordFromId(info->rank, coord_mine, info->size, dimensions);
 
-    char* bitmap_send[MAX_SUPPORTED_DIMENSIONS];
-    char* bitmap_recv[MAX_SUPPORTED_DIMENSIONS];
-    char** bitmap_send_merged[MAX_SUPPORTED_PORTS];
-    char** bitmap_recv_merged[MAX_SUPPORTED_PORTS];
-    char* bitmap_ready[MAX_SUPPORTED_PORTS]; // For each port and step, if 1, the send/recv bitmaps have been already computed.
-    size_t current_d[MAX_SUPPORTED_PORTS]; // For each port, what's the current dimension we are sending in.
-    size_t next_step_per_dim[MAX_SUPPORTED_PORTS][MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
+    char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    char** bitmap_send_merged[LIBSWING_MAX_SUPPORTED_PORTS];
+    char** bitmap_recv_merged[LIBSWING_MAX_SUPPORTED_PORTS];
+    char* bitmap_ready[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port and step, if 1, the send/recv bitmaps have been already computed.
+    size_t current_d[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port, what's the current dimension we are sending in.
+    size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
     char *tmp_s = NULL, *tmp_r = NULL;
-    int** reference_valid_distances[MAX_SUPPORTED_DIMENSIONS];
-    uint* num_valid_distances[MAX_SUPPORTED_DIMENSIONS];
+    int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     
     for(size_t d = 0; d < dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
@@ -1904,18 +1913,18 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     /** Send/Recv part **/
     /********************/
     uint num_steps = info->num_steps;
-    MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*MAX_SUPPORTED_PORTS);
-    BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*info->size*MAX_SUPPORTED_PORTS);
+    MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
+    MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
+    BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*info->size*LIBSWING_MAX_SUPPORTED_PORTS);
 
     /*************/
     /* REMAPPING */
     /*************/
-    uint* remapping_per_port[MAX_SUPPORTED_PORTS];
+    uint* remapping_per_port[LIBSWING_MAX_SUPPORTED_PORTS];
     if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
         DPRINTF("[%d] Remapping\n", info->rank);
         std::vector<int> nodes(info->size);
-        uint coord_zero[MAX_SUPPORTED_DIMENSIONS];
+        uint coord_zero[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         memset(coord_zero, 0, sizeof(uint)*dimensions_num);
         char* bitmap_tmp = (char*) malloc(sizeof(char)*info->size);        
         tmp_s = (char*) malloc(sizeof(char)*info->size);
@@ -1928,11 +1937,10 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         free(bitmap_tmp);
     }
 
-#define SWING_MAX_COLLECTIVE_SEQUENCE 2
     size_t collectives_to_run_num = 0;
-    CollType collectives_to_run[SWING_MAX_COLLECTIVE_SEQUENCE]; 
-    void *buf_s[SWING_MAX_COLLECTIVE_SEQUENCE];
-    void *buf_r[SWING_MAX_COLLECTIVE_SEQUENCE];
+    CollType collectives_to_run[LIBSWING_MAX_COLLECTIVE_SEQUENCE]; 
+    void *buf_s[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
+    void *buf_r[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
     switch(coll_type){
         case SWING_ALLREDUCE:{
             collectives_to_run[0] = SWING_REDUCE_SCATTER;
@@ -1957,6 +1965,8 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
             collectives_to_run[0] = SWING_NULL;
             collectives_to_run[1] = SWING_ALLGATHER;
             collectives_to_run_num = 2;
+            buf_s[0] = recvbuf; // Just needed for utofu
+            buf_r[0] = recvbuf; // Just needed for utofu
             buf_s[1] = recvbuf;
             buf_r[1] = recvbuf;
             break;
@@ -1968,57 +1978,39 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
     }
 
     if(algo == ALGO_SWING_B_UTOFU){        
-        // Setup all the communications
-        swing_utofu_comm_descriptor* utofu_descriptors[MAX_SUPPORTED_PORTS][SWING_MAX_COLLECTIVE_SEQUENCE];
+        // Setup all the communications        
         for(size_t port = 0; port < info->num_ports; port++){            
             memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
             current_d[port] = port % dimensions_num;
-            for(size_t collective = 0; collective < collectives_to_run_num; collective++){                        
-                utofu_descriptors[port][collective] = swing_utofu_setup_communication(port, buf_s[collective], count*info->dtsize, buf_r[collective], count*info->dtsize);
-            }
-        }
-        // Needed to be sure everyone registered the buffers
-        MPI_Barrier(MPI_COMM_WORLD);
-        
+        }        
         // Compute all bitmaps // TODO: Refactor to do this step by step while waiting the data (overlap)
         for(size_t step = 0; step < num_steps; step++){        
             compute_bitmaps(info, step, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);                        
-        }            
+        }   
+        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*info->dtsize, buf_r[0], count*info->dtsize, info->num_ports, info->num_steps, peers_per_port);
+        // Needed to be sure everyone registered the buffers
+        MPI_Barrier(MPI_COMM_WORLD);
 
-        /*
-        std::unordered_map<std::pair<port, peer>, std::pair<uint64_t, uint64_t> > map;
-        for(size_t port = 0; port < info->num_ports; port++){
-            for(size_t step = 0; step < num_steps; step++){
-                uint peer = peers_per_port[port][step];
-            }
-        }
-        */
+        assert(info->num_chunks == 1); // Chunking not supported (we do it anyway when puts are too large)
 
-#pragma omp parallel for num_threads(info->num_ports)
+#pragma omp parallel for num_threads(info->num_ports) private(res)
         for(size_t port = 0; port < info->num_ports; port++){            
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
-                for(size_t c = 0; c < info->num_chunks; c++){
-                    // Reset info for the next series of steps        
-                    memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
-                    current_d[port] = port % dimensions_num;
-                    for(size_t step = 0; step < num_steps; step++){       
-                        printf("T%d Calling with port %d coll %d chunk %d step %d\n", omp_get_thread_num(), port, collective, c, step); fflush(stdout); 
-                        res = swing_coll_sendrecv_utofu(port, utofu_descriptors[port][collective], buf_s[collective], buf_r[collective], blocks_info[c], c, step, req_idx_to_block_idx,
-                                                        op, comm, datatype, datatype, 
-                                                        collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
-                        assert(res == MPI_SUCCESS);
-                    }
+                // Reset info for the next series of steps        
+                memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
+                current_d[port] = port % dimensions_num;
+                for(size_t step = 0; step < num_steps; step++){       
+                    res = swing_coll_sendrecv_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], blocks_info[0], step, req_idx_to_block_idx,
+                                                    op, comm, datatype, datatype, 
+                                                    collectives_to_run[collective], info, peers_per_port, bitmap_send_merged, bitmap_recv_merged);
+                    assert(res == MPI_SUCCESS);
                 }
             }
         }
         // Cleanup utofu resources
-        for(size_t port = 0; port < info->num_ports; port++){            
-            for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
-                swing_utofu_destroy_communication(utofu_descriptors[port][collective]);
-            }
-        }
+        swing_utofu_teardown(utofu_descriptor);
     }else{
-        for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+        for(size_t collective = 0; collective < collectives_to_run_num; collective++){ 
             for(size_t c = 0; c < info->num_chunks; c++){
                 // Reset info for the next series of steps        
                 for(size_t p = 0; p < info->num_ports; p++){                
@@ -2051,7 +2043,6 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         }
     }
    
-
     /********/
     /* Free */
     /********/
@@ -2198,7 +2189,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU){ // Swing_b
             SwingInfo info = init_info(datatype, comm);
             BlockInfo*** blocks_info = get_blocks_info(count, info);
-            int res = swing_collective_block(sendbuf, recvbuf, count, datatype, op, comm, &info, blocks_info, SWING_ALLREDUCE);
+            int res = swing_collective_block(sendbuf, recvbuf, count, datatype, op, comm, &info, blocks_info, SWING_ALLREDUCE);            
             // Free blocks_info
             for(size_t c = 0; c < info.num_chunks; c++){
                 for(size_t p = 0; p < info.num_ports; p++){

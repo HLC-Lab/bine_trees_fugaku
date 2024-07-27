@@ -12,7 +12,7 @@ EXTRA_LIBS=""
 if [ ${SYSTEM} = "fugaku" ]; then
     ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} ./bench/get_coord_fugaku.c -o ./bench/get_coord_fugaku
     # Compile uTofu helpers
-    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC ./lib/fugaku/swing_utofu.c -o ./lib/fugaku/swing_utofu.o
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC ./lib/fugaku/swing_utofu.cc -o ./lib/fugaku/swing_utofu.o
     EXTRA_LIBS="-ltofucom ./lib/fugaku/swing_utofu.o"
 fi
 
