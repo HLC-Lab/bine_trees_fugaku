@@ -4,14 +4,12 @@
 #define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
 #define SWING_UTOFU_VCQ_FLAGS 0 // (UTOFU_VCQ_FLAG_EXCLUSIVE) // Allows different threads to work on different VCQs simultaneously
 
-static uint64_t* pack_local_info(swing_utofu_comm_descriptor* desc){
-    uint64_t* buffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
+static void pack_local_info(swing_utofu_comm_descriptor* desc){
     for(size_t i = 0; i < desc->num_ports; i++){
-        buffer[3*i] = desc->lcl_vcq_id[i];
-        buffer[3*i+1] = desc->lcl_send_stadd[i];
-        buffer[3*i+2] = desc->lcl_recv_stadd[i];
+        desc->sbuffer[3*i] = desc->lcl_vcq_id[i];
+        desc->sbuffer[3*i+1] = desc->lcl_send_stadd[i];
+        desc->sbuffer[3*i+2] = desc->lcl_recv_stadd[i];
     }
-    return buffer;
 }
 
 static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buffer, uint peer){
@@ -54,7 +52,6 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
         utofu_tni_id_t tni_id = p;
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
-        double t0 = MPI_Wtime();
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->vcq_hdl[p])) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->vcq_hdl[p], &(desc->lcl_vcq_id[p])) == UTOFU_SUCCESS);
         // register memory regions and get their STADDs
@@ -63,25 +60,30 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
         desc->rmt_info[p] = new std::unordered_map<uint, swing_utofu_remote_info>();
     }
 
-
-    // This must be done by a single thread!
-    uint64_t* sbuffer = pack_local_info(desc);
+    
+    desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
+    pack_local_info(desc);
     // Send the local info for my the ports, to all the peers
     for(size_t step = 0; step < num_steps; step++){
         uint peer = peers_per_port[0][step];
-        MPI_Send(sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD);
+        MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
+    return desc;
+}
+
+void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){
     // Receive the remote info for all the ports, from all the peers
-    uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*num_ports);
+    uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = peers_per_port[0][step];
-        MPI_Recv(rbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        uint peer = desc->peers_per_port[0][step];
+        MPI_Recv(rbuffer, 3*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         unpack_remote_info(desc, rbuffer, peer);
     }
+    MPI_Waitall(num_steps, desc->reqs, MPI_STATUSES_IGNORE);
 
-    free(sbuffer);
+    free(desc->sbuffer);
     free(rbuffer);
-    return desc;
+
 }
 
 // teardown communication

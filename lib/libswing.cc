@@ -31,12 +31,46 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 //#define ACTIVE_WAIT
 
 //#define DEBUG
+#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
 #else
 #define DPRINTF(...) 
 #endif
+
+class Timer {
+public:
+    Timer() {
+#ifdef PROFILE
+        start_time_point = std::chrono::high_resolution_clock::now();
+#endif
+    }
+
+    ~Timer() {
+        stop("destructor");
+    }
+
+    void stop(std::string name) {
+#ifdef PROFILE
+        auto end_time_point = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::time_point_cast<std::chrono::microseconds>(start_time_point).time_since_epoch().count();
+        auto end = std::chrono::time_point_cast<std::chrono::microseconds>(end_time_point).time_since_epoch().count();
+        auto duration = end - start;
+        std::cout << "Timer [" << name << "]: " << duration << " us" << std::endl;
+#endif
+    }
+
+    void reset(std::string name){
+#ifdef PROFILE
+        stop(name);
+        start_time_point = std::chrono::high_resolution_clock::now();
+#endif        
+    }
+
+private:
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time_point;
+};
 
 typedef enum{
     SWING_NULL = 0, // No collective, useful to force some bookeping data computation
@@ -1388,6 +1422,15 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
     // instead of writing in the actual offset, we force the offsets
     // to be different, since anyway the data must be moved from the receive
     // buffer when aggregating it.
+    // 
+    // To do that, the intuition is the following:
+    // - During the allgather, the rank receives always in different parts of the array
+    // - Thus, I should do a put in the offset where he receives in the corresponding step of the allgather
+    // - So, I should do it at the offset from where he sends in the step of the reduce_scatter
+    // - i.e., he sends where I receive, so I must do the put at the same offset where I receive
+    //
+    // This is why we do in the following
+    //      -  char* rbuf_block = ((char*) rbuf) + offsets_s[port]; 
     if(coll_type == SWING_REDUCE_SCATTER){
         utofu_offset_r = req_idx_to_block_idx[port].offset;
     }
@@ -1415,7 +1458,7 @@ static int swing_coll_sendrecv_utofu(size_t port, swing_utofu_comm_descriptor* u
     offset = 0;
     if(counts_r[port]){ 
         char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
-        char* rbuf_block = ((char*) rbuf) + offsets_s[port]; // TODO: Explain why
+        char* rbuf_block = ((char*) rbuf) + offsets_s[port]; 
         size_t remaining = counts_r[port];
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
@@ -1851,9 +1894,10 @@ static inline void compute_bitmaps(SwingInfo* info, size_t step, uint* coordinat
  * @param blocks_info: For each chunk, port, and block, the count and offset of the block
 */
 static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, SwingInfo* info, BlockInfo*** blocks_info, CollType coll_type){    
-    int res;
+    Timer timer;
+    int res = MPI_SUCCESS;
     uint* coordinates = (uint*) malloc(sizeof(uint)*info->size*dimensions_num);
-    compute_rank_to_coord_mapping(info->size, dimensions, coordinates, info->size);
+    compute_rank_to_coord_mapping(info->size, dimensions, coordinates, info->size);    
     DPRINTF("[%d] Computing peers\n", info->rank);
     uint** peers_per_port = (uint**) malloc(sizeof(uint*)*info->num_ports);
     for(size_t p = 0; p < info->num_ports; p++){
@@ -1861,12 +1905,12 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         compute_peers(peers_per_port[p], p, info->num_steps, info->rank, coordinates);
     }
     DPRINTF("[%d] Peers computed\n", info->rank);
+    timer.reset("Peers computation");
     
     char* rbuf = NULL;
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
         size_t total_size_bytes = count*info->dtsize;
         rbuf = (char*) malloc(total_size_bytes);
-        memcpy(recvbuf, sendbuf, total_size_bytes);    
     }
     uint coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
     getCoordFromId(info->rank, coord_mine, info->size, dimensions);
@@ -1908,6 +1952,7 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
             get_valid_distances(sk, info->num_steps_per_dim[d], dimensions[d], reference_valid_distances[d][sk], &num_valid_distances[d][sk]);
         }
     }
+    timer.reset("Distance computation");
 
     /********************/
     /** Send/Recv part **/
@@ -1936,6 +1981,7 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         }
         free(bitmap_tmp);
     }
+    timer.reset("Remapping computation");
 
     size_t collectives_to_run_num = 0;
     CollType collectives_to_run[LIBSWING_MAX_COLLECTIVE_SEQUENCE]; 
@@ -1987,14 +2033,29 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
         for(size_t step = 0; step < num_steps; step++){        
             compute_bitmaps(info, step, coordinates, peers_per_port, bitmap_ready, bitmap_send, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, tmp_s, tmp_r, bitmap_send_merged, bitmap_recv_merged, reference_valid_distances, num_valid_distances);                        
         }   
+        timer.reset("Bitmaps computation");
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*info->dtsize, buf_r[0], count*info->dtsize, info->num_ports, info->num_steps, peers_per_port);
+        timer.reset("uTofu setup");
+        swing_utofu_setup_wait(utofu_descriptor, info->num_steps);
+        timer.reset("uTofu wait");
         // Needed to be sure everyone registered the buffers
         MPI_Barrier(MPI_COMM_WORLD);
+        timer.reset("uTofu barrier");
 
         assert(info->num_chunks == 1); // Chunking not supported (we do it anyway when puts are too large)
 
 #pragma omp parallel for num_threads(info->num_ports) private(res)
-        for(size_t port = 0; port < info->num_ports; port++){            
+        for(size_t port = 0; port < info->num_ports; port++){
+            // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
+            if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
+                size_t offset = blocks_info[0][port][0].offset;
+                size_t bytes_on_port = 0;                
+                for(size_t i = 0; i < info->size; i++){
+                    bytes_on_port += blocks_info[0][port][i].count*info->dtsize;
+                }
+                memcpy(((char*) recvbuf) + offset, ((char*) sendbuf) + offset, bytes_on_port);    
+            }
+
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
                 // Reset info for the next series of steps        
                 memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
@@ -2007,9 +2068,15 @@ static inline int swing_collective_block(const void *sendbuf, void *recvbuf, int
                 }
             }
         }
+        timer.reset("main loop");
         // Cleanup utofu resources
         swing_utofu_teardown(utofu_descriptor);
+        timer.reset("uTofu teardown");
     }else{
+        if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
+            size_t total_size_bytes = count*info->dtsize;
+            memcpy(recvbuf, sendbuf, total_size_bytes);    
+        }
         for(size_t collective = 0; collective < collectives_to_run_num; collective++){ 
             for(size_t c = 0; c < info->num_chunks; c++){
                 // Reset info for the next series of steps        

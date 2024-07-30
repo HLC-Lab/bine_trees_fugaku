@@ -27,14 +27,18 @@ typedef struct{
     utofu_vcq_id_t lcl_vcq_id[LIBSWING_MAX_SUPPORTED_PORTS]; // One local VCQ per port
     utofu_stadd_t lcl_send_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_recv_stadd[LIBSWING_MAX_SUPPORTED_PORTS]; // One local STADD per port
     std::unordered_map<uint, swing_utofu_remote_info>* rmt_info[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a map mapping the peer to the addresses
+    uint64_t* sbuffer;
+    MPI_Request reqs[LIBSWING_MAX_STEPS];
     
     char completed_send[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];
-    char completed_recv[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];
+    char completed_recv[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];    
 }swing_utofu_comm_descriptor;
 
 // setup send/recv communication
 swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
                                                uint num_ports, uint num_steps, uint** peers_per_port);
+void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
+
 // teardown communication
 void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t step, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather);
