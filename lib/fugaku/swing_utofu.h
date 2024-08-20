@@ -4,7 +4,7 @@
 #include <utofu.h>
 #include <vector>
 #include <unordered_map>
-#include "../libswing.h"
+#include "../libswing_common.h"
 
 // TODO: Grab from libswing.h
 #define MAX_PUTGET_SIZE 16777215
@@ -17,7 +17,7 @@ typedef struct{
     utofu_stadd_t recv_stadd;
 }swing_utofu_remote_info;
 
-typedef struct{
+struct swing_utofu_comm_d{
     uint num_ports;
     uint** peers_per_port;
     uint64_t next_edata[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
@@ -32,7 +32,7 @@ typedef struct{
     
     char completed_send[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];
     char completed_recv[LIBSWING_MAX_SUPPORTED_PORTS][MAX_EDATA];    
-}swing_utofu_comm_descriptor;
+};
 
 // setup send/recv communication
 swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
