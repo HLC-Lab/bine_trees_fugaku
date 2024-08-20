@@ -1,6 +1,7 @@
 #ifndef LIBSWING_COMMON_H
 #define LIBSWING_COMMON_H
 
+#include <chrono>
 #include <stdint.h>
 #include <math.h>
 #include <vector>
@@ -50,8 +51,8 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
-#define PROFILE
+#define DEBUG
+//#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)

@@ -1,6 +1,6 @@
 #!/bin/bash
 #declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter" "MPI_Allgather")
-declare -a COLLECTIVES=("MPI_Allgather")
+declare -a COLLECTIVES=("MPI_Allreduce")
 COUNT=0
 
 for COLLECTIVE in "${COLLECTIVES[@]}"

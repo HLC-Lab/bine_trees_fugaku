@@ -1,6 +1,9 @@
-#include "libswing_common.h"
-#include "fugaku/swing_utofu.h"
 #include <assert.h>
+
+#include "libswing_common.h"
+#ifdef FUGAKU
+#include "fugaku/swing_utofu.h"
+#endif
 
 Timer::Timer() {
 #ifdef PROFILE
@@ -137,13 +140,13 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
         this->size *= dimensions[i];        
+        this->num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
         if(!is_power_of_two(dimensions[i])){
             this->all_p2_dimensions = false;
             this->dimensions_virtual[i] = pow(2, this->num_steps_per_dim[i] - 1);
         }else{
             this->dimensions_virtual[i] = this->dimensions[i];
         }
-        this->num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
         this->num_steps += this->num_steps_per_dim[i];
     }
     if(this->num_steps > LIBSWING_MAX_STEPS){
@@ -165,7 +168,7 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
         this->peers_per_port[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(p, this->rank, false, this->peers_per_port[p]);
     }
-    DPRINTF("[%d] Peers computed\n", info->rank);
+    DPRINTF("[%d] Peers computed\n", this->rank);
 }
 
 SwingCommon::~SwingCommon(){
@@ -513,11 +516,6 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
             // Wait for all the send to finish
             DPRINTF("[%d] All sends and receive completed\n", rank);
         }
-
-        for(size_t p = 0; p < this->num_ports; p++){
-            free(peers_per_port[p]);
-        }
-        free(peers_per_port);  
     }
 
     DPRINTF("[%d] Propagating data to extra nodes\n", rank);
@@ -526,8 +524,6 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
     DPRINTF("[%d] Data propagated\n", rank);
     
     free(tmpbuf);
-    free(coordinates);
-    free(coordinates_virtual);
     return res;
 }
 
@@ -660,8 +656,6 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
     }
     DPRINTF("[%d] Issued %d send requests and %d receive requests\n", rank, num_requests_s, num_requests_r);
 
-
-    if(coll_type == SWING_NULL){return MPI_SUCCESS;}
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
 //#define ALWAYS_WAITALL
@@ -679,7 +673,7 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
 #endif	    
             void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
-            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", info->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
+            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
             MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
         }
     }else{
@@ -802,7 +796,7 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
 #endif	    
             void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
-            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", info->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
+            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
             MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
         }
     }else{
@@ -1220,6 +1214,7 @@ void SwingCommon::get_blocks_bitmaps_multid(size_t step, size_t port, int* coord
 
 
 #ifdef DEBUG
+/*
 static void print_bitmaps(SwingInfo* info, size_t step, char* bitmap_send_merged, char* bitmap_recv_merged){          
     DPRINTF("[%d] Step %d Bitmap send: ", info->rank, step);
     for(size_t i = 0; i < (uint) info->size; i++){
@@ -1241,6 +1236,7 @@ static void print_bitmaps(SwingInfo* info, size_t step, char* bitmap_send_merged
     }
     DPRINTF("\n");
 }
+*/
 #endif
 
 void SwingCommon::get_peer(int* coord_rank, size_t step, size_t port, int* coord_peer){
@@ -1338,7 +1334,7 @@ void SwingCommon::compute_bitmaps(size_t step, uint** peers_per_port, char** bit
                 }
             }
 #ifdef DEBUG
-            print_bitmaps(info, step, bitmap_send_merged[p][step], bitmap_recv_merged[p][step]);
+            //print_bitmaps(info, step, bitmap_send_merged[p][step], bitmap_recv_merged[p][step]);
 #endif
         }
     }
@@ -1467,7 +1463,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }
     }
 
-    if(algo == ALGO_SWING_B_UTOFU){        
+    if(algo == ALGO_SWING_B_UTOFU){     
+#ifdef FUGAKU   
         // Setup all the communications        
         for(size_t port = 0; port < this->num_ports; port++){            
             memset(next_step_per_dim[port], 0, sizeof(size_t)*dimensions_num);
@@ -1514,6 +1511,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // Cleanup utofu resources
         swing_utofu_teardown(utofu_descriptor);
         timer.reset("uTofu teardown");
+#else
+        fprintf(stderr, "uTofu can only be used on Fugaku.\n");
+        exit(-1);
+#endif
     }else{
         if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
             size_t total_size_bytes = count*dtsize;
@@ -1560,12 +1561,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }
         free(bitmap_send_merged[p]);
         free(bitmap_recv_merged[p]);
-        free(peers_per_port[p]);
         if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
             free(remapping_per_port[p]); 
         }
     }
-    free(peers_per_port);  
     for(size_t d = 0; d < dimensions_num; d++){
         free(bitmap_recv[d]);
         for(size_t i = 0; i < this->num_steps_per_dim[d]; i++){

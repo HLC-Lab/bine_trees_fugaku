@@ -17,7 +17,6 @@
 #include <inttypes.h>
 #include <unistd.h>
 #include <omp.h>
-#include "libswing.h"
 #include "libswing_common.h"
 
 typedef struct{
