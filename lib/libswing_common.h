@@ -111,24 +111,24 @@ class SwingBitmapCalculator {
     private:
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint dimensions_num; 
-        uint num_ports;
+        uint port;
         uint size;
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint num_steps;
-        char** bitmap_send_merged[LIBSWING_MAX_SUPPORTED_PORTS];
-        char** bitmap_recv_merged[LIBSWING_MAX_SUPPORTED_PORTS];
+        char** bitmap_send_merged;
+        char** bitmap_recv_merged;
 
-        uint** peers_per_port; // Peers per port and step, computed on the original, non-shrinked topology.
+        uint* peers; // Peers per step, computed on the original, non-shrinked topology.
         int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
-        uint* remapping_per_port[LIBSWING_MAX_SUPPORTED_PORTS];
+        uint* remapping;
         SwingCoordConverter scc;
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         
         size_t step; 
-        size_t current_d[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port, what's the current dimension we are sending in.
-        size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
+        size_t current_d; // What's the current dimension we are sending in.
+        size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
 
         // Computes an array of valid distances (considering a plain collective on an even node),
         // for a collective working on a given dimension and executing a given step.
@@ -146,49 +146,53 @@ class SwingBitmapCalculator {
         // Computes the peer of an arbitrary rank for an arbitrary step and port.
         // @param coord_rank (IN): the coordinates of the rank
         // @param step (IN): the step
-        // @param port (IN): the port
         // @param coord_peer (OUT): the coordinates of the peer
-        void get_peer(int* coord_rank, size_t step, size_t port, int* coord_peer);
+        void get_peer(int* coord_rank, size_t step, int* coord_peer);
 
         // Magic support functions (TODO: Document)
-        void get_blocks_bitmaps_multid(size_t step, size_t port, int* coord_peer, 
+        void get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
                                        char* bitmap_send_merged, char* bitmap_recv_merged, 
                                        int* coord_mine);
-        void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* current_d, size_t step,
-                                       size_t port, int* coord_peer, char** bitmap_send, 
-                                       char** bitmap_recv, char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                       int* coord_mine);
-        void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
-                   int step, size_t port, int* coord_rank, char* bitmap_tmp);        
+        void get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
+                                       char** bitmap_send, char** bitmap_recv, 
+                                       char* bitmap_send_merged, char* bitmap_recv_merged, 
+                                       int* coord_mine, size_t* next_step_per_dim = NULL, size_t* current_d = NULL);
+        void remap(const std::vector<int>& nodes, uint start_range, uint end_range, int step, int* coord_rank, char* bitmap_tmp);        
     public:
-        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint num_ports, bool remap_blocks);
+        // Constructor
+        // @param rank (IN): the rank
+        // @param dimensions (IN): the dimensions of the torus
+        // @param dimensions_num (IN): the number of dimensions
+        // @param port (IN): the port the collective starts from
+        // @param remap_blocks (IN): if true, the blocks are remapped to be contiguous
+        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks);
 
+        // Destructor
         ~SwingBitmapCalculator();
 
-        uint get_peer(uint port, uint step, CollType coll_type){
-            size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
-            return (this->peers_per_port)[port][block_step];
-        }
+        // Computes the peer of this node, considering it started for a given port and it is at a specific step.
+        // @param port (IN): the port
+        // @param step (IN): the step
+        // @param coll_type (IN): the collective type
+        // @return the peer
+        uint get_peer(uint port, uint step, CollType coll_type);
 
+        // Computes the bitmaps to be used at next step.
         void compute_next_bitmaps();
 
-        bool block_must_be_sent(uint port, uint step, CollType coll_type, uint block_id){
-            size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
-            if(coll_type == SWING_REDUCE_SCATTER){
-                return bitmap_send_merged[port][block_step][block_id];
-            }else{                
-                return bitmap_recv_merged[port][block_step][block_id];
-            }
-        }
+        // Chekcs if a specific block must be sent, based on the port this collective started from and the current step.
+        // @param step (IN): the step
+        // @param coll_type (IN): the collective type
+        // @param block_id (IN): the block id
+        // @return true if the block must be sent, false otherwise
+        bool block_must_be_sent(uint step, CollType coll_type, uint block_id);
 
-        bool block_must_be_recvd(uint port, uint step, CollType coll_type, uint block_id){
-            size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
-            if(coll_type == SWING_REDUCE_SCATTER){
-                return bitmap_recv_merged[port][block_step][block_id];
-            }else{                
-                return bitmap_send_merged[port][block_step][block_id];
-            }
-        }
+        // Chekcs if a specific block must be received, based on the port this collective started from and the current step.
+        // @param step (IN): the step
+        // @param coll_type (IN): the collective type
+        // @param block_id (IN): the block id
+        // @return true if the block must be received, false otherwise  
+        bool block_must_be_recvd(uint step, CollType coll_type, uint block_id);
 };
 
 class SwingCommon {
@@ -205,6 +209,7 @@ class SwingCommon {
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
         SwingCoordConverter scc;
+        SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
@@ -246,7 +251,7 @@ class SwingCommon {
         // @param bitmap_recv (IN): the bitmap of the recv
         int swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                             
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                              CollType coll_type, SwingBitmapCalculator& sbc);
+                              CollType coll_type);
 
         // Bandwidth-optimal Swing collective with contiguous blocks
         // @param buf (IN): the sendbuf
@@ -262,12 +267,12 @@ class SwingCommon {
         // @param bitmap_recv (IN): the bitmap of the recv
         int swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                                  MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                 CollType coll_type, SwingBitmapCalculator& sbc);
+                                 CollType coll_type);
 
         // Wrapper for step_b/step_cont
         int swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                            MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                           CollType coll_type, SwingBitmapCalculator& sbc);
+                           CollType coll_type);
 
         // Bandwidth-optimal Swing collective with UTOFU
         // @param port (IN): the port
@@ -285,7 +290,7 @@ class SwingCommon {
         // @param bitmap_recv (IN): the bitmap of the recv
         int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                  CollType coll_type, SwingBitmapCalculator& sbc);
+                                  CollType coll_type);
 
     public:
         // Constructor
