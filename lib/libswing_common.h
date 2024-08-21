@@ -238,7 +238,7 @@ class SwingCommon {
                                        int* coord_mine);
         void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
                    int step, size_t port, int* coord_rank, char* bitmap_tmp);
-        void compute_bitmaps(size_t step, uint** peers_per_port, char** bitmap_ready, char** bitmap_recv,
+        void compute_bitmaps(size_t step, char** bitmap_ready, char** bitmap_recv,
                      size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine,
                      char*** bitmap_send_merged, char*** bitmap_recv_merged);
 
