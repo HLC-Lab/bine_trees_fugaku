@@ -1,6 +1,6 @@
 #!/bin/bash
-#declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter" "MPI_Allgather")
-declare -a COLLECTIVES=("MPI_Allreduce")
+declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter" "MPI_Allgather")
+#declare -a COLLECTIVES=("MPI_Allreduce")
 COUNT=0
 
 for COLLECTIVE in "${COLLECTIVES[@]}"
@@ -27,7 +27,6 @@ do
     
     for ALGO in "${ALGORITHMS[@]}"
     do
-        echo "Running ${COLLECTIVE} ${ALGO}..."
         for TYPE in "INT32"
         do
             for COUNT in ${COUNTS[@]}
@@ -36,32 +35,32 @@ do
                 do
                     for N in 4 8 64 6 10 12 14 18
                     do
-                        echo "Running with n=${N}..."
+                        echo "Running ${COLLECTIVE} ${ALGO} with n=${N}..."
                         LIBSWING_ALGO=${ALGO} mpirun -n ${N} --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
                     done
 
-                    echo "Running with n=2x8x2.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=2x8x2.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,8,2  mpirun -n 32 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=6x6.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=6x6.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,6  mpirun -n 36 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=10x10.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=10x10.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=10,10  mpirun -n 100 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=4x6x4.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=4x6x4.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=4,6,4  mpirun -n 96 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=6x2x6.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=6x2x6.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,2,6  mpirun -n 72 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=2x6x2.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=2x6x2.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,6,2  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=2x2x6.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=2x2x6.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,2,6  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
-                    echo "Running with n=6x2x2.."
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=6x2x2.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6,2,2  mpirun -n 24 --oversubscribe ./bench/bench ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
                 done
             done
