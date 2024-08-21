@@ -1312,14 +1312,12 @@ void SwingBitmapCalculator::remap(const std::vector<int>& nodes, uint start_rang
     }
 }
 
-
 void SwingBitmapCalculator::compute_bitmaps(uint step, CollType coll_type){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
     while(block_step >= this->next_step){
         compute_next_bitmaps();
     }
 }
-
 
 void SwingBitmapCalculator::compute_next_bitmaps(){
     if(this->next_step >= this->num_steps){
@@ -1429,15 +1427,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             break;
         }
         case SWING_ALLGATHER:{
-            // We first run a "NULL" collective (to force bookeping data computation), and then the actual allgather 
-            // TODO: Find a better way, avoid the NULL collective
-            collectives_to_run[0] = SWING_NULL; // TODO: I think we can remove this now and have only the actual collective (bitmaps would be computed anyway)
-            collectives_to_run[1] = SWING_ALLGATHER;
-            collectives_to_run_num = 2;
-            buf_s[0] = recvbuf; // Just needed for utofu
-            buf_r[0] = recvbuf; // Just needed for utofu
-            buf_s[1] = recvbuf;
-            buf_r[1] = recvbuf;
+            collectives_to_run[0] = SWING_ALLGATHER;
+            collectives_to_run_num = 1;
+            buf_s[0] = recvbuf;
+            buf_r[0] = recvbuf;
             break;
         }
         default:{
