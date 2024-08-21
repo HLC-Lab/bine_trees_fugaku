@@ -51,7 +51,7 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 //#define PROFILE
 
 #ifdef DEBUG
@@ -126,7 +126,7 @@ class SwingBitmapCalculator {
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         
-        size_t step; 
+        size_t next_step; 
         size_t current_d; // What's the current dimension we are sending in.
         size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
 
@@ -148,6 +148,10 @@ class SwingBitmapCalculator {
         // @param step (IN): the step
         // @param coord_peer (OUT): the coordinates of the peer
         void get_peer(int* coord_rank, size_t step, int* coord_peer);
+
+
+        // Computes the bitmaps for the next step (assuming reduce_scatter)
+        void compute_next_bitmaps();
 
         // Magic support functions (TODO: Document)
         void get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
@@ -175,10 +179,15 @@ class SwingBitmapCalculator {
         // @param step (IN): the step
         // @param coll_type (IN): the collective type
         // @return the peer
-        uint get_peer(uint port, uint step, CollType coll_type);
+        uint get_peer(uint step, CollType coll_type);
 
-        // Computes the bitmaps to be used at next step.
-        void compute_next_bitmaps();
+        // Computes the bitmaps to be used at a given step.
+        // You can avoid calling this explicitly, as it is called by block_must_be_sent and block_must_be_recvd.
+        // You can call it explicitly in case you want to separate the bitmap computation from the check of the blocks 
+        // (e.g., for overlapping bitmap computation with communication).
+        // @param step (IN): the step
+        // @param coll_type (IN): the collective type
+        void compute_bitmaps(uint step, CollType coll_type);
 
         // Chekcs if a specific block must be sent, based on the port this collective started from and the current step.
         // @param step (IN): the step

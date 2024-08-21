@@ -634,7 +634,7 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
 
     int tag, res = MPI_SUCCESS;
     for(size_t port = 0; port < this->num_ports; port++){
-        uint peer = sbc[port]->get_peer(port, step, coll_type);
+        uint peer = sbc[port]->get_peer(step, coll_type);
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", this->rank, step, port, this->num_ports, peer);                
 
         if(coll_type == SWING_REDUCE_SCATTER){
@@ -722,7 +722,7 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
     int tag, res = MPI_SUCCESS;
 
     for(size_t port = 0; port < this->num_ports; port++){
-        uint peer = sbc[port]->get_peer(port, step, coll_type);
+        uint peer = sbc[port]->get_peer(step, coll_type);
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", this->rank, step, port, this->num_ports, peer);                
 
         if(coll_type == SWING_REDUCE_SCATTER){
@@ -1302,8 +1302,17 @@ void SwingBitmapCalculator::remap(const std::vector<int>& nodes, uint start_rang
     }
 }
 
+
+void SwingBitmapCalculator::compute_bitmaps(uint step, CollType coll_type){
+    size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
+    while(block_step >= this->next_step){
+        compute_next_bitmaps();
+    }
+}
+
+
 void SwingBitmapCalculator::compute_next_bitmaps(){
-    if(step >= this->num_steps){
+    if(this->next_step >= this->num_steps){
         return;
     }   
     char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -1313,15 +1322,15 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
         bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
     }        
                     
-    bitmap_send_merged[step] = (char*) malloc(sizeof(char)*this->size);
-    bitmap_recv_merged[step] = (char*) malloc(sizeof(char)*this->size);
+    bitmap_send_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
+    bitmap_recv_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
     
     int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
-    this->scc.retrieve_coord_mapping(this->peers[step], false, coord_peer);
+    this->scc.retrieve_coord_mapping(this->peers[this->next_step], false, coord_peer);
 
-    get_blocks_bitmaps_multid(step, 
+    get_blocks_bitmaps_multid(this->next_step, 
                               coord_peer, bitmap_send, 
-                              bitmap_recv, bitmap_send_merged[step], bitmap_recv_merged[step], 
+                              bitmap_recv, bitmap_send_merged[this->next_step], bitmap_recv_merged[this->next_step], 
                               coord_mine);
 
     /*************/
@@ -1342,11 +1351,11 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
 
         char* tmp_s = (char*) malloc(sizeof(char)*this->size);
         char* tmp_r = (char*) malloc(sizeof(char)*this->size);
-        memcpy(tmp_s, bitmap_send_merged[step], sizeof(char)*this->size);
-        memcpy(tmp_r, bitmap_recv_merged[step], sizeof(char)*this->size);
+        memcpy(tmp_s, bitmap_send_merged[this->next_step], sizeof(char)*this->size);
+        memcpy(tmp_r, bitmap_recv_merged[this->next_step], sizeof(char)*this->size);
         for(size_t i = 0; i < (uint) this->size; i++){
-            bitmap_send_merged[step][this->remapping[i]] = tmp_s[i];
-            bitmap_recv_merged[step][this->remapping[i]] = tmp_r[i];
+            bitmap_send_merged[this->next_step][this->remapping[i]] = tmp_s[i];
+            bitmap_recv_merged[this->next_step][this->remapping[i]] = tmp_r[i];
         }
         if(bitmap_tmp){
             free(bitmap_tmp);
@@ -1361,7 +1370,7 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
         free(bitmap_send[d]);
         free(bitmap_recv[d]);
     }
-    ++step;
+    ++this->next_step;
 }
 
 /**
@@ -1432,7 +1441,9 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // Setup all the communications        
         // Compute all bitmaps // TODO: Refactor to do this step by step while waiting the data (overlap)
         for(size_t step = 0; step < this->num_steps; step++){
-            sbc.compute_next_bitmaps();
+            for(size_t i = 0; i < this->num_ports; i++){
+                sbc[i]->compute_bitmaps(step, collectives_to_run[collective]);
+            }
         }   
         timer.reset("Bitmaps computation");
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, peers_per_port);
@@ -1480,7 +1491,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
             for(size_t step = 0; step < this->num_steps; step++){                        
                 for(size_t i = 0; i < this->num_ports; i++){
-                    sbc[i]->compute_next_bitmaps();
+                    sbc[i]->compute_bitmaps(step, collectives_to_run[collective]);
                 }
                 DPRINTF("[%d] Bitmap computed for step %d\n", this->rank, step);
                 res = swing_coll_step(buf_s[collective], buf_r[collective], blocks_info, step,                                 
@@ -1500,12 +1511,13 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     return res;
 }
 
-uint SwingBitmapCalculator::get_peer(uint port, uint step, CollType coll_type){
+uint SwingBitmapCalculator::get_peer(uint step, CollType coll_type){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
     return (this->peers)[block_step];
 }
 
 bool SwingBitmapCalculator::block_must_be_sent(uint step, CollType coll_type, uint block_id){
+    compute_bitmaps(step, coll_type); // This is going to be a nop if compute_bitmaps was already called before
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
     if(coll_type == SWING_REDUCE_SCATTER){
         return bitmap_send_merged[block_step][block_id];
@@ -1515,6 +1527,7 @@ bool SwingBitmapCalculator::block_must_be_sent(uint step, CollType coll_type, ui
 }
 
 bool SwingBitmapCalculator::block_must_be_recvd(uint step, CollType coll_type, uint block_id){
+    compute_bitmaps(step, coll_type); // This is going to be a nop if compute_bitmaps was already called before
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
     if(coll_type == SWING_REDUCE_SCATTER){
         return bitmap_recv_merged[block_step][block_id];
@@ -1524,7 +1537,7 @@ bool SwingBitmapCalculator::block_must_be_recvd(uint step, CollType coll_type, u
 }
 
 SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks):
-         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), step(0){
+         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), next_step(0){
     this->size = 1;
     this->num_steps = 0;
     for (uint i = 0; i < dimensions_num; i++) {
