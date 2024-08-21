@@ -849,8 +849,9 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     memset(counts_r, 0, sizeof(counts_r));
     BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
 
-    // TODO: Do this for next step while waiting
-    sbc[port]->compute_bitmaps(step, coll_type);
+    if(step == 0){
+        sbc[port]->compute_bitmaps(step, coll_type);
+    }
 
     // Sendrecv + aggregate
     // Search for the blocks that must be sent.
@@ -961,6 +962,12 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             ++issued_sends;
         }
     }
+
+    // We issued the sends, while we wait for transmission we compute the bitmaps for the next step
+    if(step < this->num_steps - 1){
+        sbc[port]->compute_bitmaps(step + 1, coll_type);
+    }
+
     // Receive and aggregate
     offset = 0;
     if(counts_r[port]){ 
@@ -1424,7 +1431,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         case SWING_ALLGATHER:{
             // We first run a "NULL" collective (to force bookeping data computation), and then the actual allgather 
             // TODO: Find a better way, avoid the NULL collective
-            collectives_to_run[0] = SWING_NULL;
+            collectives_to_run[0] = SWING_NULL; // TODO: I think we can remove this now and have only the actual collective (bitmaps would be computed anyway)
             collectives_to_run[1] = SWING_ALLGATHER;
             collectives_to_run_num = 2;
             buf_s[0] = recvbuf; // Just needed for utofu
