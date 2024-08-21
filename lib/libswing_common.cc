@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <inttypes.h>
 
 #include "libswing_common.h"
 #ifdef FUGAKU
@@ -323,7 +324,7 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int
             if(coord[i] >= this->dimensions_virtual[i]){            
                 coord_peer[i] = coord[i] - extra;
                 int peer = getIdFromCoord(coord_peer, false);
-                DPRINTF("[%d] Sending to %d\n", rank, peer);
+                DPRINTF("[%d] (Shr) Sending to %d\n", rank, peer);
                 int res = MPI_Send(aggregated_buf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
                 if(res != MPI_SUCCESS){return res;}
                 *idle = 1;
@@ -331,10 +332,12 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int
             }else if(coord[i] + extra >= this->dimensions_virtual[i]){
                 coord_peer[i] = coord[i] + extra;
                 int peer = getIdFromCoord(coord_peer, false);
-                DPRINTF("[%d] Receiving from %d\n", rank, peer);
+                DPRINTF("[%d] (Shr) Receiving from %d\n", rank, peer);
                 int res = MPI_Recv(recvbuf_real, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);                
                 if(res != MPI_SUCCESS){return res;}
+                DPRINTF("[%d] (Shr) Recvbuf (%p) before aggr %d\n", rank, recvbuf, ((char*) recvbuf)[0]);
                 MPI_Reduce_local(aggregation_source, recvbuf, count, datatype, op);
+                DPRINTF("[%d] (Shr) Recvbuf (%p) after aggr %d\n", rank, recvbuf, ((char*) recvbuf)[0]);
                 aggregated_buf = recvbuf;
                 recvbuf_real = tmpbuf;
                 aggregation_source = tmpbuf;
@@ -346,10 +349,10 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int
                     memcpy(recvbuf, sendbuf, count*dtsize);
                     aggregated_buf = recvbuf;
                     recvbuf_real = tmpbuf;
-                    aggregation_source = tmpbuf;
-                    buf_copied = true;
+                    aggregation_source = tmpbuf;                    
                 }
             }
+            buf_copied = true; // Do not move it from here (ugly)
         }
     }
     *rank_virtual = getIdFromCoord(coord, true);
@@ -373,7 +376,7 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
             if(coord[d] >= (uint) this->dimensions_virtual[d]){                
                 coord_peer[d] = coord[d] - extra;
                 int peer = getIdFromCoord(coord_peer, false);
-                DPRINTF("[%d] Receiving from %d\n", rank, peer);
+                DPRINTF("[%d] (Enl) Receiving from %d\n", rank, peer);
                 // I can overwrite the recvbuf and don't need to aggregate, since 
                 // I was an extra node and did not participate to the actual allreduce
                 int r = MPI_Recv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);
@@ -381,7 +384,7 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
             }else if(coord[d] + extra >= (uint) this->dimensions_virtual[d]){
                 coord_peer[d] = coord[d] + extra;
                 int peer = getIdFromCoord(coord_peer, false);
-                DPRINTF("[%d] Sending to %d\n", rank, peer);
+                DPRINTF("[%d] (Enl) Sending to %d\n", rank, peer);
                 int r = MPI_Send(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
                 if(r != MPI_SUCCESS){return r;}
             }
@@ -398,15 +401,14 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 // Steps 1. and 3. are done once on the entire buffer.
 // Step 2. is done for each chunk and each port.
 int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-    int dtsize, rank;
+    int dtsize;
     MPI_Type_size(datatype, &dtsize);    
-    MPI_Comm_rank(comm, &rank);    
     
     char* tmpbuf = (char*) malloc(count*dtsize); // Temporary buffer (to avoid overwriting sendbuf)
     // To avoid memcpying, the first recv+aggregation and the subsequent ones use different buffers
     // (see MPI_Allreduce_lat_optimal_swing_sendrecv). This variable keeps track of that.
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    retrieve_coord_mapping(rank, false, coord);
+    retrieve_coord_mapping(this->rank, false, coord);
 
     // Compute data offset per port
     BlockInfo buf_info[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -423,7 +425,6 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
 
     int idle = 0;
     int rank_virtual = rank;
-    int all_p2_dimensions = 1;
     int res;
     res = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
     if(res != MPI_SUCCESS){return res;}
@@ -432,7 +433,7 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
         size_virtual *= this->dimensions_virtual[i];
         num_steps_virtual += ceil(log2(this->dimensions_virtual[i]));
     }
-    DPRINTF("[%d] Virtual dimensions (%d, %d, %d)\n", rank, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
+    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
 
     if(!idle){
         // If the topology has some dimension which was not a power of 2,
@@ -510,7 +511,10 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
                 
                 //DPRINTF("[%d] sendbuf %p recvbuf %p sendbuf_real %p recvbuf_real %p tmpbuf %p aggbuff_a %p aggbuff_b %p\n", rank, sendbuf, recvbuf, sendbuf_real, recvbuf_real, tmpbuf, aggbuff_a, aggbuff_b);
 
+
+                DPRINTF("[%d] (m) Recvbuf (%p) before aggr %d\n", rank, aggbuff_b, ((char*) aggbuff_b)[0]);
                 res = MPI_Reduce_local(aggbuff_a, aggbuff_b, buf_info[terminated_port].count, datatype, op); 
+                DPRINTF("[%d] (m) Recvbuf (%p) after aggr %d\n", rank, aggbuff_b, ((char*) aggbuff_b)[0]);
                 if(res != MPI_SUCCESS){DPRINTF("[%d] Error on reduce_local\n", rank); return res;}
             }
             // Wait for all the send to finish

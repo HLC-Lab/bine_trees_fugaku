@@ -51,7 +51,7 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
+//#define DEBUG
 //#define PROFILE
 
 #ifdef DEBUG
