@@ -849,13 +849,16 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     memset(counts_r, 0, sizeof(counts_r));
     BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
 
+    // TODO: Do this for next step while waiting
+    sbc[port]->compute_bitmaps(step, coll_type);
+
     // Sendrecv + aggregate
     // Search for the blocks that must be sent.
     bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
     size_t offset_s, offset_r, count_s = 0, count_r = 0;
     for(size_t i = 0; i < (uint) this->size; i++){
-        int send_block = sbc.block_must_be_sent(port, step, coll_type, i);
-        int recv_block = sbc.block_must_be_recvd(port, step, coll_type, i);      
+        int send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
+        int recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);      
         size_t block_count = blocks_info[port][i].count;
         size_t block_offset = blocks_info[port][i].offset;
 
@@ -951,7 +954,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             assert(issued_sends <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
-            swing_utofu_isend(utofu_descriptor, port, block_step, issued_sends, offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
+            swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), issued_sends, offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
             offset += bytes_to_send;
             utofu_offset_r += bytes_to_send;
             remaining -= count;
@@ -1439,14 +1442,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     if(algo == ALGO_SWING_B_UTOFU){     
 #ifdef FUGAKU   
         // Setup all the communications        
-        // Compute all bitmaps // TODO: Refactor to do this step by step while waiting the data (overlap)
-        for(size_t step = 0; step < this->num_steps; step++){
-            for(size_t i = 0; i < this->num_ports; i++){
-                sbc[i]->compute_bitmaps(step, collectives_to_run[collective]);
-            }
-        }   
         timer.reset("Bitmaps computation");
-        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, peers_per_port);
+        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, this->sbc[0]);
         timer.reset("uTofu setup");
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
         timer.reset("uTofu wait");
@@ -1470,7 +1467,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 for(size_t step = 0; step < this->num_steps; step++){       
                     res = swing_coll_step_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], blocks_info, step, 
                                                 op, comm, datatype, datatype, 
-                                                collectives_to_run[collective], sbc);                                                    
+                                                collectives_to_run[collective]);                                                    
                     assert(res == MPI_SUCCESS);
                 }
             }

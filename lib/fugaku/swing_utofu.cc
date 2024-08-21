@@ -33,14 +33,14 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
 
 // setup send/recv communication
 swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
-                                               uint num_ports, uint num_steps, uint** peers_per_port){
+                                               uint num_ports, uint num_steps, SwingBitmapCalculator* sbc){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
     
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
     desc->num_ports = num_ports;
-    desc->peers_per_port = peers_per_port;
+    desc->sbc = sbc;
     memset(desc->completed_send, 0, sizeof(desc->completed_send));
     memset(desc->completed_recv, 0, sizeof(desc->completed_recv));
 
@@ -65,7 +65,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
     pack_local_info(desc);
     // Send the local info for my the ports, to all the peers
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = peers_per_port[0][step];
+        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);
         MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
     return desc;
@@ -75,7 +75,7 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = desc->peers_per_port[0][step];
+        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);
         MPI_Recv(rbuffer, 3*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         unpack_remote_info(desc, rbuffer, peer);
     }
@@ -98,7 +98,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
 }
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t step, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather){    
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather){    
     if(length > MAX_PUTGET_SIZE){
         fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
         exit(-1);
@@ -106,7 +106,6 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t step
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
     uint64_t edata = desc->next_edata[port];
     desc->next_edata[port] = (desc->next_edata[port] + 1) % MAX_EDATA;
-    uint peer = desc->peers_per_port[port][step];
     swing_utofu_remote_info rmt = (*(desc->rmt_info[port]))[peer];
     utofu_stadd_t rmt_stadd = is_allgather ? rmt.send_stadd : rmt.recv_stadd;
 

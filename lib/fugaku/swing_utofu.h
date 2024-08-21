@@ -19,7 +19,7 @@ typedef struct{
 
 struct swing_utofu_comm_d{
     uint num_ports;
-    uint** peers_per_port;
+    SwingBitmapCalculator* sbc;
     uint64_t next_edata[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
     uint64_t expected_edata_s[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
     uint64_t expected_edata_r[LIBSWING_MAX_SUPPORTED_PORTS]; // One per port/VCQ
@@ -36,12 +36,12 @@ struct swing_utofu_comm_d{
 
 // setup send/recv communication
 swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
-                                               uint num_ports, uint num_steps, uint** peers_per_port);
+                                               uint num_ports, uint num_steps, SwingBitmapCalculator* sbc);
 void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
 
 // teardown communication
 void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t step, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather);
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather);
 // Sends and recv are waited in the same order they are posted
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port);
