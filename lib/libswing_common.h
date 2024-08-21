@@ -87,7 +87,15 @@ class SwingCommon {
         bool all_p2_dimensions; // True if all the dimensions are power of 2
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
+        
+        /*************************************/
+        /* Bookeping data that can be cached */
+        /*************************************/
+        bool peers_computed;
         uint** peers_per_port; // Peers per port and step, computed on the original, non-shrinked topology.
+        bool reference_distances_computed;
+        int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
 
         // Convert a rank id into a list of d-dimensional coordinates
         // Row-major order, i.e., row coordinates change the slowest 
@@ -116,6 +124,14 @@ class SwingCommon {
         // @param virt (IN): if true, the virtual coordinates are considered, otherwise the real ones
         // @param peers (OUT): the array where the peers are stored (one per step)
         void compute_peers(int port, uint rank, bool virt, uint* peers);
+
+
+        // Computes an array of valid distances (considering a plain collective on an even node),
+        // for a collective working on a given dimension and executing a given step.
+        // The result is stored in the reference_valid_distances array.
+        // @param d (IN): the dimension
+        // @param step (IN): the step
+        void compute_valid_distances(uint d, int step);
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
@@ -214,17 +230,16 @@ class SwingCommon {
         // Magic support functions (TODO: Document)
         void get_blocks_bitmaps_multid(size_t step, size_t port, int* coord_peer, 
                                        char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                       int* coord_mine, int*** reference_valid_distances, uint** num_valid_distances);
+                                       int* coord_mine);
         void get_blocks_bitmaps_multid(size_t* next_step_per_dim, size_t* current_d, size_t step,
                                        size_t port, int* coord_peer, char** bitmap_send, 
                                        char** bitmap_recv, char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                       int* coord_mine, int*** reference_valid_distances, uint** num_valid_distances);
+                                       int* coord_mine);
         void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
-                   int step, size_t port, int* coord_rank, int*** reference_valid_distances,
-                   uint** num_valid_distances, char* bitmap_tmp);
+                   int step, size_t port, int* coord_rank, char* bitmap_tmp);
         void compute_bitmaps(size_t step, uint** peers_per_port, char** bitmap_ready, char** bitmap_recv,
                      size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine, uint** remapping_per_port,
-                     char*** bitmap_send_merged, char*** bitmap_recv_merged, int*** reference_valid_distances, uint** num_valid_distances);
+                     char*** bitmap_send_merged, char*** bitmap_recv_merged);
 
     public:
         // Constructor
