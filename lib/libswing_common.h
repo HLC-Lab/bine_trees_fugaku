@@ -96,6 +96,7 @@ class SwingCommon {
         bool reference_distances_computed;
         int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
+        uint* remapping_per_port[LIBSWING_MAX_SUPPORTED_PORTS];
 
         // Convert a rank id into a list of d-dimensional coordinates
         // Row-major order, i.e., row coordinates change the slowest 
@@ -238,7 +239,7 @@ class SwingCommon {
         void remap(const std::vector<int>& nodes, uint start_range, uint end_range, uint* blocks_remapping,
                    int step, size_t port, int* coord_rank, char* bitmap_tmp);
         void compute_bitmaps(size_t step, uint** peers_per_port, char** bitmap_ready, char** bitmap_recv,
-                     size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine, uint** remapping_per_port,
+                     size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine,
                      char*** bitmap_send_merged, char*** bitmap_recv_merged);
 
     public:

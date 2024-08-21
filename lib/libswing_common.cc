@@ -162,6 +162,7 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     this->coordinates_virtual = (int*) malloc(sizeof(int)*this->size*this->dimensions_num);
     memset(this->coordinates        , -1, sizeof(int)*this->size*dimensions_num);
     memset(this->coordinates_virtual, -1, sizeof(int)*this->size*dimensions_num);
+    memset(this->remapping_per_port, 0, sizeof(uint*)*LIBSWING_MAX_SUPPORTED_PORTS);
 }
 
 SwingCommon::~SwingCommon(){
@@ -182,6 +183,12 @@ SwingCommon::~SwingCommon(){
     free(this->peers_per_port);
     free(this->coordinates_virtual);
     free(this->coordinates);
+
+    for(size_t p = 0; p < this->num_ports; p++){
+        if(this->remapping_per_port[p] != 0){
+            free(this->remapping_per_port[p]); 
+        }
+    }
 }
 
 // Adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c
@@ -1309,10 +1316,15 @@ void SwingCommon::remap(const std::vector<int>& nodes, uint start_range, uint en
 }
 
 void SwingCommon::compute_bitmaps(size_t step, uint** peers_per_port, char** bitmap_ready, char** bitmap_recv,
-                                  size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine, uint** remapping_per_port,
+                                  size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_PORTS][LIBSWING_MAX_SUPPORTED_DIMENSIONS], size_t* current_d, int* coord_mine,
                                   char*** bitmap_send_merged, char*** bitmap_recv_merged){
     char* tmp_s = (char*) malloc(sizeof(char)*this->size);
     char* tmp_r = (char*) malloc(sizeof(char)*this->size);
+    char* bitmap_tmp = (char*) malloc(sizeof(char)*this->size);   
+    
+    std::vector<int> nodes(this->size);
+    for(size_t n = 0; n < (size_t) this->size; n++){nodes[n] = n;}     
+    
     char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     for(size_t d = 0; d < this->dimensions_num; d++){
         bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
@@ -1332,14 +1344,26 @@ void SwingCommon::compute_bitmaps(size_t step, uint** peers_per_port, char** bit
                                       coord_mine);
             bitmap_ready[p][step] = 1;
 
-            // Remapping
+            /*************/
+            /* REMAPPING */
+            /*************/
             if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
+                DPRINTF("[%d] Remapping\n", this->rank);
+
+                // If the remapping_per_port for this port has not yet been computed, compute it
+                if(remapping_per_port[p] == 0){
+                    int coord_zero[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                    memset(coord_zero, 0, sizeof(int)*this->dimensions_num);
+                    remapping_per_port[p] = (uint*) malloc(sizeof(uint)*this->size);                          
+                    remap(nodes, 0, this->size, remapping_per_port[p], 0, p, coord_zero, bitmap_tmp);            
+                }
+
                 memcpy(tmp_s, bitmap_send_merged[p][step], sizeof(char)*this->size);
                 memcpy(tmp_r, bitmap_recv_merged[p][step], sizeof(char)*this->size);
                 for(size_t i = 0; i < (uint) this->size; i++){
-                    DPRINTF("[%d] Remapping %d to %d\n", this->rank, i, remapping_per_port[p][i]);
-                    bitmap_send_merged[p][step][remapping_per_port[p][i]] = tmp_s[i];
-                    bitmap_recv_merged[p][step][remapping_per_port[p][i]] = tmp_r[i];
+                    DPRINTF("[%d] Remapping %d to %d\n", this->rank, i, this->remapping_per_port[p][i]);
+                    bitmap_send_merged[p][step][this->remapping_per_port[p][i]] = tmp_s[i];
+                    bitmap_recv_merged[p][step][this->remapping_per_port[p][i]] = tmp_r[i];
                 }
             }
 #ifdef DEBUG
@@ -1349,6 +1373,7 @@ void SwingCommon::compute_bitmaps(size_t step, uint** peers_per_port, char** bit
     }
     free(tmp_s);
     free(tmp_r);
+    free(bitmap_tmp);
     for(size_t d = 0; d < this->dimensions_num; d++){
         free(bitmap_send[d]);
     }
@@ -1421,25 +1446,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         reference_distances_computed = true;
     }
 
-    /*************/
-    /* REMAPPING */
-    /*************/
-    uint* remapping_per_port[LIBSWING_MAX_SUPPORTED_PORTS];
-    if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
-        DPRINTF("[%d] Remapping\n", this->rank);
-        std::vector<int> nodes(this->size);
-        int coord_zero[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        memset(coord_zero, 0, sizeof(int)*dimensions_num);
-        char* bitmap_tmp = (char*) malloc(sizeof(char)*this->size);        
-        for(size_t n = 0; n < (size_t) this->size; n++){nodes[n] = n;}
-        for(size_t p = 0; p < this->num_ports; p++){
-            remapping_per_port[p] = (uint*) malloc(sizeof(uint)*this->size);                          
-            remap(nodes, 0, this->size, remapping_per_port[p], 0, p, coord_zero, bitmap_tmp);            
-        }
-        free(bitmap_tmp);
-    }
-    timer.reset("Remapping computation");
-
     size_t collectives_to_run_num = 0;
     CollType collectives_to_run[LIBSWING_MAX_COLLECTIVE_SEQUENCE]; 
     void *buf_s[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
@@ -1489,7 +1495,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }        
         // Compute all bitmaps // TODO: Refactor to do this step by step while waiting the data (overlap)
         for(size_t step = 0; step < this->num_steps; step++){        
-            compute_bitmaps(step, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, bitmap_send_merged, bitmap_recv_merged);
+            compute_bitmaps(step, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, bitmap_send_merged, bitmap_recv_merged);
         }   
         timer.reset("Bitmaps computation");
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, peers_per_port);
@@ -1545,7 +1551,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             }
 
             // Compute bitmaps needed to execute next step (step 0)
-            compute_bitmaps(0, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, bitmap_send_merged, bitmap_recv_merged);
+            compute_bitmaps(0, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, bitmap_send_merged, bitmap_recv_merged);
         
             for(size_t step = 0; step < this->num_steps; step++){        
                 //double start = MPI_Wtime();            
@@ -1559,7 +1565,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 // While communicating, compute bitmaps needed to execute next step
                 // We do not need to do the same for allgather since they have already been computed here
                 if(step != this->num_steps - 1){
-                    compute_bitmaps(step + 1, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, remapping_per_port, bitmap_send_merged, bitmap_recv_merged);
+                    compute_bitmaps(step + 1, peers_per_port, bitmap_ready, bitmap_recv, next_step_per_dim, current_d, coord_mine, bitmap_send_merged, bitmap_recv_merged);
                 }
             }
         }
@@ -1578,9 +1584,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }
         free(bitmap_send_merged[p]);
         free(bitmap_recv_merged[p]);
-        if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU){
-            free(remapping_per_port[p]); 
-        }
     }
     for(size_t d = 0; d < dimensions_num; d++){
         free(bitmap_recv[d]);
