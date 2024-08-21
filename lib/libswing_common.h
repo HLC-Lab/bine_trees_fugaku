@@ -24,8 +24,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 
 
 typedef enum{
-    SWING_NULL = 0, // No collective, useful to force some bookeping data computation
-    SWING_REDUCE_SCATTER,
+    SWING_REDUCE_SCATTER = 0,
     SWING_ALLGATHER,
     SWING_ALLREDUCE
 }CollType;

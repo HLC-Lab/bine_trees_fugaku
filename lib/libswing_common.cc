@@ -634,6 +634,9 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
 
     int tag, res = MPI_SUCCESS;
     for(size_t port = 0; port < this->num_ports; port++){
+        if(step == 0){
+            sbc[port]->compute_bitmaps(0, coll_type);
+        }
         uint peer = sbc[port]->get_peer(step, coll_type);
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", this->rank, step, port, this->num_ports, peer);                
 
@@ -670,6 +673,12 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
         }
     }
     DPRINTF("[%d] Issued %d send requests and %d receive requests\n", rank, num_requests_s, num_requests_r);
+
+    if(step < this->num_steps - 1){
+        for(size_t port = 0; port < this->num_ports; port++){
+            sbc[port]->compute_bitmaps(step + 1, coll_type);
+        }
+    }
 
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
@@ -722,6 +731,9 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
     int tag, res = MPI_SUCCESS;
 
     for(size_t port = 0; port < this->num_ports; port++){
+        if(step == 0){
+            sbc[port]->compute_bitmaps(0, coll_type);
+        }
         uint peer = sbc[port]->get_peer(step, coll_type);
         DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", this->rank, step, port, this->num_ports, peer);                
 
@@ -785,8 +797,12 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
         }
     }
     DPRINTF("[%d] Issued %d send requests and %d receive requests\n", this->rank, num_requests_s, num_requests_r);
+    if(step < this->num_steps - 1){
+        for(size_t port = 0; port < this->num_ports; port++){
+            sbc[port]->compute_bitmaps(step + 1, coll_type);
+        }
+    }
 
-    if(coll_type == SWING_NULL){return MPI_SUCCESS;}
     // Wait for all the recvs to be over
     if(coll_type == SWING_REDUCE_SCATTER){
 //#define ALWAYS_WAITALL
@@ -825,8 +841,6 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
 int SwingCommon::swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
-    if(coll_type == SWING_NULL){return MPI_SUCCESS;}
-
     if(algo == ALGO_SWING_B){
         return swing_coll_step_b(buf, rbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
     }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
@@ -1487,9 +1501,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }
         for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
             for(size_t step = 0; step < this->num_steps; step++){                        
-                for(size_t i = 0; i < this->num_ports; i++){
-                    sbc[i]->compute_bitmaps(step, collectives_to_run[collective]);
-                }
                 DPRINTF("[%d] Bitmap computed for step %d\n", this->rank, step);
                 res = swing_coll_step(buf_s[collective], buf_r[collective], blocks_info, step,                                 
                                       op, comm, datatype, datatype,  
