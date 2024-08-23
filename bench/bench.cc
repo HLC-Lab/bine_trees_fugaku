@@ -214,10 +214,10 @@ int main(int argc, char** argv){
 
 
 #ifdef FUGAKU
-    uint64_t tnr_start[NUM_TNR][PA_LEN];
-    uint64_t tnr_stop[NUM_TNR][PA_LEN];
-    uint64_t tnr_diff[NUM_TNR][PA_LEN];
-    assert(read_tnr_stats(tnr_start)==0);
+    //uint64_t tnr_start[NUM_TNR][PA_LEN];
+    //uint64_t tnr_stop[NUM_TNR][PA_LEN];
+    //uint64_t tnr_diff[NUM_TNR][PA_LEN];
+    //assert(read_tnr_stats(tnr_start)==0);
 #endif
 
     
@@ -246,9 +246,9 @@ int main(int argc, char** argv){
     }
 
 #ifdef FUGAKU
-    assert(read_tnr_stats(tnr_stop)==0);
-    diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
-    print_tnr_stats(tnr_diff, rank);
+    //assert(read_tnr_stats(tnr_stop)==0);
+    //diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
+    //print_tnr_stats(tnr_diff, rank);
 #endif    
 
     MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);

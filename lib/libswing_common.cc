@@ -418,6 +418,8 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 //
 // Steps 1. and 3. are done once on the entire buffer.
 // Step 2. is done for each chunk and each port.
+
+// TODO: Utofu implementation of latency optimal?
 int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
@@ -1457,6 +1459,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 #ifdef FUGAKU   
         // Setup all the communications        
         timer.reset("Bitmaps computation");
+        // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, this->sbc[0]);
         timer.reset("uTofu setup");
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
