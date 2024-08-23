@@ -854,7 +854,7 @@ int SwingCommon::swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info,
 }
 
 #ifdef FUGAKU
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                        CollType coll_type){
     size_t offsets_s[LIBSWING_MAX_SUPPORTED_PORTS], counts_s[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -956,7 +956,11 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     // This is why we do in the following
     //      -  char* rbuf_block = ((char*) rbuf) + offsets_s[port]; 
     if(coll_type == SWING_REDUCE_SCATTER){
-        utofu_offset_r = req_idx_to_block_idx[port].offset;
+        //utofu_offset_r = req_idx_to_block_idx[port].offset;
+        utofu_offset_r = blocks_info[port][0].offset; // Start from the beginning of the buffer
+        for(size_t i = 0; i < step; i++){
+            utofu_offset_r += rbuf_size / pow(2, i); // TODO: Does not work if number of ranks is not a power of 2
+        }
     }
 
     double starttt = MPI_Wtime();
@@ -988,7 +992,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     offset = 0;
     if(counts_r[port]){ 
         char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
-        char* rbuf_block = ((char*) rbuf) + offsets_s[port]; 
+        char* rbuf_block = ((char*) rbuf) + utofu_offset_r; //offsets_s[port]; 
         size_t remaining = counts_r[port];
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
@@ -1016,8 +1020,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     return MPI_SUCCESS;
 }
 #else
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
-                                       MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
+                                       MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,
                                        CollType coll_type){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
     exit(-1);
@@ -1408,9 +1412,27 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     MPI_Type_size(datatype, &dtsize);  
 
     char* rbuf = NULL;
-    if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
-        size_t total_size_bytes = count*dtsize;
-        rbuf = (char*) malloc(total_size_bytes);
+    size_t rbuf_size = 0;
+    if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
+        if(algo == ALGO_SWING_B_UTOFU){
+            // We can't write in the actual blocks positions since writes
+            // might be executed in a different order than the one in which they were issued.
+            // Thus, we must enforce writes to do not overlap. However, this means a rank must 
+            // know how many blocks have been already written. Because blocks might have uneven size
+            // (e.g., if the buffer size is not divisible by the number of ranks), it is hard to know
+            // where exactly to write the data so that it does not overlap.
+            // For this reason, we allocate a buffer so that it is a multiple of num_ports*num_blocks,
+            // so that we can assume all the blocks have the same size.
+            size_t fixed_count = count;
+            if(count % (this->num_ports * this->size)){
+                // Set fixed_count to the next multiple of this->num_ports * this->size
+                fixed_count = count + (this->num_ports * this->size - count % (this->num_ports * this->size));
+            }
+            rbuf_size = fixed_count*dtsize;        
+        }else{
+            rbuf_size = count*dtsize;        
+        }
+        rbuf = (char*) malloc(rbuf_size);
     }   
 
     // Create bitmap calculators if not already created
@@ -1460,7 +1482,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // Setup all the communications        
         timer.reset("Bitmaps computation");
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
-        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], count*dtsize, this->num_ports, this->num_steps, this->sbc[0]);
+        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], rbuf_size, this->num_ports, this->num_steps, this->sbc[0]);
         timer.reset("uTofu setup");
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
         timer.reset("uTofu wait");
@@ -1482,7 +1504,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
                 for(size_t step = 0; step < this->num_steps; step++){       
-                    res = swing_coll_step_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], blocks_info, step, 
+                    res = swing_coll_step_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], rbuf_size, blocks_info, step, 
                                                 op, comm, datatype, datatype, 
                                                 collectives_to_run[collective]);                                                    
                     assert(res == MPI_SUCCESS);
