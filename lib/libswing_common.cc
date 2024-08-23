@@ -44,7 +44,7 @@ static void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datat
                 inout[i] += in[i];
             }
         }else{
-            fprintf(stderr, "Unknown reduction operation\n");
+            fprintf(stderr, "Unknown reduction op\n");
             exit(EXIT_FAILURE);
         }
     }else if(datatype == MPI_CHAR){
@@ -56,7 +56,7 @@ static void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datat
                 inout[i] += in[i];
             }
         }else{
-            fprintf(stderr, "Unknown reduction datatype\n");
+            fprintf(stderr, "Unknown reduction op\n");
             exit(EXIT_FAILURE);
         }
     }else if(datatype == MPI_FLOAT){
@@ -68,9 +68,12 @@ static void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datat
                 inout[i] += in[i];
             }
         }else{
-            fprintf(stderr, "Unknown reduction datatype\n");
+            fprintf(stderr, "Unknown reduction op\n");
             exit(EXIT_FAILURE);
         }
+    }else{
+        fprintf(stderr, "Unknown reduction datatype\n");
+        exit(EXIT_FAILURE);
     }
 }
 #endif
@@ -863,7 +866,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     memset(counts_s, 0, sizeof(counts_s));
     memset(offsets_r, 0, sizeof(offsets_r));
     memset(counts_r, 0, sizeof(counts_r));
-    BlockInfo* req_idx_to_block_idx = (BlockInfo*) malloc(sizeof(BlockInfo)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
 
     if(step == 0){
         sbc[port]->compute_bitmaps(step, coll_type);
@@ -917,8 +919,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }
             recvd_from_port = true;
             DPRINTF("[%d] Port %d Receiving offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_r, count_r, step, coll_type);
-            req_idx_to_block_idx[port].offset = offset_r;
-            req_idx_to_block_idx[port].count = count_r;
             offsets_r[port] = offset_r;
             counts_r[port] = count_r;
             // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
@@ -933,11 +933,10 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     MPI_Type_size(sendtype, &dtsize);  
     size_t max_count = floor(MAX_PUTGET_SIZE / dtsize);
     char issued_sends = 0, issued_recvs = 0;
-    size_t offset = offsets_s[port];        
     size_t count = 0;     
-    assert(counts_s[port] == counts_r[port]); // TODO: Not sure if everything works when this is not true (e.g., chunking, offset_rs_r, etc.)
-    size_t utofu_offset_r = offset;
-
+    size_t offset = offsets_s[port];
+    size_t utofu_offset_r = offsets_s[port];
+    size_t utofu_offset_r_start = offsets_s[port];
     
     // In reduce-scatter, if some rank are faster than others,
     // one executing a later step might write the data in the destination
@@ -946,21 +945,12 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     // instead of writing in the actual offset, we force the offsets
     // to be different, since anyway the data must be moved from the receive
     // buffer when aggregating it.
-    // 
-    // To do that, the intuition is the following:
-    // - During the allgather, the rank receives always in different parts of the array
-    // - Thus, I should do a put in the offset where he receives in the corresponding step of the allgather
-    // - So, I should do it at the offset from where he sends in the step of the reduce_scatter
-    // - i.e., he sends where I receive, so I must do the put at the same offset where I receive
-    //
-    // This is why we do in the following
-    //      -  char* rbuf_block = ((char*) rbuf) + offsets_s[port]; 
     if(coll_type == SWING_REDUCE_SCATTER){
-        //utofu_offset_r = req_idx_to_block_idx[port].offset;
-        utofu_offset_r = blocks_info[port][0].offset; // Start from the beginning of the buffer
+        utofu_offset_r = (rbuf_size / this->num_ports) * port; // Start from the beginning of the buffer
         for(size_t i = 0; i < step; i++){
-            utofu_offset_r += rbuf_size / pow(2, i); // TODO: Does not work if number of ranks is not a power of 2
+            utofu_offset_r += (rbuf_size / this->num_ports) / pow(2, (i + 1)); // TODO: Does not work if number of ranks is not a power of 2
         }
+        utofu_offset_r_start = utofu_offset_r;
     }
 
     double starttt = MPI_Wtime();
@@ -975,7 +965,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             assert(issued_sends <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
-            swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), issued_sends, offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
+            swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
             offset += bytes_to_send;
             utofu_offset_r += bytes_to_send;
             remaining -= count;
@@ -991,8 +981,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     // Receive and aggregate
     offset = 0;
     if(counts_r[port]){ 
-        char* buf_block = ((char*) buf) + req_idx_to_block_idx[port].offset;
-        char* rbuf_block = ((char*) rbuf) + utofu_offset_r; //offsets_s[port]; 
+        char* buf_block = ((char*) buf) + offsets_r[port];
+        char* rbuf_block = ((char*) rbuf) + utofu_offset_r_start; 
         size_t remaining = counts_r[port];
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
@@ -1016,7 +1006,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     if(counts_s[port]){
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
     }
-    free(req_idx_to_block_idx);
     return MPI_SUCCESS;
 }
 #else

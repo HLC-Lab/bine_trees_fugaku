@@ -35,7 +35,7 @@ do
     echo ${SYSTEM}${EXTRA},${p},${OUT_FOLDER} >> ../data/description.csv
     
     #for n in 1048576 8388608 67108864 #1 8 64 512 2048 16384 131072 1048576 8388608 67108864
-    for n in 60000 600000 6000000 #60000000
+    for n in 600 6000 60000 600000 6000000 #60000000
     do
         iterations=0
         if [ $n -le 512 ]

@@ -98,7 +98,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
 }
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, size_t chunk, size_t offset_s, size_t offset_r, size_t length, char is_allgather){    
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, size_t offset_s, size_t offset_r, size_t length, char is_allgather){    
     if(length > MAX_PUTGET_SIZE){
         fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
         exit(-1);

@@ -286,6 +286,7 @@ class SwingCommon {
         // @param utofu_descriptor (IN): the UTOFU descriptor
         // @param buf (IN): the buf
         // @param rbuf (OUT): the rbuf
+        // @param rbuf_size (IN): the size of the rbuf
         // @param blocks_info (IN): the blocks info
         // @param step (IN): the step
         // @param op (IN): the operation to perform
@@ -295,7 +296,7 @@ class SwingCommon {
         // @param coll_type (IN): the collective type
         // @param bitmap_send (IN): the bitmap of the send
         // @param bitmap_recv (IN): the bitmap of the recv
-        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, BlockInfo** blocks_info, size_t step, 
+        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                   CollType coll_type);
 
