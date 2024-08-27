@@ -229,7 +229,9 @@ class SwingCommon {
         size_t num_steps;
         SwingCoordConverter scc;
         SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
-        uint* virtual_peers_per_port[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal
+        uint* virtual_peers; // For latency optimal
+        size_t size_virtual;
+        size_t num_steps_virtual;
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
