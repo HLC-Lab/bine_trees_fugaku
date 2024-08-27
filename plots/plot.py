@@ -228,9 +228,10 @@ ps["daint_twocabs_ad3"] = [8]
 ps["leonardo_UCXIBSL1"] = [8]
 ps["lumi"] = [14, 16]
 ps["leonardo_ONENIC"] = [6, 8, 14]
+ps["fugaku"] = [64]
 
 #archs = ["daint_ad3", "deep-est", "alps", "daint", "daint_sameswitch", "daint_twocabs", "daint_twocabs_ad3", "leonardo"]
-archs = ["leonardo_ONENIC"]
+archs = ["fugaku"]
 def main():
     # Load paths
     with open("../data/description.csv", mode='r') as infile:
