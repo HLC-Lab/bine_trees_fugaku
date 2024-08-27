@@ -6,30 +6,53 @@
 #include "fugaku/swing_utofu.h"
 #endif
 
-Timer::Timer() {
+Timer::Timer(std::string fname, std::string name):_name(name), _timer_stopped(false){
 #ifdef PROFILE
-    start_time_point = std::chrono::high_resolution_clock::now();
+    _start_time_point = std::chrono::PROFILE_TIMER_TYPE::now();
+    _fname = fname;  
+#endif
+}
+
+Timer::Timer(std::string name):_name(name), _timer_stopped(false){
+#ifdef PROFILE
+    _start_time_point = std::chrono::PROFILE_TIMER_TYPE::now();
+    _fname = "";  
 #endif
 }
 
 Timer::~Timer() {
-    stop("destructor");
+#ifdef PROFILE    
+    if(!_timer_stopped){
+        stop();
+    }
+    if(_fname == ""){
+        std::cout << _ss.str();
+    }else{
+        std::ofstream out;
+        out.open(_fname);
+        out << _ss.str();
+        out.close();
+    }
+#endif
 }
 
-void Timer::stop(std::string name) {
+void Timer::stop() {
 #ifdef PROFILE
-    auto end_time_point = std::chrono::high_resolution_clock::now();
-    auto start = std::chrono::time_point_cast<std::chrono::microseconds>(start_time_point).time_since_epoch().count();
-    auto end = std::chrono::time_point_cast<std::chrono::microseconds>(end_time_point).time_since_epoch().count();
+    _end_time_point = std::chrono::PROFILE_TIMER_TYPE::now();
+    auto start = std::chrono::time_point_cast<std::chrono::microseconds>(_start_time_point).time_since_epoch().count();
+    auto end = std::chrono::time_point_cast<std::chrono::microseconds>(_end_time_point).time_since_epoch().count();
     auto duration = end - start;
-    std::cout << "Timer [" << name << "]: " << duration << " us" << std::endl;
+    _ss << "Timer [" << _name << "]: " << duration << " us | Start: " << start << " End: " << end << std::endl;
+    _timer_stopped = true;
 #endif
 }
 
 void Timer::reset(std::string name){
 #ifdef PROFILE
-    stop(name);
-    start_time_point = std::chrono::high_resolution_clock::now();
+    stop();
+    _timer_stopped = false;
+    _start_time_point = _end_time_point; //std::chrono::high_resolution_clock::now();
+    _name = name;
 #endif        
 }
 
@@ -165,12 +188,19 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     for(size_t i = 0; i < this->num_ports; i++){
         this->sbc[i] = NULL;
     }
+
+    for(size_t p = 0; p < this->num_ports; p++){
+        virtual_peers_per_port[p] = NULL;
+    }
 }
 
 SwingCommon::~SwingCommon(){
     for(size_t i = 0; i < this->num_ports; i++){
         if(this->sbc[i] != NULL){
             delete this->sbc[i];
+        }
+        if(virtual_peers_per_port[i] != NULL){
+            free(virtual_peers_per_port[i]);
         }
     }
 }
@@ -424,12 +454,12 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 
 // TODO: Utofu implementation of latency optimal?
 int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= MPI_Allreduce_lat_optimal (init)");
+    Timer timer("MPI_Allreduce_lat_optimal (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
     
     char* tmpbuf = (char*) malloc(count*dtsize); // Temporary buffer (to avoid overwriting sendbuf)
-    // To avoid memcpying, the first recv+aggregation and the subsequent ones use different buffers
-    // (see MPI_Allreduce_lat_optimal_swing_sendrecv). This variable keeps track of that.
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     this->scc.retrieve_coord_mapping(this->rank, false, coord);
 
@@ -446,11 +476,12 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
         buf_info[p].offset = offset_port;
     }
 
-    int idle = 0;
-    int rank_virtual = rank;
-    int res;
-    res = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
-    if(res != MPI_SUCCESS){return res;}
+    int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
+    if(!all_p2_dimensions){
+        timer.reset("= MPI_Allreduce_lat_optimal (shrink)");
+        res = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
+        if(res != MPI_SUCCESS){return res;}
+    }    
     int size_virtual = 1, num_steps_virtual = 0;
     for(size_t i = 0; i < this->dimensions_num; i++){
         size_virtual *= this->dimensions_virtual[i];
@@ -462,31 +493,35 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
         // If the topology has some dimension which was not a power of 2,
         // then we can receive in tmpbuf and aggregate into recvbuf.
         // Compute the number of steps on the shrunk topology
-
+        timer.reset("= MPI_Allreduce_lat_optimal (peers computation)");
         // Computes the peer sequence on each port.
         DPRINTF("[%d] Computing peers\n", rank);  
-        uint** peers_per_port = (uint**) malloc(sizeof(uint*)*this->num_ports);
+
         for(size_t p = 0; p < this->num_ports; p++){
-            peers_per_port[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-            compute_peers(p, rank_virtual, true, peers_per_port[p], this->dimensions_virtual, this->dimensions_num, this->scc);
+            if(virtual_peers_per_port[p] == NULL){
+                virtual_peers_per_port[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+                compute_peers(p, rank_virtual, true, virtual_peers_per_port[p], this->dimensions_virtual, this->dimensions_num, this->scc);
+            }
         }
         DPRINTF("[%d] Peers computed\n", rank);
-
+        
         // Do the step-by-step communication on the shrunk topology.
         MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
         MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
         const void *sendbuf_real, *aggbuff_a;
         void *aggbuff_b, *recvbuf_real;
          
+        timer.reset("= MPI_Allreduce_lat_optimal (actual sendrecvs)");
         for(size_t step = 0; step < (uint) num_steps_virtual; step++){     
             // Isend/Irecv requests
             memset(requests_s, 0, sizeof(requests_s));                
             memset(requests_r, 0, sizeof(requests_r));
             
             // Schedule all the send and recv
+            //timer.reset("= MPI_Allreduce_lat_optimal (sendrecv for step " + std::to_string(step) + ")");
             for(size_t p = 0; p < this->num_ports; p++){
                 // Get the peer
-                int virtual_peer = peers_per_port[p][step]; 
+                int virtual_peer = virtual_peers_per_port[p][step]; 
                 int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
                 this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer);
                 int peer = this->scc.getIdFromCoord(coord_peer, false);
@@ -495,7 +530,7 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
                 // If all dimensions are powers of two, the ranks
                 // did not send, recv, and aggregate anything and thus
                 // the trick with the buffers swap has not been done.
-                // We need to do it here (once per port and chunk -- i.e.,
+                // We need to do it here (once per port -- i.e.,
                 // always at the first step)
                 if(all_p2_dimensions && step == 0){
                     sendbuf_real = ((char*) sendbuf) + buf_info[p].offset;
@@ -513,6 +548,8 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
                 if(res != MPI_SUCCESS){DPRINTF("[%d] Error on irecv\n", rank); return res;}                       
             }  
             DPRINTF("[%d] Send/Recv issued, going to wait\n", rank);
+
+            //timer.reset("= MPI_Allreduce_lat_optimal (wait+aggregate for step " + std::to_string(step) + ")");
             // Wait and aggregate
             for(size_t p = 0; p < this->num_ports; p++){
                 int terminated_port;
@@ -545,11 +582,14 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
         }
     }
 
-    DPRINTF("[%d] Propagating data to extra nodes\n", rank);
-    res = enlarge_non_power_of_two(recvbuf, count, datatype, comm);
-    if(res != MPI_SUCCESS){return res;}
-    DPRINTF("[%d] Data propagated\n", rank);
-    
+    if(!all_p2_dimensions){
+        timer.reset("= MPI_Allreduce_lat_optimal (enlarge)");
+        DPRINTF("[%d] Propagating data to extra nodes\n", rank);
+        res = enlarge_non_power_of_two(recvbuf, count, datatype, comm);
+        if(res != MPI_SUCCESS){return res;}
+        DPRINTF("[%d] Data propagated\n", rank);
+    }    
+    timer.reset("= MPI_Allreduce_lat_optimal (writing profile data to file)");
     free(tmpbuf);
     return res;
 }
@@ -859,20 +899,17 @@ int SwingCommon::swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info,
 #ifdef FUGAKU
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                       CollType coll_type){
-    size_t offsets_s[LIBSWING_MAX_SUPPORTED_PORTS], counts_s[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t offsets_r[LIBSWING_MAX_SUPPORTED_PORTS], counts_r[LIBSWING_MAX_SUPPORTED_PORTS];
-    memset(offsets_s, 0, sizeof(offsets_s));
-    memset(counts_s, 0, sizeof(counts_s));
-    memset(offsets_r, 0, sizeof(offsets_r));
-    memset(counts_r, 0, sizeof(counts_r));
-
+                                       CollType coll_type, Timer& timer){
+    size_t offsets_s, counts_s;
+    size_t offsets_r, counts_r;
+    
+    timer.reset("== swing_coll_step_utofu (compute bitmaps 0)");
     if(step == 0){
         sbc[port]->compute_bitmaps(step, coll_type);
     }
 
-    // Sendrecv + aggregate
-    // Search for the blocks that must be sent.
+    timer.reset("== swing_coll_step_utofu (indexes calc)");
+    // Search for the blocks that must be sent.    
     bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
     size_t offset_s, offset_r, count_s = 0, count_r = 0;
     for(size_t i = 0; i < (uint) this->size; i++){
@@ -895,8 +932,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }
             sent_on_port = true;
             DPRINTF("[%d] Port %d Sending offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_s, count_s, step, coll_type);            
-            offsets_s[port] = offset_s;
-            counts_s[port] = count_s;
+            offsets_s = offset_s;
+            counts_s = count_s;
 
             // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
             // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
@@ -919,8 +956,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }
             recvd_from_port = true;
             DPRINTF("[%d] Port %d Receiving offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_r, count_r, step, coll_type);
-            offsets_r[port] = offset_r;
-            counts_r[port] = count_r;
+            offsets_r = offset_r;
+            counts_r = count_r;
             // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
             // Reset everything in case we need to send another train of blocks
             count_r = 0;
@@ -929,14 +966,15 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         }
     }
 
+    timer.reset("== swing_coll_step_utofu (misc)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);  
     size_t max_count = floor(MAX_PUTGET_SIZE / dtsize);
     char issued_sends = 0, issued_recvs = 0;
     size_t count = 0;     
-    size_t offset = offsets_s[port];
-    size_t utofu_offset_r = offsets_s[port];
-    size_t utofu_offset_r_start = offsets_s[port];
+    size_t offset = offsets_s;
+    size_t utofu_offset_r = offsets_s;
+    size_t utofu_offset_r_start = offsets_s;
     
     // In reduce-scatter, if some rank are faster than others,
     // one executing a later step might write the data in the destination
@@ -953,12 +991,13 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         utofu_offset_r_start = utofu_offset_r;
     }
 
-    double starttt = MPI_Wtime();
+
+    timer.reset("== swing_coll_step_utofu (sends)");
     // We first enqueue all the send. Then, we receive and aggregate
     // Aggregation and reception of next block should be overlapped
     // Issue isends for all the blocks
-    if(counts_s[port]){ 
-        size_t remaining = counts_s[port];
+    if(counts_s){ 
+        size_t remaining = counts_s;
         size_t bytes_to_send = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
         while(remaining){
@@ -973,17 +1012,19 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         }
     }
 
+    timer.reset("== swing_coll_step_utofu (compute bitmaps i)");
     // We issued the sends, while we wait for transmission we compute the bitmaps for the next step
     if(step < this->num_steps - 1){
         sbc[port]->compute_bitmaps(step + 1, coll_type);
     }
 
+    timer.reset("== swing_coll_step_utofu (recv + aggregate)");
     // Receive and aggregate
     offset = 0;
-    if(counts_r[port]){ 
-        char* buf_block = ((char*) buf) + offsets_r[port];
+    if(counts_r){ 
+        char* buf_block = ((char*) buf) + offsets_r;
         char* rbuf_block = ((char*) rbuf) + utofu_offset_r_start; 
-        size_t remaining = counts_r[port];
+        size_t remaining = counts_r;
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
         while(remaining){
@@ -994,6 +1035,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 
             if(coll_type == SWING_REDUCE_SCATTER){
                 reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
+                //MPI_Reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
             }
 
             offset += bytes_to_recv;
@@ -1001,9 +1043,10 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             ++issued_recvs;
         }            
     }
-    //printf("[%d] Issued %d sends and %d recvs (%d and %d elems) in %lf us\n", omp_get_thread_num(), issued_sends, issued_recvs, counts_s[port], counts_r[port], (MPI_Wtime() - starttt)*1000000.0);
+
+    timer.reset("== swing_coll_step_utofu (wait isends)");
     // Wait for send completion
-    if(counts_s[port]){
+    if(counts_s){
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
     }
     return MPI_SUCCESS;
@@ -1011,7 +1054,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 #else
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,
-                                       CollType coll_type){
+                                       CollType coll_type, Timer& timer){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
     exit(-1);
 }
@@ -1395,7 +1438,8 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
  * @param blocks_info: For each chunk, port, and block, the count and offset of the block
 */
 int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type){    
-    Timer timer;
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_coll_b (init)");
+    Timer timer("= swing_coll_b (init)");
     int res = MPI_SUCCESS;
     int dtsize;
     MPI_Type_size(datatype, &dtsize);  
@@ -1465,22 +1509,27 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             return MPI_ERR_OTHER;
         }
     }
-
+    Timer* timer_ports[LIBSWING_MAX_SUPPORTED_PORTS];
     if(algo == ALGO_SWING_B_UTOFU){     
 #ifdef FUGAKU   
         // Setup all the communications        
-        timer.reset("Bitmaps computation");
+        timer.reset("= swing_coll_b (utofu setup)");
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], rbuf_size, this->num_ports, this->num_steps, this->sbc[0]);
-        timer.reset("uTofu setup");
+        timer.reset("= swing_coll_b (utofu wait)");
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
-        timer.reset("uTofu wait");
+        timer.reset("= swing_coll_b (utofu barrier)");
         // Needed to be sure everyone registered the buffers
         MPI_Barrier(MPI_COMM_WORLD);
-        timer.reset("uTofu barrier");
+        
+        timer.reset("= swing_coll_b (utofu main loop)");
 
 #pragma omp parallel for num_threads(this->num_ports) private(res)
         for(size_t port = 0; port < this->num_ports; port++){
+#ifdef PROFILE            
+            //timer_ports[port] = new Timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/" + std::to_string(port) + ".profile", "== swing_coll_b (init port)");
+            timer_ports[port] = new Timer("== swing_coll_b (memcpy)");
+#endif
             // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
             if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
                 size_t offset = blocks_info[port][0].offset;
@@ -1495,15 +1544,15 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 for(size_t step = 0; step < this->num_steps; step++){       
                     res = swing_coll_step_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], rbuf_size, blocks_info, step, 
                                                 op, comm, datatype, datatype, 
-                                                collectives_to_run[collective]);                                                    
+                                                collectives_to_run[collective], *timer_ports[port]);                                                    
                     assert(res == MPI_SUCCESS);
                 }
             }
+            timer_ports[port]->reset("== swing_coll_b (cleanup)");
         }
-        timer.reset("main loop");
+        timer.reset("= swing_coll_b (utofu teardown)");
         // Cleanup utofu resources
         swing_utofu_teardown(utofu_descriptor);
-        timer.reset("uTofu teardown");
 #else
         fprintf(stderr, "uTofu can only be used on Fugaku.\n");
         exit(-1);
@@ -1530,6 +1579,13 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     if(rbuf){
         free(rbuf);
     }
+
+    timer.reset("= swing_coll_b (profile writing)");
+#ifdef PROFILE
+    for(size_t port = 0; port < this->num_ports; port++){
+        delete timer_ports[port];
+    }
+#endif    
     return res;
 }
 

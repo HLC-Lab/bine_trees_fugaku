@@ -6,6 +6,9 @@
 #include <math.h>
 #include <vector>
 #include <mpi.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
 
 typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
 
@@ -58,14 +61,23 @@ typedef struct{
 #define DPRINTF(...) 
 #endif
 
+
+#define PROFILE_TIMER_TYPE system_clock
+
 class Timer {
 public:
-    Timer();
+    Timer(std::string fname, std::string name);
+    Timer(std::string name);
     ~Timer();
-    void stop(std::string name);
+    void stop();
     void reset(std::string name);
 private:
-    std::chrono::time_point<std::chrono::high_resolution_clock> start_time_point;
+    std::chrono::time_point<std::chrono::PROFILE_TIMER_TYPE> _start_time_point;
+    std::chrono::time_point<std::chrono::PROFILE_TIMER_TYPE> _end_time_point;
+    std::string _name;
+    bool _timer_stopped;
+    std::stringstream _ss;
+    std::string _fname;
 };
 
 int is_odd(int x);
@@ -217,6 +229,7 @@ class SwingCommon {
         size_t num_steps;
         SwingCoordConverter scc;
         SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
+        uint* virtual_peers_per_port[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
@@ -298,7 +311,7 @@ class SwingCommon {
         // @param bitmap_recv (IN): the bitmap of the recv
         int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                  CollType coll_type);
+                                  CollType coll_type, Timer& timer);
 
     public:
         // Constructor
