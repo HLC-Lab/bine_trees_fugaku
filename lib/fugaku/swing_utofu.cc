@@ -1,5 +1,6 @@
 #include "swing_utofu.h"
 
+
 // TODO: Add cache injection?
 #define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
 #define SWING_UTOFU_VCQ_FLAGS 0 // (UTOFU_VCQ_FLAG_EXCLUSIVE) // Allows different threads to work on different VCQs simultaneously
@@ -40,15 +41,11 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
     
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
     desc->num_ports = num_ports;
-    desc->sbc = sbc;
-    memset(desc->completed_send, 0, sizeof(desc->completed_send));
-    memset(desc->completed_recv, 0, sizeof(desc->completed_recv));
+    desc->sbc = sbc;    
 
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
-        desc->next_edata[p] = 0;
-        desc->expected_edata_s[p] = 0;
-        desc->expected_edata_r[p] = 0;
+        desc->acked_send[p] = 0;
         utofu_tni_id_t tni_id = p;
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
@@ -59,6 +56,8 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
         assert(utofu_reg_mem(desc->vcq_hdl[p], send_buffer, length_s, 0, &(desc->lcl_send_stadd[p])) == UTOFU_SUCCESS);
         assert(utofu_reg_mem(desc->vcq_hdl[p], recv_buffer, length_r, 0, &(desc->lcl_recv_stadd[p])) == UTOFU_SUCCESS);
         desc->rmt_info[p] = new std::unordered_map<uint, swing_utofu_remote_info>();
+
+        desc->completed_recv[p] = new std::unordered_set<utofu_stadd_t>();
     }
 
     
@@ -85,7 +84,6 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){
 
     free(desc->sbuffer);
     free(rbuffer);
-
 }
 
 // teardown communication
@@ -95,6 +93,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
         utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_recv_stadd[p], 0);
         utofu_free_vcq(desc->vcq_hdl[p]);
         delete desc->rmt_info[p];
+        delete desc->completed_recv[p];
     }    
     free(desc);
 }
@@ -106,8 +105,7 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, 
         exit(-1);
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
-    uint64_t edata = desc->next_edata[port];
-    desc->next_edata[port] = (desc->next_edata[port] + 1) % MAX_EDATA;
+    uint64_t edata = 0; // not used
     swing_utofu_remote_info rmt = (*(desc->rmt_info[port]))[peer];
     utofu_stadd_t rmt_stadd = is_allgather ? rmt.send_stadd : rmt.recv_stadd;
 
@@ -139,9 +137,9 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
     } while (rc == UTOFU_ERR_NOT_FOUND);
     assert(rc == UTOFU_SUCCESS);
     if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed
-        desc->completed_recv[port][notice.edata] = 1;
+        desc->completed_recv[port]->insert(notice.rmt_stadd);
     }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-        desc->completed_send[port][notice.edata] = 1;
+        ++desc->acked_send[port]; // We do not need to store the address
     }else{
         fprintf(stderr, "Unknown notice type.\n");
         exit(-1);
@@ -150,30 +148,33 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count){    
-    // TODO: For the sends it should be enough to wait for the completion of N sends, since we never issue
+    // For the sends it is enough to wait for the completion of expected_count sends, since we never issue
     // the sends to the next peer if the sends to the previous peer are not completed.
-    // i.e., we probably do not need to match the exact send addresses but just count how many of those completed
+    // i.e., we do not need to match the exact send addresses but just count how many of those completed
     for(size_t i = 0; i < expected_count; i++){
-        uint64_t expected_edata = desc->expected_edata_s[port];
-        swing_utofu_wait_tcq(desc, port);
-        while(!desc->completed_send[port][expected_edata]){
-            swing_utofu_wait_rmq(desc, port);
-        }
-        desc->completed_send[port][expected_edata] = 0;
-        desc->expected_edata_s[port] = (desc->expected_edata_s[port] + 1) % MAX_EDATA;
+        swing_utofu_wait_tcq(desc, port);        
     }    
-}
-
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port){
-    // TODO: From notice data we know the end address (i.e., the last byte written of the data)
-    // We can thus just have a set of completed puts (one address per write), and avoid using edata at all (mostly because of its limitation of 256 value and the risk of considering completed a put which is not completed yet)
-    // I.e. the set will contain the addresses of the puts that completed but which the called did not already checked for completion
-    // When we wait the recv we also pass the address we are waiting for (end address, or start+length)
-    // see pag.84 in the manual
-    uint64_t expected_edata = desc->expected_edata_r[port];
-    while(!desc->completed_recv[port][expected_edata]){
+    while(desc->acked_send[port] < expected_count){
         swing_utofu_wait_rmq(desc, port);
     }
-    desc->completed_recv[port][expected_edata] = 0;
-    desc->expected_edata_r[port] = (desc->expected_edata_r[port] + 1) % MAX_EDATA;
+    desc->acked_send[port] = 0;
+}
+
+/*
+std::ostream& operator<<(std::ostream& os, std::unordered_set<utofu_stadd_t> const& s)
+{
+    os << "{";
+    for (auto i : s)
+        os << i << ' ';
+    return os << "}\n";
+}
+*/
+
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port,  size_t offset, size_t length, char is_allgather){
+    utofu_stadd_t stadd = is_allgather ? desc->lcl_send_stadd[port] : desc->lcl_recv_stadd[port];
+    utofu_stadd_t stadd_end = stadd + offset + length;
+    while(!desc->completed_recv[port]->count(stadd_end)){
+        swing_utofu_wait_rmq(desc, port);
+    }
+    desc->completed_recv[port]->erase(stadd_end);
 }

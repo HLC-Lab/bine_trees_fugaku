@@ -908,7 +908,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         size_t bytes_to_send = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
         while(remaining){
-            assert(issued_sends <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
             swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
@@ -935,14 +934,14 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         size_t bytes_to_recv = 0;
         // Split the transmission into chunks < MAX_PUTGET_SIZE
         while(remaining){
-            assert(issued_recvs <= MAX_NUM_CHUNKS);
             count = remaining < max_count ? remaining : max_count;
-            bytes_to_recv = count*dtsize;
-            swing_utofu_wait_recv(utofu_descriptor, port);
-
+            bytes_to_recv = count*dtsize;            
             if(coll_type == SWING_REDUCE_SCATTER){
+                swing_utofu_wait_recv(utofu_descriptor, port, utofu_offset_r_start + offset, bytes_to_recv, 0);
                 reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
                 //MPI_Reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
+            }else{
+                swing_utofu_wait_recv(utofu_descriptor, port, offsets_r + offset, bytes_to_recv, 1);
             }
 
             offset += bytes_to_recv;
@@ -950,7 +949,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             ++issued_recvs;
         }            
     }
-
     timer.reset("== swing_coll_step_utofu (wait isends)");
     // Wait for send completion
     if(counts_s){
@@ -1425,6 +1423,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], rbuf_size, this->num_ports, this->num_steps, this->sbc[0]);
         timer.reset("= swing_coll_b (utofu wait)");
+            
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
         timer.reset("= swing_coll_b (utofu barrier)");
         // Needed to be sure everyone registered the buffers
