@@ -357,7 +357,7 @@ static void compute_peers(int port, uint rank, bool virt, uint* peers, uint* dim
 // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
 // This is done one dimension at a time.
 // Returns the new rank.
-int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void *recvbuf, int count, 
+int SwingCommon::shrink_non_power_of_two(void *recvbuf, int count, 
                                          MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
                                          char* tmpbuf, int* idle, int* rank_virtual){    
     int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -437,9 +437,9 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 // 2. Run allreduce on a configuration where each dimension has a power of two size
 // 3. Enlarge the topology by sending data to ranks outside the boundary.
 //
-// All steps are done once on the entire buffer
 // TODO: Implement a multiport version? There was a partial one (pre August 2024). In principle it does not have much sense to
-// have it since we are in the latency-optimal case. Might help a bit for medium-sized messages, but probably needs to be implemented using uTofu rather than MPI.
+// have it since we are in the latency-optimal case. Might help a bit for medium-sized messages, but probably needs 
+// to be implemented using uTofu rather than MPI so that transmissions actually happen in parallel.
 
 // TODO: Utofu implementation of latency optimal?
 int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
@@ -456,21 +456,10 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
     int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
     if(!all_p2_dimensions){
         timer.reset("= MPI_Allreduce_lat_optimal (shrink)");
-        res = shrink_non_power_of_two(sendbuf, recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
+        res = shrink_non_power_of_two(recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
         if(res != MPI_SUCCESS){return res;}
     }    
 
-    // Compute the number of steps on the shrunk topology
-    int size_virtual = 1, num_steps_virtual = 0;
-    if(all_p2_dimensions){
-        num_steps_virtual = this->num_steps;
-        size_virtual = this->size;
-    }else{
-        for(size_t i = 0; i < this->dimensions_num; i++){
-            size_virtual *= this->dimensions_virtual[i];
-            num_steps_virtual += ceil(log2(this->dimensions_virtual[i]));
-        }
-    }
     DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
 
     if(!idle){                
@@ -1362,6 +1351,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     int dtsize;
     MPI_Type_size(datatype, &dtsize);  
 
+    // Receive into rbuf and aggregate into recvbuf
     char* rbuf = NULL;
     size_t rbuf_size = 0;
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
@@ -1379,10 +1369,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 // Set fixed_count to the next multiple of this->num_ports * this->size
                 fixed_count = count + (this->num_ports * this->size - count % (this->num_ports * this->size));
             }
-            rbuf_size = fixed_count*dtsize;        
+            rbuf_size = fixed_count*dtsize;  
         }else{
             rbuf_size = count*dtsize;        
-        }
+        }        
         rbuf = (char*) malloc(rbuf_size);
     }   
 

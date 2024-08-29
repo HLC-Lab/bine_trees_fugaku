@@ -54,6 +54,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
         // create a VCQ and get its VCQ ID
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->vcq_hdl[p])) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->vcq_hdl[p], &(desc->lcl_vcq_id[p])) == UTOFU_SUCCESS);
+        
         // register memory regions and get their STADDs
         assert(utofu_reg_mem(desc->vcq_hdl[p], send_buffer, length_s, 0, &(desc->lcl_send_stadd[p])) == UTOFU_SUCCESS);
         assert(utofu_reg_mem(desc->vcq_hdl[p], recv_buffer, length_r, 0, &(desc->lcl_recv_stadd[p])) == UTOFU_SUCCESS);
@@ -64,8 +65,9 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
     desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     pack_local_info(desc);
     // Send the local info for my the ports, to all the peers
+    // TODO: Replace the individual sends with a collective so that this is done with HW tofu barrier which would be faster?
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);
+        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);	
         MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
     return desc;
@@ -148,6 +150,9 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count){    
+    // TODO: For the sends it should be enough to wait for the completion of N sends, since we never issue
+    // the sends to the next peer if the sends to the previous peer are not completed.
+    // i.e., we probably do not need to match the exact send addresses but just count how many of those completed
     for(size_t i = 0; i < expected_count; i++){
         uint64_t expected_edata = desc->expected_edata_s[port];
         swing_utofu_wait_tcq(desc, port);
@@ -160,6 +165,11 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
 }
 
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port){
+    // TODO: From notice data we know the end address (i.e., the last byte written of the data)
+    // We can thus just have a set of completed puts (one address per write), and avoid using edata at all (mostly because of its limitation of 256 value and the risk of considering completed a put which is not completed yet)
+    // I.e. the set will contain the addresses of the puts that completed but which the called did not already checked for completion
+    // When we wait the recv we also pass the address we are waiting for (end address, or start+length)
+    // see pag.84 in the manual
     uint64_t expected_edata = desc->expected_edata_r[port];
     while(!desc->completed_recv[port][expected_edata]){
         swing_utofu_wait_rmq(desc, port);

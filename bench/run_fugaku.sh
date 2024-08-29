@@ -10,13 +10,12 @@ NC=$(tput sgr0)
 NODES=""
 EXTRA=""
 DIMENSIONS=""
-while getopts n:e:d:p: flag
+while getopts n:e:d: flag
 do
     case "${flag}" in
         n) NODES=($(echo "${OPTARG}" | tr ',' '\n'));;
         e) EXTRA="_"${OPTARG};;
         d) DIMENSIONS=${OPTARG};;
-        p) PORTS=${OPTARG};;
     esac
 done
 
@@ -56,48 +55,55 @@ do
         echo -n "Running on "${p}" nodes with count="${n}"..."
         
         coll_tuned_prealloc_size=1024
-        if [ ${PORTS} -le 1 ]
-        then
-            DEFAULT_ALGO="default"
-            LIBSWING_ALGO="DEFAULT" ${MPIRUN} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-            #mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-            #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-            
-            for DEFAULT_ALGO in "rdbc" "trix6" "trix3" #"segmented_ring" "ring" "recursive_doubling" "nonoverlapping" "basic_linear"
-            do
-                LIBSWING_ALGO="DEFAULT" ${MPIRUN} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-	            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-                #mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-                #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-            done
+
+        DEFAULT_ALGO="default"
+	    EXTRA_MCAS="-mca mpi_print_stats 1 -mca coll_select_show_decision_process 2" #"-mca coll_base_reduce_commute_safe 1"
+        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+        mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+        mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+        mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+        
+        '''
+        for DEFAULT_ALGO in "rdbc" "trix6" "trix3" "segmented_ring" "ring" "recursive_doubling" "nonoverlapping" "basic_linear"
+        do
+            LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+            mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+            mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+        done
+        '''
+
+        # Run bandwidth lat optimal swing
+        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+        mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+        mkdir ${OUT_FOLDER}/${p}_${n}_lat_stats/
+        mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_lat_stats/
 	
-            # Run bandwidth optimal and lat optimal swing
-            LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-	        mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-	        #mkdir ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
-	        #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_ports_stats/
+        for PORTS in 1 3 6
+        do
+	    MIN_ELEMS=$((PORTS * p))
+	    if [ "$n" -ge "$MIN_ELEMS" ]; then
+		#LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+		#mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+		#mkdir ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/
+		#mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/	
+        
+		#LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+		#mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+		#mkdir ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
+		#mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
+        
+		#LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
+		#mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+		#mkdir ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/
+		#mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/	
+        
+		LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_UTOFU" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
+		mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+		mkdir ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/
+		mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/
 	    fi
-	
-        #LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-	    #mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        ##mkdir ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/
-        ##mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_${PORTS}_ports_stats/	
-	
-        #LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_COALESCE" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-	    #mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-	    #mkdir ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
-        #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_coalesce_${PORTS}_ports_stats/
-	
-        #LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_CONT" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
-	    #mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        ##mkdir ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/
-        ##mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_cont_${PORTS}_ports_stats/	
-	
-        LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_NUM_PORTS=${PORTS} LIBSWING_ALGO="SWING_B_UTOFU" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations} 
-	    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports.csv; rm -f ${OUT_PREFIX}* ${ERR_PREFIX}*
-        #mkdir ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/
-        #mv ./tnr_stats_*.csv ${OUT_FOLDER}/${p}_${n}_bw_utofu_${PORTS}_ports_stats/	
+        done
 		
         echo " ${GREEN}[Done]${NC}"
     done

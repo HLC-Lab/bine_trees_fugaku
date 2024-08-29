@@ -576,7 +576,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
-        if(algo == ALGO_SWING_L){ // Swing_l
+      if(algo == ALGO_SWING_L || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
             return swing_common->MPI_Allreduce_lat_optimal(sendbuf, recvbuf, count, datatype, op, comm);
         }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU){ // Swing_b
             int dtsize;

@@ -131,6 +131,18 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
             r = MPI_Allgather(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
         }
     }
+
+    /*
+    char val[MPI_MAX_INFO_VAL];
+    int flag = 0;
+    MPI_Info info;
+    MPI_Comm_get_info(MPI_COMM_WORLD, &info);
+    MPI_Info_get(info, "last_allreduce_algorithm", MPI_MAX_INFO_VAL, val, &flag);
+    if(flag){//flag is 1, Info is obtained
+      fprintf(stderr, "val is %s\n",val);//(2)
+    }
+    MPI_Info_free(&info);
+    */
     return r;
 }
 

@@ -6,8 +6,11 @@
 #include <unordered_map>
 #include "../libswing_common.h"
 
-// TODO: Grab from libswing.h
+// TODO: Grab with utofu_caps
 #define MAX_PUTGET_SIZE 16777215
+#define UTOFU_NUM_RESERVED_STAGS 256
+#define UTOFU_STAG_ADDR_ALIGNMENT 256
+
 #define MAX_NUM_CHUNKS 16
 #define MAX_EDATA 255 // 8 bits
 
