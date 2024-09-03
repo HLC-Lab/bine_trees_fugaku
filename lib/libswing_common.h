@@ -52,7 +52,7 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
+#define DEBUG
 #define PROFILE
 
 #ifdef DEBUG
@@ -298,6 +298,7 @@ class SwingCommon {
         // Bandwidth-optimal Swing collective with UTOFU
         // @param port (IN): the port
         // @param utofu_descriptor (IN): the UTOFU descriptor
+        // @param sbuf (IN): the user_sbuf
         // @param buf (IN): the buf
         // @param rbuf (OUT): the rbuf
         // @param rbuf_size (IN): the size of the rbuf
@@ -310,9 +311,9 @@ class SwingCommon {
         // @param coll_type (IN): the collective type
         // @param bitmap_send (IN): the bitmap of the send
         // @param bitmap_recv (IN): the bitmap of the recv
-        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
+        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                  CollType coll_type, Timer& timer);
+                                  CollType coll_type, Timer& timer, bool is_first_coll);
 
     public:
         // Constructor

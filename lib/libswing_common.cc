@@ -571,7 +571,7 @@ static inline int get_last_step(uint32_t block_distance){
 }
 */
 
-int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                             
+int SwingCommon::swing_coll_step_b(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                             
                                    MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                    CollType coll_type){    
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
@@ -616,7 +616,7 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
             }
             if(recv_block){
                 DPRINTF("[%d] Receiving block %d from %d at step %d (coll %d)\n", rank, i, peer, step, coll_type);
-                res = MPI_Irecv(((char*) rbuf) + block_offset, block_count, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
+                res = MPI_Irecv(((char*) tmpbuf) + block_offset, block_count, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
                 if(res != MPI_SUCCESS){return res;}
                 req_idx_to_block_idx[(num_requests_r)].offset = block_offset;
                 req_idx_to_block_idx[(num_requests_r)].count = block_count;
@@ -647,10 +647,10 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
 #else
 	        index = i;
 #endif	    
-            void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
+            void* tmpbuf_block = (void*) (((char*) tmpbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
-            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
-            MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
+            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, tmpbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
+            MPI_Reduce_local(tmpbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
         }
     }else{
         res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
@@ -667,7 +667,7 @@ int SwingCommon::swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_inf
     return res;
 }
 
-int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
@@ -737,7 +737,7 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
                 DPRINTF("[%d] Receiving offset %d count %d at step %d (coll %d)\n", this->rank, offset_r, count_r, step, coll_type);
                 req_idx_to_block_idx[num_requests_r].offset = offset_r;
                 req_idx_to_block_idx[num_requests_r].count = count_r;
-                res = MPI_Irecv(((char*) rbuf) + offset_r, count_r, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
+                res = MPI_Irecv(((char*) tmpbuf) + offset_r, count_r, recvtype, peer, tag, comm, &(requests_r[num_requests_r]));
                 if(res != MPI_SUCCESS){return res;}
                 (num_requests_r)++;
                 // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
@@ -770,10 +770,10 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
 #else
 	        index = i;
 #endif	    
-            void* rbuf_block = (void*) (((char*) rbuf) + req_idx_to_block_idx[index].offset);
+            void* tmpbuf_block = (void*) (((char*) tmpbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
-            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, rbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
-            MPI_Reduce_local(rbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
+            DPRINTF("[%d] Aggregating from %p to %p (i %d index %d offset %d count %d)\n", this->rank, tmpbuf_block, buf_block, i, index, req_idx_to_block_idx[index].offset, req_idx_to_block_idx[index].count);
+            MPI_Reduce_local(tmpbuf_block, buf_block, req_idx_to_block_idx[index].count, sendtype, op); 
         }
     }else{
         res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
@@ -790,13 +790,13 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_
     return res;
 }
 
-int SwingCommon::swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
     if(algo == ALGO_SWING_B){
-        return swing_coll_step_b(buf, rbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+        return swing_coll_step_b(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
     }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
-        return swing_coll_step_cont(buf, rbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+        return swing_coll_step_cont(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
     }else{
         assert("Unknown algo" == 0);
         return MPI_ERR_OTHER;
@@ -804,9 +804,9 @@ int SwingCommon::swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info,
 }
 
 #ifdef FUGAKU
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                       CollType coll_type, Timer& timer){
+                                       CollType coll_type, Timer& timer, bool is_first_coll){
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
@@ -895,14 +895,13 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     // instead of writing in the actual offset, we force the offsets
     // to be different, since anyway the data must be moved from the receive
     // buffer when aggregating it.
-    if(coll_type == SWING_REDUCE_SCATTER){
-        utofu_offset_r = (rbuf_size / this->num_ports) * port; // Start from the beginning of the buffer
+    if(coll_type == SWING_REDUCE_SCATTER && step != 0){ // For first step we do not need to do it (we write directly in user_recvbuf rather than tmpbuf)
+        utofu_offset_r = (tmpbuf_size / this->num_ports) * port; // Start from the beginning of the buffer
         for(size_t i = 0; i < step; i++){
-            utofu_offset_r += (rbuf_size / this->num_ports) / pow(2, (i + 1)); // TODO: Does not work if number of ranks is not a power of 2
+            utofu_offset_r += (tmpbuf_size / this->num_ports) / pow(2, (i + 1)); // TODO: Does not work if number of ranks is not a power of 2
         }
         utofu_offset_r_start = utofu_offset_r;
     }
-
 
     timer.reset("== swing_coll_step_utofu (sends)");
     // We first enqueue all the send. Then, we receive and aggregate
@@ -911,6 +910,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     if(counts_s){ 
         size_t remaining = counts_s;
         size_t bytes_to_send = 0;
+        int peer = sbc[port]->get_peer(step, coll_type);
+
         // Segment the transmission
 #if !(UTOFU_THREAD_SAFE)
     #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
@@ -919,7 +920,33 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
             DPRINTF("[%d] Sending %d bytes to %d at step %d (coll %d)\n", this->rank, bytes_to_send, sbc[port]->get_peer(step, coll_type), step, coll_type);
-            swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), offset, utofu_offset_r, bytes_to_send, coll_type == SWING_ALLGATHER); 
+            
+            //swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), offset, utofu_offset_r, bytes_to_send, to_send_stadd); 
+
+            utofu_stadd_t lcl_addr, rmt_addr;
+
+            if(coll_type == SWING_REDUCE_SCATTER){
+                if(step == 0){
+                    // To avoid memcpy from sendbuf to recvbuf in the first step I need to (in the first step):
+                    // - Send from local sendbuf to remote recvbuf, then aggregate from remote sendbuf to remote recvbuf
+                    lcl_addr = utofu_descriptor->lcl_send_stadd[port] + offset;
+                    rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].recv_stadd + utofu_offset_r;
+                }else{
+                    lcl_addr = utofu_descriptor->lcl_recv_stadd[port] + offset;
+                    rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].temp_stadd + utofu_offset_r;
+                }
+            }else if(coll_type == SWING_ALLGATHER){
+                if(is_first_coll && step == 0){
+                    lcl_addr = utofu_descriptor->lcl_send_stadd[port] + offset;
+                }else{ // If I executed a collective before (i.e., allgather), the data to send is already in recvbuf
+                    lcl_addr = utofu_descriptor->lcl_recv_stadd[port] + offset;                    
+                }
+                rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].recv_stadd + utofu_offset_r;
+            }else{
+                assert("Unknown collective type" == 0);
+            }        
+            swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr); 
+            
             offset += bytes_to_send;
             utofu_offset_r += bytes_to_send;
             remaining -= count;
@@ -938,9 +965,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 
     // Receive and aggregate
     offset = 0;
-    if(counts_r){ 
-        char* buf_block = ((char*) buf) + offsets_r;
-        char* rbuf_block = ((char*) rbuf) + utofu_offset_r_start; 
+    if(counts_r){
         size_t remaining = counts_r;
         size_t bytes_to_recv = 0;
         // Segment the transmission
@@ -948,13 +973,31 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             count = remaining < max_count ? remaining : max_count;
             bytes_to_recv = count*dtsize;
             DPRINTF("[%d] Receiving %d bytes at step %d (coll %d)\n", this->rank, bytes_to_recv, step, coll_type);
+
+            utofu_stadd_t end_addr; // = stadd + offset + length;
+            size_t recvbuf_offset = offsets_r + offset;
+            char* recvbuf_block = (char*) recvbuf + recvbuf_offset;
+
             if(coll_type == SWING_REDUCE_SCATTER){
-                swing_utofu_wait_recv(utofu_descriptor, port, utofu_offset_r_start + offset, bytes_to_recv, 0);
-                reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op);
-                //MPI_Reduce_local(rbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
+                if(step == 0){
+                    // In the first step I receive in recvbuf and I aggregate from sendbuf and recvbuf in recvbuf (at same offsets)
+                    size_t sendbuf_offset = recvbuf_offset;
+                    end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                    swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
+                    reduce_local((char*) sendbuf + sendbuf_offset, recvbuf_block, count, sendtype, op);
+                }else{
+                    // In the other steps I receive in tmpbuf and I aggregate from tmpbuf and recvbuf in recvbuf (for tmbuf we use adjusted offset)
+                    size_t tempbuf_offset = utofu_offset_r_start + offset;
+                    end_addr = utofu_descriptor->lcl_temp_stadd[port] + tempbuf_offset + bytes_to_recv;
+                    swing_utofu_wait_recv(utofu_descriptor, port, end_addr);                    
+                    reduce_local((char*) tempbuf + tempbuf_offset, recvbuf_block, count, sendtype, op);
+                    //MPI_Reduce_local(tmpbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
+                }
             }else{
-                swing_utofu_wait_recv(utofu_descriptor, port, offsets_r + offset, bytes_to_recv, 1);
+                end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
             }
+            
 
             offset += bytes_to_recv;
             remaining -= count;
@@ -971,9 +1014,9 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     return MPI_SUCCESS;
 }
 #else
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,
-                                       CollType coll_type, Timer& timer){
+                                       CollType coll_type, Timer& timer, bool is_first_coll){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
     exit(-1);
 }
@@ -1363,10 +1406,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     int dtsize;
     MPI_Type_size(datatype, &dtsize);  
 
-    timer.reset("= swing_coll_b (rbuf alloc)");
-    // Receive into rbuf and aggregate into recvbuf
-    char* rbuf = NULL;
-    size_t rbuf_size = 0;
+    timer.reset("= swing_coll_b (tmpbuf alloc)");
+    // Receive into tmpbuf and aggregate into recvbuf
+    char* tmpbuf = NULL;
+    size_t tmpbuf_size = 0;
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
         if(algo == ALGO_SWING_B_UTOFU){
             // We can't write in the actual blocks positions since writes
@@ -1382,11 +1425,11 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 // Set fixed_count to the next multiple of this->num_ports * this->size
                 fixed_count = count + (this->num_ports * this->size - count % (this->num_ports * this->size));
             }
-            rbuf_size = fixed_count*dtsize;  
+            tmpbuf_size = fixed_count*dtsize;  
         }else{
-            rbuf_size = count*dtsize;        
+            tmpbuf_size = count*dtsize;        
         }        
-        rbuf = (char*) malloc(rbuf_size);
+        tmpbuf = (char*) malloc(tmpbuf_size);
     }   
 
     timer.reset("= swing_coll_b (sbc alloc)");
@@ -1406,7 +1449,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         case SWING_ALLREDUCE:{
             collectives_to_run[0] = SWING_REDUCE_SCATTER;            
             buf_s[0] = recvbuf;
-            buf_r[0] = rbuf;
+            buf_r[0] = tmpbuf;
             collectives_to_run[1] = SWING_ALLGATHER;
             buf_s[1] = recvbuf;
             buf_r[1] = recvbuf;
@@ -1417,7 +1460,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             collectives_to_run[0] = SWING_REDUCE_SCATTER;
             collectives_to_run_num = 1;
             buf_s[0] = recvbuf;
-            buf_r[0] = rbuf;
+            buf_r[0] = tmpbuf;
             break;
         }
         case SWING_ALLGATHER:{
@@ -1438,7 +1481,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // Setup all the communications        
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
         timer.reset("= swing_coll_b (utofu setup)");        
-        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup(buf_s[0], count*dtsize, buf_r[0], rbuf_size, this->num_ports, this->num_steps, this->sbc[0]);
+        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
+                                                                          this->num_ports, this->num_steps, this->sbc[0]);
         
         timer.reset("= swing_coll_b (utofu wait)");            
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
@@ -1456,6 +1500,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             timer_ports[port] = new Timer("== swing_coll_b (memcpy)");
 #endif
             // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
+            /*
             if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
                 size_t offset = blocks_info[port][0].offset;
                 size_t bytes_on_port = 0;
@@ -1466,12 +1511,13 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 }
                 memcpy(((char*) recvbuf) + offset, ((char*) sendbuf) + offset, bytes_on_port);    
             }
+            */
 
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
                 for(size_t step = 0; step < this->num_steps; step++){       
-                    res = swing_coll_step_utofu(port, utofu_descriptor, buf_s[collective], buf_r[collective], rbuf_size, blocks_info, step, 
+                    res = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
                                                 op, comm, datatype, datatype, 
-                                                collectives_to_run[collective], *timer_ports[port]);                                                    
+                                                collectives_to_run[collective], *timer_ports[port], collective == 0);                                                    
                     assert(res == MPI_SUCCESS);
                 }
             }
@@ -1503,8 +1549,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     /********/
     /* Free */
     /********/
-    if(rbuf){
-        free(rbuf);
+    if(tmpbuf){
+        free(tmpbuf);
     }
 
     timer.reset("= swing_coll_b (profile writing)");

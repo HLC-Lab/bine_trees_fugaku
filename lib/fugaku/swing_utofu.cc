@@ -3,8 +3,8 @@
 static void pack_local_info(swing_utofu_comm_descriptor* desc){
     for(size_t i = 0; i < desc->num_ports; i++){
         desc->sbuffer[3*i] = desc->lcl_vcq_id[i];
-        desc->sbuffer[3*i+1] = desc->lcl_send_stadd[i];
-        desc->sbuffer[3*i+2] = desc->lcl_recv_stadd[i];
+        desc->sbuffer[3*i+1] = desc->lcl_recv_stadd[i];
+        desc->sbuffer[3*i+2] = desc->lcl_temp_stadd[i];
     }
 }
 
@@ -14,8 +14,8 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
         // Add an empty entry for the peer
         swing_utofu_remote_info rmt;
         rmt.vcq_id     = buffer[3*i];
-        rmt.send_stadd = buffer[3*i+1];
-        rmt.recv_stadd = buffer[3*i+2];
+        rmt.recv_stadd = buffer[3*i+1];
+        rmt.temp_stadd = buffer[3*i+2];
         desc->rmt_info[i]->insert({peer, rmt});
         //std::unordered_map<uint, swing_utofu_remote_info>& m = (desc->rmt_info[i]);
         ////m[peer] = rmt;
@@ -28,7 +28,9 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
 
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_s, void* recv_buffer, size_t length_r, 
+swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t length_s, 
+                                               void* recv_buffer, size_t length_r, 
+                                               void* temp_buffer, size_t length_t,
                                                uint num_ports, uint num_steps, SwingBitmapCalculator* sbc){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
@@ -48,8 +50,9 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
         assert(utofu_query_vcq_id(desc->vcq_hdl[p], &(desc->lcl_vcq_id[p])) == UTOFU_SUCCESS);
         
         // register memory regions and get their STADDs
-        assert(utofu_reg_mem(desc->vcq_hdl[p], send_buffer, length_s, 0, &(desc->lcl_send_stadd[p])) == UTOFU_SUCCESS);
+        assert(utofu_reg_mem(desc->vcq_hdl[p], (void*) send_buffer, length_s, 0, &(desc->lcl_send_stadd[p])) == UTOFU_SUCCESS);
         assert(utofu_reg_mem(desc->vcq_hdl[p], recv_buffer, length_r, 0, &(desc->lcl_recv_stadd[p])) == UTOFU_SUCCESS);
+        assert(utofu_reg_mem(desc->vcq_hdl[p], temp_buffer, length_t, 0, &(desc->lcl_temp_stadd[p])) == UTOFU_SUCCESS);
         desc->rmt_info[p] = new std::unordered_map<uint, swing_utofu_remote_info>();
 
         desc->completed_recv[p] = new std::unordered_set<utofu_stadd_t>();
@@ -86,6 +89,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
     for(size_t p = 0; p < desc->num_ports; p++){        
         utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_send_stadd[p], 0);
         utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_recv_stadd[p], 0);
+        utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_temp_stadd[p], 0);
         utofu_free_vcq(desc->vcq_hdl[p]);
         delete desc->rmt_info[p];
         delete desc->completed_recv[p];
@@ -94,20 +98,20 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
 }
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, size_t offset_s, size_t offset_r, size_t length, char is_allgather){    
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
+                       utofu_stadd_t lcl_addr, size_t length, 
+                       utofu_stadd_t rmt_addr){    
     if(length > MAX_PUTGET_SIZE){
         fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
         exit(-1);
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
     uint64_t edata = 0; // not used
-    swing_utofu_remote_info rmt = (*(desc->rmt_info[port]))[peer];
-    utofu_stadd_t rmt_stadd = is_allgather ? rmt.send_stadd : rmt.recv_stadd;
-
+    utofu_vcq_id_t vcq_id = (*(desc->rmt_info[port]))[peer].vcq_id;
     // instruct the TNI to perform a Put communication
     {
-    utofu_put(desc->vcq_hdl[port], rmt.vcq_id, 
-              desc->lcl_send_stadd[port] + offset_s, rmt_stadd + offset_r, length,
+    utofu_put(desc->vcq_hdl[port], vcq_id, 
+              lcl_addr, rmt_addr, length,
               edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
     }
 }
@@ -131,6 +135,7 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
     } while (rc == UTOFU_ERR_NOT_FOUND);
     assert(rc == UTOFU_SUCCESS);
     if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed      
+        DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
         desc->completed_recv[port]->insert(notice.rmt_stadd);
     }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
         ++desc->acked_send[port]; // We do not need to store the address
@@ -164,11 +169,10 @@ std::ostream& operator<<(std::ostream& os, std::unordered_set<utofu_stadd_t> con
 }
 */
 
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port,  size_t offset, size_t length, char is_allgather){
-    utofu_stadd_t stadd = is_allgather ? desc->lcl_send_stadd[port] : desc->lcl_recv_stadd[port];
-    utofu_stadd_t stadd_end = stadd + offset + length;
-    while(!desc->completed_recv[port]->count(stadd_end)){
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, utofu_stadd_t end_addr){
+    DPRINTF("Wait for %ld\n", end_addr);
+    while(!desc->completed_recv[port]->count(end_addr)){
         swing_utofu_wait_rmq(desc, port);
     }
-    desc->completed_recv[port]->erase(stadd_end);
+    desc->completed_recv[port]->erase(end_addr);
 }
