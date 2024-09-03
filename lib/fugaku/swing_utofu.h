@@ -13,6 +13,17 @@
 #define UTOFU_STAG_ADDR_ALIGNMENT 256
 #define MAX_EDATA 255 // 8 bits
 
+// TODO: Add cache injection?
+#define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
+
+#define UTOFU_THREAD_SAFE 0
+
+#if UTOFU_THREAD_SAFE
+#define SWING_UTOFU_VCQ_FLAGS (UTOFU_VCQ_FLAG_THREAD_SAFE) // (UTOFU_VCQ_FLAG_EXCLUSIVE) // Allows different threads to work on different VCQs simultaneously
+#else
+#define SWING_UTOFU_VCQ_FLAGS 0
+#endif
+
 typedef struct{
     utofu_vcq_id_t vcq_id;
     utofu_stadd_t send_stadd;

@@ -1,10 +1,5 @@
 #include "swing_utofu.h"
 
-
-// TODO: Add cache injection?
-#define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
-#define SWING_UTOFU_VCQ_FLAGS 0 // (UTOFU_VCQ_FLAG_EXCLUSIVE) // Allows different threads to work on different VCQs simultaneously
-
 static void pack_local_info(swing_utofu_comm_descriptor* desc){
     for(size_t i = 0; i < desc->num_ports; i++){
         desc->sbuffer[3*i] = desc->lcl_vcq_id[i];
@@ -72,7 +67,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(void* send_buffer, size_t length_
     return desc;
 }
 
-void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){
+void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ // TODO: Do it synchronously with sendrecv ?
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
@@ -110,7 +105,6 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, uint peer, 
     utofu_stadd_t rmt_stadd = is_allgather ? rmt.send_stadd : rmt.recv_stadd;
 
     // instruct the TNI to perform a Put communication
-#pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
     {
     utofu_put(desc->vcq_hdl[port], rmt.vcq_id, 
               desc->lcl_send_stadd[port] + offset_s, rmt_stadd + offset_r, length,
@@ -136,7 +130,7 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
         rc = utofu_poll_mrq(desc->vcq_hdl[port], 0, &notice);
     } while (rc == UTOFU_ERR_NOT_FOUND);
     assert(rc == UTOFU_SUCCESS);
-    if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed
+    if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed      
         desc->completed_recv[port]->insert(notice.rmt_stadd);
     }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
         ++desc->acked_send[port]; // We do not need to store the address

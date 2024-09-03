@@ -53,7 +53,7 @@ typedef struct{
 //#define ACTIVE_WAIT
 
 //#define DEBUG
-//#define PROFILE
+#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
@@ -223,7 +223,7 @@ class SwingCommon {
         uint dimensions_num;
         Algo algo; 
         uint num_ports; 
-        uint max_size;
+        uint segment_size;
         bool all_p2_dimensions; // True if all the dimensions are power of 2
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
@@ -321,8 +321,8 @@ class SwingCommon {
         // @param dimensions_num (IN): the number of dimensions
         // @param algo (IN): the algorithm to use
         // @param num_ports (IN): the number of ports
-        // @param max_size (IN): the maximum transfer size
-        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint max_size);
+        // @param segment_size (IN): in allreduce and reducescatter, each send is segmented in blocks of at most this size 
+        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size);
 
         // Destructor
         ~SwingCommon();

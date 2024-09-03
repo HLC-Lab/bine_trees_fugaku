@@ -45,13 +45,13 @@ static inline void read_env(MPI_Comm comm){
     if(!env_read || force_env_reload){
         env_read = 1;
 
-        unsigned int dimensions_num = 1, max_size = 0; //2097152;
+        unsigned int dimensions_num = 1, segment_size = 0; 
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int num_ports = 1;
         
-        env_str = getenv("LIBSWING_MAX_SIZE");
+        env_str = getenv("LIBSWING_SEGMENT_SIZE");
         if(env_str){
-            max_size = atoi(env_str);
+            segment_size = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_NUM_PORTS");
@@ -109,7 +109,7 @@ static inline void read_env(MPI_Comm comm){
             }
         }
 
-        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, max_size);
+        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size);
 
 #ifdef DEBUG
         int rank;
@@ -123,7 +123,7 @@ static inline void read_env(MPI_Comm comm){
             //printf("LIBSWING_DISABLE_ALLREDUCE: %d\n", disable_allreduce);
             //printf("LIBSWING_RDMA: %d\n", rdma);
             printf("LIBSWING_ALGO: %d\n", algo);
-            printf("LIBSWING_MAX_SIZE: %d\n", max_size);
+            printf("LIBSWING_SEGMENT_SIZE: %d\n", segment_size);
             printf("LIBSWING_DIMENSIONS: ");
             for(size_t i = 0; i < dimensions_num; i++){
                 printf("%d", dimensions[i]);
