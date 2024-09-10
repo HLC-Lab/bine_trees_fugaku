@@ -1499,28 +1499,15 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         
         timer.reset("= swing_coll_b (utofu main loop)");
 
-#pragma omp parallel for num_threads(this->num_ports) private(res)
+#pragma omp parallel for num_threads(this->num_ports) schedule(static)
         for(size_t port = 0; port < this->num_ports; port++){
             // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
-            /*
-            if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
-                size_t offset = blocks_info[port][0].offset;
-                size_t bytes_on_port = 0;
-                if(port != this->num_ports - 1){
-                    bytes_on_port = blocks_info[port + 1][0].offset - offset;
-                }else{
-                    bytes_on_port = count*dtsize - offset;
-                }
-                memcpy(((char*) recvbuf) + offset, ((char*) sendbuf) + offset, bytes_on_port);    
-            }
-            */
-
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
                 for(size_t step = 0; step < this->num_steps; step++){       
-                    res = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
+                    int r = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
                                                 op, comm, datatype, datatype, 
                                                 collectives_to_run[collective], collective == 0);                                                    
-                    assert(res == MPI_SUCCESS);
+                    assert(r == MPI_SUCCESS);
                 }
             }
         }
