@@ -52,8 +52,8 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-#define DEBUG
-#define PROFILE
+//#define DEBUG
+//#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
@@ -232,6 +232,8 @@ class SwingCommon {
         uint* virtual_peers; // For latency optimal
         size_t size_virtual;
         size_t num_steps_virtual;
+        size_t prealloc_size;
+        char* prealloc_buf;
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
@@ -309,11 +311,9 @@ class SwingCommon {
         // @param sendtype (IN): the send datatype
         // @param recvtype (IN): the recv datatype
         // @param coll_type (IN): the collective type
-        // @param bitmap_send (IN): the bitmap of the send
-        // @param bitmap_recv (IN): the bitmap of the recv
         int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                  CollType coll_type, Timer& timer, bool is_first_coll);
+                                  CollType coll_type, bool is_first_coll);
 
     public:
         // Constructor
@@ -323,7 +323,9 @@ class SwingCommon {
         // @param algo (IN): the algorithm to use
         // @param num_ports (IN): the number of ports
         // @param segment_size (IN): in allreduce and reducescatter, each send is segmented in blocks of at most this size 
-        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size);
+        // @param prealloc_size (IN): the size of the preallocated buffer
+        // @param prealloc_buf (IN): the preallocated buffer
+        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf);
 
         // Destructor
         ~SwingCommon();

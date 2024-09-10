@@ -163,8 +163,8 @@ static inline int is_power_of_two(int x){
 }
 
 
-SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size): 
-            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num){
+SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf): 
+            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf){
     this->size = 1;
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
@@ -806,11 +806,11 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
 #ifdef FUGAKU
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                       CollType coll_type, Timer& timer, bool is_first_coll){
+                                       CollType coll_type, bool is_first_coll){
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
-    timer.reset("== swing_coll_step_utofu (compute bitmaps 0)");
+    Timer timer("== swing_coll_step_utofu (compute bitmaps 0)");
     if(step == 0){
         sbc[port]->compute_bitmaps(step, coll_type);
     }
@@ -1010,13 +1010,14 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     if(counts_s){
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
     }
+    timer.reset("== swing_coll_step_utofu (profile writing)");
     DPRINTF("[%d] Sends completed\n", rank);
     return MPI_SUCCESS;
 }
 #else
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,
-                                       CollType coll_type, Timer& timer, bool is_first_coll){
+                                       CollType coll_type, bool is_first_coll){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
     exit(-1);
 }
@@ -1410,6 +1411,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     // Receive into tmpbuf and aggregate into recvbuf
     char* tmpbuf = NULL;
     size_t tmpbuf_size = 0;
+    bool free_tmpbuf = false;
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
         if(algo == ALGO_SWING_B_UTOFU){
             // We can't write in the actual blocks positions since writes
@@ -1429,7 +1431,12 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         }else{
             tmpbuf_size = count*dtsize;        
         }        
-        tmpbuf = (char*) malloc(tmpbuf_size);
+        if(tmpbuf_size > prealloc_size){
+            tmpbuf = (char*) malloc(tmpbuf_size);
+            free_tmpbuf = true;
+        }else{
+            tmpbuf = prealloc_buf;
+        }
     }   
 
     timer.reset("= swing_coll_b (sbc alloc)");
@@ -1475,7 +1482,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             return MPI_ERR_OTHER;
         }
     }
-    Timer* timer_ports[LIBSWING_MAX_SUPPORTED_PORTS];
     if(algo == ALGO_SWING_B_UTOFU){     
 #ifdef FUGAKU   
         // Setup all the communications        
@@ -1495,10 +1501,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 
 #pragma omp parallel for num_threads(this->num_ports) private(res)
         for(size_t port = 0; port < this->num_ports; port++){
-#ifdef PROFILE       
-            //timer_ports[port] = new Timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/" + std::to_string(port) + ".profile", "== swing_coll_b (init port)");
-            timer_ports[port] = new Timer("== swing_coll_b (memcpy)");
-#endif
             // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
             /*
             if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
@@ -1517,11 +1519,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 for(size_t step = 0; step < this->num_steps; step++){       
                     res = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
                                                 op, comm, datatype, datatype, 
-                                                collectives_to_run[collective], *timer_ports[port], collective == 0);                                                    
+                                                collectives_to_run[collective], collective == 0);                                                    
                     assert(res == MPI_SUCCESS);
                 }
             }
-            timer_ports[port]->reset("== swing_coll_b (cleanup)"); // TODO: If profile is not defined, this object has never been initialized
         }
         timer.reset("= swing_coll_b (utofu teardown)");
         // Cleanup utofu resources
@@ -1549,16 +1550,11 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     /********/
     /* Free */
     /********/
-    if(tmpbuf){
+    if(free_tmpbuf){
         free(tmpbuf);
     }
 
     timer.reset("= swing_coll_b (profile writing)");
-#ifdef PROFILE
-    for(size_t port = 0; port < this->num_ports; port++){
-        delete timer_ports[port];
-    }
-#endif    
     return res;
 }
 
