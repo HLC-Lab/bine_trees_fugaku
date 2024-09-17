@@ -604,8 +604,8 @@ int SwingCommon::swing_coll_step_b(void *buf, void* tmpbuf, BlockInfo** blocks_i
         // Sendrecv + aggregate
         // Search for the blocks that must be sent.
         for(size_t i = 0; i < (uint) size; i++){
-            int send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
-            int recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);
+            bool send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
+            bool recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);
             
             size_t block_count = blocks_info[port][i].count;
             size_t block_offset = blocks_info[port][i].offset;
@@ -703,8 +703,8 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
         bool start_found_s = false, start_found_r = false;
         size_t offset_s, offset_r, count_s = 0, count_r = 0;
         for(size_t i = 0; i < (uint) this->size; i++){
-            int send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
-            int recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);
+            bool send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
+            bool recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);
             
             size_t block_count = blocks_info[port][i].count;
             size_t block_offset = blocks_info[port][i].offset;
@@ -807,7 +807,7 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
 }
 
 #ifdef FUGAKU
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, const BlockInfo *const *const blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                        CollType coll_type, bool is_first_coll){                                        
     size_t offsets_s, counts_s;
@@ -820,11 +820,11 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 
     timer.reset("== swing_coll_step_utofu (indexes calc)");
     // Search for the blocks that must be sent.    
-    bool start_found_s = false, start_found_r = false, sent_on_port = false, recvd_from_port = false;
+    bool start_found_s = false, start_found_r = false, chunk_sent = false, chunk_recvd = false;
     size_t offset_s, offset_r, count_s = 0, count_r = 0;
     for(size_t i = 0; i < (uint) this->size; i++){
-        int send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
-        int recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);      
+        bool send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
+        bool recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);      
         size_t block_count = blocks_info[port][i].count;
         size_t block_offset = blocks_info[port][i].offset;
 
@@ -836,11 +836,11 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             count_s += block_count;
         }
         if(start_found_s && (!send_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-            if(sent_on_port){
+            if(chunk_sent){
                 fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
                 exit(-1);
             }
-            sent_on_port = true;
+            chunk_sent = true;
             DPRINTF("[%d] Port %d Sending offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_s, count_s, step, coll_type);            
             offsets_s = offset_s;
             counts_s = count_s;
@@ -860,14 +860,15 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             count_r += block_count;
         }            
         if(start_found_r && (!recv_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-            if(recvd_from_port){
+            if(chunk_recvd){
                 fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
                 exit(-1);
             }
-            recvd_from_port = true;
+            chunk_recvd = true;
             DPRINTF("[%d] Port %d Receiving offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_r, count_r, step, coll_type);
             offsets_r = offset_r;
             counts_r = count_r;
+            
             // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
             // Reset everything in case we need to send another train of blocks
             count_r = 0;
@@ -916,9 +917,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         int peer = sbc[port]->get_peer(step, coll_type);
 
         // Segment the transmission
-#if !(UTOFU_THREAD_SAFE)
-    #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
-#endif
         while(remaining){
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
@@ -945,6 +943,9 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }else{
                 assert("Unknown collective type" == 0);
             }        
+#if !(UTOFU_THREAD_SAFE)
+            #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
+#endif
             swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr); 
             
             offset += bytes_to_send;
@@ -1020,7 +1021,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     return MPI_SUCCESS;
 }
 #else
-int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
+int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, const BlockInfo *const *const blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,
                                        CollType coll_type, bool is_first_coll){
     fprintf(stderr, "uTofu can only be used on Fugaku.\n");
@@ -1504,7 +1505,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         
         timer.reset("= swing_coll_b (utofu main loop)");
 
-#pragma omp parallel for num_threads(this->num_ports) schedule(static)
+#pragma omp parallel for num_threads(this->num_ports) schedule(static) collapse(1)
         for(size_t port = 0; port < this->num_ports; port++){
             /*
             int thread_num = omp_get_thread_num();
@@ -1561,21 +1562,19 @@ uint SwingBitmapCalculator::get_peer(uint step, CollType coll_type){
 
 bool SwingBitmapCalculator::block_must_be_sent(uint step, CollType coll_type, uint block_id){
     compute_bitmaps(step, coll_type); // This is going to be a nop if compute_bitmaps was already called before
-    size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
     if(coll_type == SWING_REDUCE_SCATTER){
-        return bitmap_send_merged[block_step][block_id];
+        return bitmap_send_merged[step][block_id];
     }else{                
-        return bitmap_recv_merged[block_step][block_id];
+        return bitmap_recv_merged[(this->num_steps - step - 1)][block_id];
     }
 }
 
 bool SwingBitmapCalculator::block_must_be_recvd(uint step, CollType coll_type, uint block_id){
     compute_bitmaps(step, coll_type); // This is going to be a nop if compute_bitmaps was already called before
-    size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
     if(coll_type == SWING_REDUCE_SCATTER){
-        return bitmap_recv_merged[block_step][block_id];
+        return bitmap_recv_merged[step][block_id];
     }else{                
-        return bitmap_send_merged[block_step][block_id];
+        return bitmap_send_merged[(this->num_steps - step - 1)][block_id];
     }
 }
 

@@ -17,6 +17,8 @@ typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
 #define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
 #define LIBSWING_MAX_COLLECTIVE_SEQUENCE 2
 
+#define CACHE_LINE_SIZE 256
+
 static int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
 static int smallest_negabinary[LIBSWING_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
 static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
@@ -53,7 +55,7 @@ typedef struct{
 //#define ACTIVE_WAIT
 
 //#define DEBUG
-#define PROFILE
+//#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
@@ -62,7 +64,7 @@ typedef struct{
 #endif
 
 
-#define PROFILE_TIMER_TYPE system_clock
+#define PROFILE_TIMER_TYPE steady_clock
 
 class Timer {
 public:
@@ -119,6 +121,7 @@ class SwingCoordConverter {
 
 class SwingBitmapCalculator {
     private:
+        volatile char padding1[CACHE_LINE_SIZE];
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint dimensions_num; 
         uint port;
@@ -139,6 +142,7 @@ class SwingBitmapCalculator {
         size_t next_step; 
         size_t current_d; // What's the current dimension we are sending in.
         size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
+        volatile char padding2[CACHE_LINE_SIZE];
 
         // Computes an array of valid distances (considering a plain collective on an even node),
         // for a collective working on a given dimension and executing a given step.
@@ -311,7 +315,7 @@ class SwingCommon {
         // @param sendtype (IN): the send datatype
         // @param recvtype (IN): the recv datatype
         // @param coll_type (IN): the collective type
-        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, BlockInfo** blocks_info, size_t step, 
+        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, const BlockInfo *const *const, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                   CollType coll_type, bool is_first_coll);
 
