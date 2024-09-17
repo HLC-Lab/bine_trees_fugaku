@@ -42,7 +42,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
 
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
-        desc->acked_send[p] = 0;
+        desc->acked_send[p].acked = 0;
         utofu_tni_id_t tni_id = p;
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
@@ -138,7 +138,7 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
         DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
         desc->completed_recv[port]->insert(notice.rmt_stadd);
     }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-        ++desc->acked_send[port]; // We do not need to store the address
+        ++desc->acked_send[port].acked; // We do not need to store the address
     }else{
         fprintf(stderr, "Unknown notice type.\n");
         exit(-1);
@@ -153,10 +153,10 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
     for(size_t i = 0; i < expected_count; i++){
         swing_utofu_wait_tcq(desc, port);        
     }    
-    while(desc->acked_send[port] < expected_count){
+    while(desc->acked_send[port].acked < expected_count){
         swing_utofu_wait_rmq(desc, port);
     }
-    desc->acked_send[port] = 0;
+    desc->acked_send[port].acked = 0;
 }
 
 /*

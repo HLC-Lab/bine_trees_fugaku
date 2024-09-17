@@ -1,5 +1,8 @@
 #include <assert.h>
 #include <inttypes.h>
+#include <stdio.h>
+#include <sched.h>
+#include <omp.h>
 
 #include "libswing_common.h"
 #ifdef FUGAKU
@@ -57,7 +60,7 @@ void Timer::reset(std::string name){
 }
 
 #ifdef FUGAKU
-static void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
+static inline void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
     if(datatype == MPI_INT){
         const int *in = (const int *)inbuf;
         int *inout = (int *)inoutbuf;
@@ -806,7 +809,7 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
 #ifdef FUGAKU
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, BlockInfo** blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                       CollType coll_type, bool is_first_coll){
+                                       CollType coll_type, bool is_first_coll){                                        
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
@@ -921,10 +924,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             bytes_to_send = count*dtsize;
             DPRINTF("[%d] Sending %d bytes to %d at step %d (coll %d)\n", this->rank, bytes_to_send, sbc[port]->get_peer(step, coll_type), step, coll_type);
             
-            //swing_utofu_isend(utofu_descriptor, port, sbc[port]->get_peer(step, coll_type), offset, utofu_offset_r, bytes_to_send, to_send_stadd); 
-
             utofu_stadd_t lcl_addr, rmt_addr;
-
             if(coll_type == SWING_REDUCE_SCATTER){
                 if(step == 0){
                     // To avoid memcpy from sendbuf to recvbuf in the first step I need to (in the first step):
@@ -961,7 +961,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     if(step < this->num_steps - 1){
         sbc[port]->compute_bitmaps(step + 1, coll_type);
     }
-    timer.reset("== swing_coll_step_utofu (recv + aggregate)");
+    timer.reset("== swing_coll_step_utofu (recv + aggregate (init))");
 
     // Receive and aggregate
     offset = 0;
@@ -983,18 +983,23 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                     // In the first step I receive in recvbuf and I aggregate from sendbuf and recvbuf in recvbuf (at same offsets)
                     size_t sendbuf_offset = recvbuf_offset;
                     end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                    timer.reset("== swing_coll_step_utofu (recv)");
                     swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
+                    timer.reset("== swing_coll_step_utofu (aggr)");
                     reduce_local((char*) sendbuf + sendbuf_offset, recvbuf_block, count, sendtype, op);
                 }else{
                     // In the other steps I receive in tmpbuf and I aggregate from tmpbuf and recvbuf in recvbuf (for tmbuf we use adjusted offset)
                     size_t tempbuf_offset = utofu_offset_r_start + offset;
                     end_addr = utofu_descriptor->lcl_temp_stadd[port] + tempbuf_offset + bytes_to_recv;
+                    timer.reset("== swing_coll_step_utofu (recv)");
                     swing_utofu_wait_recv(utofu_descriptor, port, end_addr);                    
+                    timer.reset("== swing_coll_step_utofu (aggr)");
                     reduce_local((char*) tempbuf + tempbuf_offset, recvbuf_block, count, sendtype, op);
                     //MPI_Reduce_local(tmpbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
                 }
             }else{
                 end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                timer.reset("== swing_coll_step_utofu (recv)");
                 swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
             }
             
@@ -1501,7 +1506,11 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 
 #pragma omp parallel for num_threads(this->num_ports) schedule(static)
         for(size_t port = 0; port < this->num_ports; port++){
-            // For reduce-scatter and allreduce we need to copy the data from sendbuf to recvbuf.
+            /*
+            int thread_num = omp_get_thread_num();
+            int cpu_num = sched_getcpu();
+            printf("Thread %3d is running on CPU %3d\n", thread_num, cpu_num);
+            */
             for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
                 for(size_t step = 0; step < this->num_steps; step++){       
                     int r = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 

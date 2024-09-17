@@ -13,6 +13,8 @@
 #define UTOFU_STAG_ADDR_ALIGNMENT 256
 #define MAX_EDATA 255 // 8 bits
 
+#define CACHE_LINE_SIZE 256
+
 // TODO: Add cache injection?
 #define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
 
@@ -30,6 +32,11 @@ typedef struct{
     utofu_stadd_t temp_stadd;
 }swing_utofu_remote_info;
 
+typedef struct{
+    size_t acked;
+    char padding[CACHE_LINE_SIZE - sizeof(size_t)];
+}swing_utofu_acked_send;
+
 struct swing_utofu_comm_d{
     uint num_ports;
     SwingBitmapCalculator* sbc;
@@ -38,7 +45,7 @@ struct swing_utofu_comm_d{
     utofu_stadd_t lcl_send_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_recv_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_temp_stadd[LIBSWING_MAX_SUPPORTED_PORTS];
     std::unordered_map<uint, swing_utofu_remote_info>* rmt_info[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a map mapping the peer to the addresses
     std::unordered_set<utofu_stadd_t>* completed_recv[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a set of completed but unacknowledged recvs
-    size_t acked_send[LIBSWING_MAX_SUPPORTED_PORTS];
+    swing_utofu_acked_send acked_send[LIBSWING_MAX_SUPPORTED_PORTS];
     uint64_t* sbuffer;
     MPI_Request reqs[LIBSWING_MAX_STEPS];
 };

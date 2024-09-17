@@ -59,6 +59,7 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             num_ports = atoi(env_str);
         }
+        assert(num_ports <= LIBSWING_MAX_SUPPORTED_PORTS);
 
         env_str = getenv("LIBSWING_PREALLOC_SIZE");
         if(env_str){
@@ -85,6 +86,7 @@ static inline void read_env(MPI_Comm comm){
             MPI_Comm_size(comm, &size);
             dimensions[0] = size;
         }
+        assert(dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
 
         env_str = getenv("LIBSWING_ALGO");
         if(env_str){
