@@ -119,6 +119,14 @@ class SwingCoordConverter {
         void retrieve_coord_mapping(uint rank, bool virt, int* coord);
 };
 
+
+typedef struct{
+    size_t send_offset;
+    size_t send_count;
+    size_t recv_offset;
+    size_t recv_count;
+}ChunkParams;
+
 class SwingBitmapCalculator {
     private:
         volatile char padding1[CACHE_LINE_SIZE];
@@ -138,6 +146,9 @@ class SwingBitmapCalculator {
         SwingCoordConverter scc;
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
+
+        ChunkParams chunk_params[LIBSWING_MAX_STEPS];
+        bool valid_chunk_params[LIBSWING_MAX_STEPS];
         
         size_t next_step; 
         size_t current_d; // What's the current dimension we are sending in.
@@ -216,6 +227,8 @@ class SwingBitmapCalculator {
         // @param block_id (IN): the block id
         // @return true if the block must be received, false otherwise  
         bool block_must_be_recvd(uint step, CollType coll_type, uint block_id);
+
+        ChunkParams get_chunk_params(uint step, CollType coll_type, const BlockInfo *const *const blocks_info);
 };
 
 class SwingCommon {

@@ -819,63 +819,11 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     }
 
     timer.reset("== swing_coll_step_utofu (indexes calc)");
-    // Search for the blocks that must be sent.    
-    bool start_found_s = false, start_found_r = false, chunk_sent = false, chunk_recvd = false;
-    size_t offset_s, offset_r, count_s = 0, count_r = 0;
-    for(size_t i = 0; i < (uint) this->size; i++){
-        bool send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
-        bool recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);      
-        size_t block_count = blocks_info[port][i].count;
-        size_t block_offset = blocks_info[port][i].offset;
-
-        if(send_block){
-            if(!start_found_s){
-                start_found_s = true;
-                offset_s = block_offset;
-            }
-            count_s += block_count;
-        }
-        if(start_found_s && (!send_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-            if(chunk_sent){
-                fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                exit(-1);
-            }
-            chunk_sent = true;
-            DPRINTF("[%d] Port %d Sending offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_s, count_s, step, coll_type);            
-            offsets_s = offset_s;
-            counts_s = count_s;
-
-            // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-            // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
-            count_s = 0;
-            offset_s = 0;
-            start_found_s = false;
-        }
-
-        if(recv_block){
-            if(!start_found_r){
-                start_found_r = true;
-                offset_r = block_offset;
-            }
-            count_r += block_count;
-        }            
-        if(start_found_r && (!recv_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-            if(chunk_recvd){
-                fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                exit(-1);
-            }
-            chunk_recvd = true;
-            DPRINTF("[%d] Port %d Receiving offset %d count %d at step %d (coll %d)\n", this->rank, port, offset_r, count_r, step, coll_type);
-            offsets_r = offset_r;
-            counts_r = count_r;
-            
-            // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-            // Reset everything in case we need to send another train of blocks
-            count_r = 0;
-            offset_r = 0;
-            start_found_r = false;
-        }
-    }
+    ChunkParams cp = sbc[port]->get_chunk_params(step, coll_type, blocks_info);
+    offsets_s = cp.send_offset;
+    counts_s = cp.send_count;
+    offsets_r = cp.recv_offset;
+    counts_r = cp.recv_count;
 
     timer.reset("== swing_coll_step_utofu (misc)");
     int dtsize;
@@ -1578,6 +1526,82 @@ bool SwingBitmapCalculator::block_must_be_recvd(uint step, CollType coll_type, u
     }
 }
 
+ChunkParams SwingBitmapCalculator::get_chunk_params(uint step, CollType coll_type, const BlockInfo *const *const blocks_info){
+    uint block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
+    
+    if(!valid_chunk_params[block_step]){
+        ChunkParams cp;
+        bool start_found_s = false, start_found_r = false, chunk_sent = false, chunk_recvd = false;
+        size_t offset_s, offset_r, count_s = 0, count_r = 0;
+        for(size_t i = 0; i < (uint) this->size; i++){
+            bool send_block = block_must_be_sent(step, SWING_REDUCE_SCATTER, i);
+            bool recv_block = block_must_be_recvd(step, SWING_REDUCE_SCATTER, i);      
+            size_t block_count = blocks_info[port][i].count;
+            size_t block_offset = blocks_info[port][i].offset;
+
+            if(send_block){
+                if(!start_found_s){
+                    start_found_s = true;
+                    offset_s = block_offset;
+                }
+                count_s += block_count;
+            }
+            if(start_found_s && (!send_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
+                if(chunk_sent){
+                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                    exit(-1);
+                }
+                chunk_sent = true;
+                cp.send_offset = offset_s;
+                cp.send_count = count_s;
+
+                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+                // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
+                count_s = 0;
+                offset_s = 0;
+                start_found_s = false;
+            }
+
+            if(recv_block){
+                if(!start_found_r){
+                    start_found_r = true;
+                    offset_r = block_offset;
+                }
+                count_r += block_count;
+            }            
+            if(start_found_r && (!recv_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
+                if(chunk_recvd){
+                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
+                    exit(-1);
+                }
+                chunk_recvd = true;
+                cp.recv_offset = offset_r;
+                cp.recv_count = count_r;
+                
+                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
+                // Reset everything in case we need to send another train of blocks
+                count_r = 0;
+                offset_r = 0;
+                start_found_r = false;
+            }
+        }
+        chunk_params[block_step] = cp;
+        valid_chunk_params[block_step] = true;
+    }
+
+    ChunkParams r;
+    if(coll_type == SWING_REDUCE_SCATTER){
+        r = chunk_params[block_step];
+    }else{
+        r.send_count = chunk_params[block_step].recv_count;
+        r.send_offset = chunk_params[block_step].recv_offset;
+        r.recv_count = chunk_params[block_step].send_count;
+        r.recv_offset = chunk_params[block_step].send_offset;
+    }
+    return r;
+}
+
+
 SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks):
          scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), next_step(0){
     this->size = 1;
@@ -1616,6 +1640,7 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
             compute_valid_distances(d, sk);
         }
     }
+    memset(valid_chunk_params, 0, sizeof(valid_chunk_params));
 }
 
 SwingBitmapCalculator::~SwingBitmapCalculator(){
