@@ -246,7 +246,7 @@ class SwingCommon {
         size_t num_steps;
         SwingCoordConverter scc;
         SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
-        uint* virtual_peers; // For latency optimal
+        uint* virtual_peers[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
         size_t size_virtual;
         size_t num_steps_virtual;
         size_t prealloc_size;

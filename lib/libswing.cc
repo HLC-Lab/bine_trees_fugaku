@@ -590,8 +590,17 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
-      if(algo == ALGO_SWING_L || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
-            return swing_common->MPI_Allreduce_lat_optimal(sendbuf, recvbuf, count, datatype, op, comm);
+        if(algo == ALGO_SWING_L || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
+            int dtsize;
+            MPI_Type_size(datatype, &dtsize);
+            BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
+            int res = swing_common->MPI_Allreduce_lat_optimal(sendbuf, recvbuf, count, datatype, op, comm);
+            // Free blocks_info
+            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                free(blocks_info[p]);
+            }
+            free(blocks_info);
+            return res;
         }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU){ // Swing_b
             int dtsize;
             MPI_Type_size(datatype, &dtsize);

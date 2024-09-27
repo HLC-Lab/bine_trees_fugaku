@@ -205,7 +205,9 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
             this->num_steps_virtual += ceil(log2(this->dimensions_virtual[i]));
         }
     }
-    virtual_peers = NULL;
+    for(size_t i = 0; i < this->num_ports; i++){
+        virtual_peers[i] = NULL;
+    }
 }
 
 SwingCommon::~SwingCommon(){
@@ -213,9 +215,9 @@ SwingCommon::~SwingCommon(){
         if(this->sbc[i] != NULL){
             delete this->sbc[i];
         }
-    }
-    if(virtual_peers != NULL){
-        free(virtual_peers);
+        if(virtual_peers[i] != NULL){
+            free(virtual_peers[i]);
+        }
     }
 }
 
@@ -468,27 +470,40 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
     if(!idle){                
         // Do the step-by-step communication on the shrunk topology.         
         timer.reset("= MPI_Allreduce_lat_optimal (actual sendrecvs)");
+        uint partition_size = count / this->num_ports;
+        uint remaining = count % this->num_ports;        
         for(size_t step = 0; step < (uint) num_steps_virtual; step++){                 
             // Schedule all the send and recv
             //timer.reset("= MPI_Allreduce_lat_optimal (sendrecv for step " + std::to_string(step) + ")");
-            // Get the peer
-            if(virtual_peers == NULL){
-                virtual_peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-                compute_peers(0, rank_virtual, true, virtual_peers, this->dimensions_virtual, this->dimensions_num, this->scc);
+            uint count_so_far = 0;
+            MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
+            MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
+
+            for(size_t p = 0; p < this->num_ports; p++){
+                // Get the peer
+                if(virtual_peers[p] == NULL){
+                    virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+                    compute_peers(p, rank_virtual, true, virtual_peers[p], this->dimensions_virtual, this->dimensions_num, this->scc);
+                }
+                int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                int virtual_peer = virtual_peers[p][step];                 
+                this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer); // Get the virtual coordinates of the peer
+                int peer = this->scc.getIdFromCoord(coord_peer, false); // Convert the virtual coordinates to the real rank
+                DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
+
+                size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                size_t offset_port = count_so_far * dtsize;
+                count_so_far += count_port;
+                res = MPI_Isend(((char*) recvbuf) + offset_port, count_port, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests_s[p]));
+                if(res != MPI_SUCCESS){DPRINTF("[%d] Error on isend\n", rank); return res;}
+                res = MPI_Irecv(((char*) tmpbuf) + offset_port, count_port, datatype, peer, TAG_SWING_ALLREDUCE, comm, &(requests_r[p]));                    
+                if(res != MPI_SUCCESS){DPRINTF("[%d] Error on irecv\n", rank); return res;}                
             }
-            int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            int virtual_peer = virtual_peers[step];                 
-            this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer); // Get the virtual coordinates of the peer
-            int peer = this->scc.getIdFromCoord(coord_peer, false); // Convert the virtual coordinates to the real rank
-            DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
-
-            res = MPI_Sendrecv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, 
-                               tmpbuf , count, datatype, peer, TAG_SWING_ALLREDUCE, comm, MPI_STATUS_IGNORE);
-            if(res != MPI_SUCCESS){DPRINTF("[%d] Error on sendrecv\n", rank); return res;}
-
+            MPI_Waitall(this->num_ports, requests_s, MPI_STATUSES_IGNORE);
+            MPI_Waitall(this->num_ports, requests_r, MPI_STATUSES_IGNORE);
             res = MPI_Reduce_local(tmpbuf, recvbuf, count, datatype, op); 
             if(res != MPI_SUCCESS){DPRINTF("[%d] Error on reduce_local\n", rank); return res;}
-            DPRINTF("[%d] Step %d completed\n", rank, step);
+            DPRINTF("[%d] Step %d completed\n", rank, step);            
         }
     }
 
