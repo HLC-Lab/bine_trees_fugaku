@@ -829,9 +829,10 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     size_t offsets_r, counts_r;
     
     Timer timer("== swing_coll_step_utofu (compute bitmaps 0)");
+
     if(step == 0){
         sbc[port]->compute_bitmaps(step, coll_type);
-    }
+    }    
 
     timer.reset("== swing_coll_step_utofu (indexes calc)");
     ChunkParams cp = sbc[port]->get_chunk_params(step, coll_type, blocks_info);
@@ -890,22 +891,23 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 if(step == 0){
                     // To avoid memcpy from sendbuf to recvbuf in the first step I need to (in the first step):
                     // - Send from local sendbuf to remote recvbuf, then aggregate from remote sendbuf to remote recvbuf
-                    lcl_addr = utofu_descriptor->lcl_send_stadd[port] + offset;
-                    rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].recv_stadd + utofu_offset_r;
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd + offset;
+                    rmt_addr = (*(utofu_descriptor->port_info[port].rmt_info))[peer].recv_stadd + utofu_offset_r;
                 }else{
-                    lcl_addr = utofu_descriptor->lcl_recv_stadd[port] + offset;
-                    rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].temp_stadd + utofu_offset_r;
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + offset;
+                    rmt_addr = (*(utofu_descriptor->port_info[port].rmt_info))[peer].temp_stadd + utofu_offset_r;
                 }
             }else if(coll_type == SWING_ALLGATHER){
                 if(is_first_coll && step == 0){
-                    lcl_addr = utofu_descriptor->lcl_send_stadd[port] + offset;
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd + offset;
                 }else{ // If I executed a collective before (i.e., allgather), the data to send is already in recvbuf
-                    lcl_addr = utofu_descriptor->lcl_recv_stadd[port] + offset;                    
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + offset;                    
                 }
-                rmt_addr = (*(utofu_descriptor->rmt_info[port]))[peer].recv_stadd + utofu_offset_r;
+                rmt_addr = (*(utofu_descriptor->port_info[port].rmt_info))[peer].recv_stadd + utofu_offset_r;
             }else{
                 assert("Unknown collective type" == 0);
             }        
+   
 #if !(UTOFU_THREAD_SAFE)
             #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
 #endif
@@ -921,12 +923,13 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     // Here I can overlap computation to the reception of the data
 
     timer.reset("== swing_coll_step_utofu (compute bitmaps i)");
-    // We issued the sends, while we wait for transmission we compute the bitmaps for the next step
+    // We issued the sends, while we wait for transmission we compute the bitmaps for the next step  
     if(step < this->num_steps - 1){
         sbc[port]->compute_bitmaps(step + 1, coll_type);
     }
     timer.reset("== swing_coll_step_utofu (recv + aggregate (init))");
 
+    //double start = MPI_Wtime();
     // Receive and aggregate
     offset = 0;
     if(counts_r){
@@ -946,7 +949,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 if(step == 0){
                     // In the first step I receive in recvbuf and I aggregate from sendbuf and recvbuf in recvbuf (at same offsets)
                     size_t sendbuf_offset = recvbuf_offset;
-                    end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                    end_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + recvbuf_offset + bytes_to_recv;
                     timer.reset("== swing_coll_step_utofu (recv)");
                     swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
                     timer.reset("== swing_coll_step_utofu (aggr)");
@@ -954,7 +957,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 }else{
                     // In the other steps I receive in tmpbuf and I aggregate from tmpbuf and recvbuf in recvbuf (for tmbuf we use adjusted offset)
                     size_t tempbuf_offset = utofu_offset_r_start + offset;
-                    end_addr = utofu_descriptor->lcl_temp_stadd[port] + tempbuf_offset + bytes_to_recv;
+                    end_addr = utofu_descriptor->port_info[port].lcl_temp_stadd + tempbuf_offset + bytes_to_recv;
                     timer.reset("== swing_coll_step_utofu (recv)");
                     swing_utofu_wait_recv(utofu_descriptor, port, end_addr);                    
                     timer.reset("== swing_coll_step_utofu (aggr)");
@@ -962,7 +965,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                     //MPI_Reduce_local(tmpbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
                 }
             }else{
-                end_addr = utofu_descriptor->lcl_recv_stadd[port] + recvbuf_offset + bytes_to_recv;
+                end_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + recvbuf_offset + bytes_to_recv;
                 timer.reset("== swing_coll_step_utofu (recv)");
                 swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
             }
@@ -973,6 +976,11 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             ++issued_recvs;
         }            
     }
+    /*
+    if(omp_get_thread_num() == 0){
+        std::cout << "recv+aggr: " << (MPI_Wtime() - start)*1000000.0 << std::endl;
+    }
+    */
     timer.reset("== swing_coll_step_utofu (wait isends)");
     DPRINTF("[%d] Issued %d sends and %d recvs\n", rank, issued_sends, issued_recvs);
     // Wait for send completion
@@ -1468,7 +1476,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         
         timer.reset("= swing_coll_b (utofu main loop)");
 
-#pragma omp parallel for num_threads(this->num_ports) schedule(static) collapse(1)
+#pragma omp parallel for num_threads(this->num_ports) schedule(static, 1) collapse(1)
         for(size_t port = 0; port < this->num_ports; port++){
             /*
             int thread_num = omp_get_thread_num();

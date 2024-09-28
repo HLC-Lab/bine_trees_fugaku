@@ -2,22 +2,22 @@
 
 static void pack_local_info(swing_utofu_comm_descriptor* desc){
     for(size_t i = 0; i < desc->num_ports; i++){
-        desc->sbuffer[3*i] = desc->lcl_vcq_id[i];
-        desc->sbuffer[3*i+1] = desc->lcl_recv_stadd[i];
-        desc->sbuffer[3*i+2] = desc->lcl_temp_stadd[i];
+        desc->sbuffer[3*i] = desc->port_info[i].lcl_vcq_id;
+        desc->sbuffer[3*i+1] = desc->port_info[i].lcl_recv_stadd;
+        desc->sbuffer[3*i+2] = desc->port_info[i].lcl_temp_stadd;
     }
 }
 
 static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buffer, uint peer){
     for(size_t i = 0; i < desc->num_ports; i++){
-        assert(desc->rmt_info[i]->count(peer) == 0);
+        assert(desc->port_info[i].rmt_info->count(peer) == 0);
         // Add an empty entry for the peer
         swing_utofu_remote_info rmt;
         rmt.vcq_id     = buffer[3*i];
         rmt.recv_stadd = buffer[3*i+1];
         rmt.temp_stadd = buffer[3*i+2];
-        desc->rmt_info[i]->insert({peer, rmt});
-        //std::unordered_map<uint, swing_utofu_remote_info>& m = (desc->rmt_info[i]);
+        desc->port_info[i].rmt_info->insert({peer, rmt});
+        //std::unordered_map<uint, swing_utofu_remote_info>& m = (desc->port_info[i].rmt_info);
         ////m[peer] = rmt;
         //m.insert({peer, rmt});
 
@@ -42,20 +42,20 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
 
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
-        desc->acked_send[p].acked = 0;
+        desc->port_info[p].acked = 0;
         utofu_tni_id_t tni_id = p;
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
-        assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->vcq_hdl[p])) == UTOFU_SUCCESS);
-        assert(utofu_query_vcq_id(desc->vcq_hdl[p], &(desc->lcl_vcq_id[p])) == UTOFU_SUCCESS);
+        assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
+        assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(desc->port_info[p].lcl_vcq_id)) == UTOFU_SUCCESS);
         
         // register memory regions and get their STADDs
-        assert(utofu_reg_mem(desc->vcq_hdl[p], (void*) send_buffer, length_s, 0, &(desc->lcl_send_stadd[p])) == UTOFU_SUCCESS);
-        assert(utofu_reg_mem(desc->vcq_hdl[p], recv_buffer, length_r, 0, &(desc->lcl_recv_stadd[p])) == UTOFU_SUCCESS);
-        assert(utofu_reg_mem(desc->vcq_hdl[p], temp_buffer, length_t, 0, &(desc->lcl_temp_stadd[p])) == UTOFU_SUCCESS);
-        desc->rmt_info[p] = new std::unordered_map<uint, swing_utofu_remote_info>();
+        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
+        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
+        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, temp_buffer, length_t, 0, &(desc->port_info[p].lcl_temp_stadd)) == UTOFU_SUCCESS);
+        desc->port_info[p].rmt_info = new std::unordered_map<uint, swing_utofu_remote_info>();
 
-        desc->completed_recv[p] = new std::unordered_set<utofu_stadd_t>();
+        desc->port_info[p].completed_recv = new std::unordered_set<utofu_stadd_t>();
     }
 
     
@@ -87,12 +87,12 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ 
 // teardown communication
 void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
     for(size_t p = 0; p < desc->num_ports; p++){        
-        utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_send_stadd[p], 0);
-        utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_recv_stadd[p], 0);
-        utofu_dereg_mem(desc->vcq_hdl[p], desc->lcl_temp_stadd[p], 0);
-        utofu_free_vcq(desc->vcq_hdl[p]);
-        delete desc->rmt_info[p];
-        delete desc->completed_recv[p];
+        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_send_stadd, 0);
+        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_recv_stadd, 0);
+        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_temp_stadd, 0);
+        utofu_free_vcq(desc->port_info[p].vcq_hdl);
+        delete desc->port_info[p].rmt_info;
+        delete desc->port_info[p].completed_recv;
     }    
     free(desc);
 }
@@ -107,10 +107,10 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
     uint64_t edata = 0; // not used
-    utofu_vcq_id_t vcq_id = (*(desc->rmt_info[port]))[peer].vcq_id;
+    utofu_vcq_id_t vcq_id = (*(desc->port_info[port].rmt_info))[peer].vcq_id;
     // instruct the TNI to perform a Put communication
     {
-    utofu_put(desc->vcq_hdl[port], vcq_id, 
+    utofu_put(desc->port_info[port].vcq_hdl, vcq_id, 
               lcl_addr, rmt_addr, length,
               edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
     }
@@ -121,7 +121,7 @@ static void swing_utofu_wait_tcq(swing_utofu_comm_descriptor* desc, uint port){
     // confirm the TCQ notification
     void *cbdata;
     do {
-        rc = utofu_poll_tcq(desc->vcq_hdl[port], 0, &cbdata);
+        rc = utofu_poll_tcq(desc->port_info[port].vcq_hdl, 0, &cbdata);
     } while (rc == UTOFU_ERR_NOT_FOUND);
     assert(rc == UTOFU_SUCCESS);
     //assert((uintptr_t)cbdata == cbvalue);
@@ -131,14 +131,14 @@ static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
     int rc;    
     struct utofu_mrq_notice notice;
     do {
-        rc = utofu_poll_mrq(desc->vcq_hdl[port], 0, &notice);
+        rc = utofu_poll_mrq(desc->port_info[port].vcq_hdl, 0, &notice);
     } while (rc == UTOFU_ERR_NOT_FOUND);
     assert(rc == UTOFU_SUCCESS);
     if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed      
         DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
-        desc->completed_recv[port]->insert(notice.rmt_stadd);
+        desc->port_info[port].completed_recv->insert(notice.rmt_stadd);
     }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-        ++desc->acked_send[port].acked; // We do not need to store the address
+        ++desc->port_info[port].acked; // We do not need to store the address
     }else{
         fprintf(stderr, "Unknown notice type.\n");
         exit(-1);
@@ -153,10 +153,10 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
     for(size_t i = 0; i < expected_count; i++){
         swing_utofu_wait_tcq(desc, port);        
     }    
-    while(desc->acked_send[port].acked < expected_count){
+    while(desc->port_info[port].acked < expected_count){
         swing_utofu_wait_rmq(desc, port);
     }
-    desc->acked_send[port].acked = 0;
+    desc->port_info[port].acked = 0;
 }
 
 /*
@@ -171,8 +171,8 @@ std::ostream& operator<<(std::ostream& os, std::unordered_set<utofu_stadd_t> con
 
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, utofu_stadd_t end_addr){
     DPRINTF("Wait for %ld\n", end_addr);
-    while(!desc->completed_recv[port]->count(end_addr)){
+    while(!desc->port_info[port].completed_recv->count(end_addr)){
         swing_utofu_wait_rmq(desc, port);
     }
-    desc->completed_recv[port]->erase(end_addr);
+    desc->port_info[port].completed_recv->erase(end_addr);
 }

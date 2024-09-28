@@ -31,19 +31,21 @@ typedef struct{
 }swing_utofu_remote_info;
 
 typedef struct{
+    utofu_vcq_hdl_t vcq_hdl;
+    utofu_vcq_id_t lcl_vcq_id;
+    utofu_stadd_t lcl_send_stadd;
+    utofu_stadd_t lcl_recv_stadd;
+    utofu_stadd_t lcl_temp_stadd;
+    std::unordered_map<uint, swing_utofu_remote_info>* rmt_info; // mapping the peer to the addresses
+    std::unordered_set<utofu_stadd_t>* completed_recv; // set of completed but unacknowledged recvs
     size_t acked;
-    char padding[CACHE_LINE_SIZE - sizeof(size_t)];
-}swing_utofu_acked_send;
+    volatile char padding[CACHE_LINE_SIZE];
+}swing_utofu_port_info;
 
 struct swing_utofu_comm_d{
     uint num_ports;
     SwingBitmapCalculator* sbc;
-    utofu_vcq_hdl_t vcq_hdl[LIBSWING_MAX_SUPPORTED_PORTS]; // One handle per port
-    utofu_vcq_id_t lcl_vcq_id[LIBSWING_MAX_SUPPORTED_PORTS]; // One local VCQ per port
-    utofu_stadd_t lcl_send_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_recv_stadd[LIBSWING_MAX_SUPPORTED_PORTS], lcl_temp_stadd[LIBSWING_MAX_SUPPORTED_PORTS];
-    std::unordered_map<uint, swing_utofu_remote_info>* rmt_info[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a map mapping the peer to the addresses
-    std::unordered_set<utofu_stadd_t>* completed_recv[LIBSWING_MAX_SUPPORTED_PORTS]; // For each port we have a set of completed but unacknowledged recvs
-    swing_utofu_acked_send acked_send[LIBSWING_MAX_SUPPORTED_PORTS];
+    swing_utofu_port_info port_info[LIBSWING_MAX_SUPPORTED_PORTS];
     uint64_t* sbuffer;
     MPI_Request reqs[LIBSWING_MAX_STEPS];
 };
