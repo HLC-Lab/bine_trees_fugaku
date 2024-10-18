@@ -67,43 +67,48 @@ do
         # Decision rules can be found at /opt/FJSVxtclanga/.common/MECA030/etc/fjmpi-dectree.conf (but you can access it only on computing nodes after doing pjsub)
 
         # All those that do not have segsize as parameter
-        for DEFAULT_ALGO in "rdbc" "ring" "recursive_doubling" "nonoverlapping" "basic_linear"
-        do
-            LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
-            mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-            mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
-        done
+        #for DEFAULT_ALGO in "rdbc" "ring" "recursive_doubling" "nonoverlapping" "basic_linear"
+        #do
+        #    LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+        #    mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+        #    mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+        #    mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_stats/
+        #done
 
         # Those that have segsize as parameter
-        for DEFAULT_ALGO in "trix6" "trix3" "segmented_ring"
-        do
-            for coll_select_allreduce_algorithm_segmentsize in 4096 16384 65536
-            do
-                LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_select_allreduce_algorithm_segmentsize ${coll_select_allreduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-                mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
-                mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}_stats/
-                mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}_stats/
-            done
-        done
+        #for DEFAULT_ALGO in "trix6" "trix3" "segmented_ring"
+        #do
+        #    for coll_select_allreduce_algorithm_segmentsize in 4096 16384 65536
+        #    do
+        #        LIBSWING_ALGO="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_select_allreduce_algorithm_segmentsize ${coll_select_allreduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allreduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+        #        mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+        #        mkdir ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}_stats/
+        #        mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_default_${DEFAULT_ALGO}_${coll_select_allreduce_algorithm_segmentsize}_stats/
+        #    done
+        #done
 
         
 
 
         # Run lat optimal swing
         if [ "$n" -le 1048576 ]; then
-            LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L" ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
-            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
-            mkdir ${OUT_FOLDER}/${p}_${n}_lat_stats/
-            mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_lat_stats/
-	    fi
+            for PORTS in 1 3 6
+	    do
+		LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L" LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+		mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+                mkdir ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_e/
+                mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_e/		
+		#mkdir ${OUT_FOLDER}/${p}_${n}_lat_stats/
+		#mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_lat_stats/
+	    done			 
+	fi
 	
 
         #LIBSWING_SEGMENT_SIZE
         PREALLOC_SIZE=536870912
         for SEGMENT_SIZE in 1048576 # 0 8388608 1048576 131072 65536
         do
-            for PORTS in 1 6
+            for PORTS in 1 3 6
             do
                 MIN_ELEMS=$((PORTS * p))
                 if [ "$n" -ge "$MIN_ELEMS" ]; then
