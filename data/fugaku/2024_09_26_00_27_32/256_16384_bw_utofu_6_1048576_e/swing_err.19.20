@@ -1,0 +1,5 @@
+bench: ./lib/fugaku/swing_utofu.cc:136: void swing_utofu_wait_rmq(swing_utofu_comm_d *, unsigned int): Assertion `rc == UTOFU_SUCCESS' failed.
+bench: ./lib/fugaku/swing_utofu.cc:136: void swing_utofu_wait_rmq(swing_utofu_comm_d *, unsigned int): Assertion `rc == UTOFU_SUCCESS' failed.
+[c01-3208c:00120] *** Process received signal ***
+[c01-3208c:00120] Signal: Aborted (6)
+[c01-3208c:00120] Signal code:  (-6)

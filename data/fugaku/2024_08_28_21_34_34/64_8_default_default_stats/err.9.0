@@ -1,0 +1,104 @@
+
+===================================================================
+/****************** MPI Statistical Information ******************/
+===================================================================
+
+------------------------- MPI Information -------------------------
+Dimension                      3 
+Shape                      2x2x2 
+
+---------------------- MPI Memory Usage (MiB) ---------------------
+                              MAX              MIN              AVE
+Estimated_Memory_Size       91.15 [   0]     91.15 [   0]     91.15
+
+------------------- Per-peer Communication Count ------------------
+                              MAX              MIN              AVE
+In_Node                         0 [   0]         0 [   0]       0.0
+Neighbor                        0 [   0]         0 [   0]       0.0
+Not_Neighbor                    0 [   0]         0 [   0]       0.0
+Total_Count                     0 [   0]         0 [   0]       0.0
+Connection                      4 [   0]         4 [   0]       4.0
+Max_Hop                         3 [   0]         2 [   1]       2.5
+Average_Hop                  1.50 [   0]      1.25 [   1]      1.38
+
+----------------- Per-peer Transmission Size (MiB) ----------------
+                              MAX              MIN              AVE
+In_Node                      0.00 [   0]      0.00 [   0]      0.00
+Neighbor                     0.00 [   0]      0.00 [   0]      0.00
+Not_Neighbor                 0.00 [   0]      0.00 [   0]      0.00
+Total_Size                   0.00 [   0]      0.00 [   0]      0.00
+
+----------------- Per-protocol Communication Count ----------------
+                              MAX              MIN              AVE
+Eager                           0 [   0]         0 [   0]       0.0
+Rendezvous                      0 [   0]         0 [   0]       0.0
+Persistent_Extended_IF          0 [   0]         0 [   0]       0.0
+Unexpected_Message              1 [   0]         1 [   0]       1.0
+
+------------------- Barrier Communication Count -------------------
+                              MAX              MIN              AVE
+Tofu                           21 [   0]        21 [   0]      21.0
+Soft                            0 [   0]         0 [   0]       0.0
+
+----------- Tofu Barrier Collective Communication Count -----------
+                              MAX              MIN              AVE
+Bcast                           0 [   0]         0 [   0]       0.0
+Reduce                          0 [   0]         0 [   0]       0.0
+Allreduce                       0 [   0]         0 [   0]       0.0
+
+--------- 6D-Tofu-specific Collective Communication Count ---------
+                              MAX              MIN              AVE
+Alltoall                        0 [   0]         0 [   0]       0.0
+
+----------- Tofu-specific Collective Communication Count ----------
+                              MAX              MIN              AVE
+Bcast                           0 [   0]         0 [   0]       0.0
+Reduce                          0 [   0]         0 [   0]       0.0
+Gather                          0 [   0]         0 [   0]       0.0
+Gatherv                         0 [   0]         0 [   0]       0.0
+Allreduce                       0 [   0]         0 [   0]       0.0
+Alltoall                        0 [   0]         0 [   0]       0.0
+Alltoallv                       0 [   0]         0 [   0]       0.0
+Allgather                       0 [   0]         0 [   0]       0.0
+Allgatherv                      0 [   0]         0 [   0]       0.0
+
+--------- Non-Tofu-specific Collective Communication Count --------
+                              MAX              MIN              AVE
+Bcast                           0 [   0]         0 [   0]       0.0
+Reduce                          0 [   0]         0 [   0]       0.0
+Gather                          1 [   0]         1 [   0]       1.0
+Gatherv                         0 [   0]         0 [   0]       0.0
+Allreduce                      21 [   0]        21 [   0]      21.0
+Alltoall                        0 [   0]         0 [   0]       0.0
+Alltoallv                       0 [   0]         0 [   0]       0.0
+Allgather                       0 [   0]         0 [   0]       0.0
+Allgatherv                      0 [   0]         0 [   0]       0.0
+
+----- Per-protocol Nonblocking/Persistent Communication Count -----
+                              MAX              MIN              AVE
+Eager                           0 [   0]         0 [   0]       0.0
+Rendezvous                      0 [   0]         0 [   0]       0.0
+Collective                      0 [   0]         0 [   0]       0.0
+
+-- Per-protocol Nonblocking/Persistent Communication Count Started in Wait --
+                              MAX              MIN              AVE
+Eager                           0 [   0]         0 [   0]       0.0
+Rendezvous                      0 [   0]         0 [   0]       0.0
+
+
+--------------- Collective Communication Information --------------
+COLLECTIVE           ALG     MSGMIN -     MSGMAX                  NODE       COMM      COUNT AVE.TIME(MSEC)
+Allreduce              4   67108864 -        inf       2x     2x     2          8         21 99.217
+Barrier              200          0 -        inf       2x     2x     2          8         21 0.465
+Gather                 2          0 -       4095       2x     2x     2          8          1 0.211
+
+------------------------- Process Mapping -------------------------
+(0,0,0)                   0
+(1,0,0)                   1
+(0,1,0)                   2
+(1,1,0)                   3
+(0,0,1)                   4
+(1,0,1)                   5
+(0,1,1)                   6
+(1,1,1)                   7
+

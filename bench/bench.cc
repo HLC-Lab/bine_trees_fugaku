@@ -131,6 +131,18 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
             r = MPI_Allgather(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
         }
     }
+
+    /*
+    char val[MPI_MAX_INFO_VAL];
+    int flag = 0;
+    MPI_Info info;
+    MPI_Comm_get_info(MPI_COMM_WORLD, &info);
+    MPI_Info_get(info, "last_allreduce_algorithm", MPI_MAX_INFO_VAL, val, &flag);
+    if(flag){//flag is 1, Info is obtained
+      fprintf(stderr, "val is %s\n",val);//(2)
+    }
+    MPI_Info_free(&info);
+    */
     return r;
 }
 
@@ -214,10 +226,10 @@ int main(int argc, char** argv){
 
 
 #ifdef FUGAKU
-    uint64_t tnr_start[NUM_TNR][PA_LEN];
-    uint64_t tnr_stop[NUM_TNR][PA_LEN];
-    uint64_t tnr_diff[NUM_TNR][PA_LEN];
-    assert(read_tnr_stats(tnr_start)==0);
+    //uint64_t tnr_start[NUM_TNR][PA_LEN];
+    //uint64_t tnr_stop[NUM_TNR][PA_LEN];
+    //uint64_t tnr_diff[NUM_TNR][PA_LEN];
+    //assert(read_tnr_stats(tnr_start)==0);
 #endif
 
     
@@ -246,9 +258,9 @@ int main(int argc, char** argv){
     }
 
 #ifdef FUGAKU
-    assert(read_tnr_stats(tnr_stop)==0);
-    diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
-    print_tnr_stats(tnr_diff, rank);
+    //assert(read_tnr_stats(tnr_stop)==0);
+    //diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
+    //print_tnr_stats(tnr_diff, rank);
 #endif    
 
     MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
