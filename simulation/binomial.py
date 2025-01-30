@@ -276,19 +276,14 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
     # For the BCAST, each node starts when it is reached by the data 
     # coming from the root
     if (collective == "BCAST" or collective == "SCATTER") and rank != root:
-        steps = get_steps_list(rank, num_nodes)
-        starting_step = sorted(steps)[-1] + 1
-        #stack = children[root]
-        #while len(stack):
-        #    if rank in stack:
-        #        break
-        #    new_stack = []
-        #    for c in stack:
-        #        if children[c] is not None:
-        #            new_stack.extend(children[c])
-        #    stack = new_stack
-        #    starting_step += 1
-        #starting_step += 1 # In the first step I only receive
+        #steps = get_steps_list(rank, num_nodes)
+        #starting_step = sorted(steps)[-1] + 1
+        nb = get_rank_negabinary(rank, num_nodes)
+        # Just find the most significant 1 in the negabinary representation. 
+        # That's the step in which I am going to be reached by rank 0 data.
+        # Since index 0 would be the most significant bit, we reverse the representation
+        # so that indexes are consistent with the bit position (i.e., 0 is the rightmost)
+        starting_step = nb[::-1].rfind('1') + 1 # +1 because I want to start from the next step (on the first step I only receive)        
 
     #print(starting_step)
     # Now use the two pieces of info computed above to build the tx info
