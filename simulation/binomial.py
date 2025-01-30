@@ -281,27 +281,33 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
 
     #print(starting_step)
     # Now use the two pieces of info computed above to build the tx info
+    min_block_id_r = 0
+    max_block_id_r = num_nodes - 1
+    num_blocks = num_nodes / 2
     for s in range(starting_step, math.ceil(math.log2(num_nodes))):
         peer = get_peer(root, s, num_nodes, collective)
         if peer in children[root]: # Just to manage the case in which I might skip a step
-            min_block_id = 0
-            max_block_id = 0 
             # Prepare scheduling info according to collectives
             if collective == "BCAST":
                 peer = get_peer(rank, s, num_nodes, collective)
-                min_block_id = 0
-                max_block_id = num_nodes - 1
+                print("Step {}: Peer: {} Blocks: (0-{})".format(s, peer, num_nodes - 1))
             elif collective == "ALLREDUCE" or collective == "REDUCE-SCATTER" or collective == "ALLGATHER" or collective == "SCATTER":
-                min_block_id, max_block_id, relabeled_children = get_children_range(children, relabels, num_nodes, peer)
-                
-                # Check that the range is actually contiguous and without holes
-                for c in relabeled_children:
-                    assert(c >= min_block_id and c <= max_block_id)
-                
+                min_block_id_s = min_block_id_r
+                max_block_id_s = max_block_id_r
+
+                middle = (min_block_id_r + max_block_id_r + 1) // 2 # = min + (max-min)/2
+                if relabels[rank] < middle:
+                    min_block_id_s = middle
+                    max_block_id_r = middle - 1
+                else:
+                    max_block_id_s = middle - 1
+                    min_block_id_r = middle
+
+                num_blocks /= 2                
                 if collective == "SCATTER":
                     peer = get_peer(rank, s, num_nodes, collective)
 
-            #print("Step {}: Peer: {} Blocks: ({}-{})".format(s, peer, min_block_id, max_block_id))
+                print("Step {}: Peer: {} Blocks to send: ({}-{})".format(s, peer, min_block_id_s, max_block_id_s))
 
 validate_all()
-get_tx_info_swing_flat_contiguous(8, "ALLREDUCE", 0)
+get_tx_info_swing_flat_contiguous(8, "ALLREDUCE", 1)
