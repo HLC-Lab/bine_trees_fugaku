@@ -76,6 +76,46 @@ def decimal_to_negabinary(decimal):
     # Negabinary digits are collected in reverse order
     return ''.join(reversed(negabinary))
 
+def get_rank_negabinary(q, num_nodes):
+    # Generates the negabinary both for q  and for  q - num_nodes (if q is odd)
+    # Generates the negabinary both for -q and for -q + num_nodes (if q is even)
+    if q % 2:
+        nba = decimal_to_negabinary(q)
+        nbb = decimal_to_negabinary(q - num_nodes)
+    else:
+        nba = decimal_to_negabinary(-q)
+        nbb = decimal_to_negabinary(-q + num_nodes)
+
+    # Only one of those will have less (or equal) to log2(num_nodes) bits
+    assert(len(nba) > math.ceil(math.log2(num_nodes)) or len(nbb) > math.ceil(math.log2(num_nodes)))
+    
+    nb = 0
+    # Check which of the two negabinaries is the correct one
+    if len(nba) <= math.ceil(math.log2(num_nodes)):
+        nb = nba
+    else:  
+        nb = nbb
+
+    # Expand with zeros to the left
+    nb = nb.zfill(int(math.log2(num_nodes)))
+
+    return nb
+    
+def get_steps_list(q, num_nodes):
+    # Get the negabinary representation of the rank
+    nb = get_rank_negabinary(q, num_nodes)
+    # Now scan the negabinary (backwards -- from LSB) to get the sequence of steps
+    steps = []
+    for i in range(len(nb)):
+        pos = len(nb) - i - 1
+        if nb[pos] == '1':
+            if pos == 0 or nb[pos - 1] == '0': # If the previous bit is 0 or if we reached the MSB
+                steps.append(i)
+        if nb[pos] == '0':
+            if pos > 0 and nb[pos - 1] == '1': # If the previous bit is 1 or if we reached the MSB
+                steps.append(i)
+    return steps
+
 # Build the tree for the swing-flat algorithm
 # @param num_nodes: number of nodes participating in the collective
 # @param root: rank of the root of the tree
@@ -116,38 +156,7 @@ def build_tree_swing_flat(num_nodes, root, step, collective, children, parent, r
         # Generate the negabinary representation for each rank
         relabels[0] = 0
         for q in range(1, num_nodes):
-            # Generates the negabinary both for q  and for  q - num_nodes (if q is odd)
-            # Generates the negabinary both for -q and for -q + num_nodes (if q is even)
-            if q % 2:
-                nba = decimal_to_negabinary(q)
-                nbb = decimal_to_negabinary(q - num_nodes)
-            else:
-                nba = decimal_to_negabinary(-q)
-                nbb = decimal_to_negabinary(-q + num_nodes)
-
-            # Only one of those will have less (or equal) to log2(num_nodes) bits
-            assert(len(nba) > math.ceil(math.log2(num_nodes)) or len(nbb) > math.ceil(math.log2(num_nodes)))
-            
-            nb = 0
-            # Check which of the two negabinaries is the correct one
-            if len(nba) <= math.ceil(math.log2(num_nodes)):
-                nb = nba
-            else:  
-                nb = nbb
-
-            # Expand with zeros to the left
-            nb = nb.zfill(int(math.log2(num_nodes)))
-            
-            # Now scan the negabinary (backwards -- from LSB) to get the sequence of steps
-            steps = []
-            for i in range(len(nb)):
-                pos = len(nb) - i - 1
-                if nb[pos] == '1':
-                    if pos == 0 or nb[pos - 1] == '0': # If the previous bit is 0 or if we reached the MSB
-                        steps.append(pos)
-                if nb[pos] == '0':
-                    if pos > 0 and nb[pos - 1] == '1': # If the previous bit is 1 or if we reached the MSB
-                        steps.append(pos)
+            steps = get_steps_list(q, num_nodes)
             
             binary = [0]*int(math.log2(num_nodes))
             for s in steps:
@@ -267,17 +276,19 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
     # For the BCAST, each node starts when it is reached by the data 
     # coming from the root
     if (collective == "BCAST" or collective == "SCATTER") and rank != root:
-        stack = children[root]
-        while len(stack):
-            if rank in stack:
-                break
-            new_stack = []
-            for c in stack:
-                if children[c] is not None:
-                    new_stack.extend(children[c])
-            stack = new_stack
-            starting_step += 1
-        starting_step += 1 # In the first step I only receive
+        steps = get_steps_list(rank, num_nodes)
+        starting_step = sorted(steps)[-1] + 1
+        #stack = children[root]
+        #while len(stack):
+        #    if rank in stack:
+        #        break
+        #    new_stack = []
+        #    for c in stack:
+        #        if children[c] is not None:
+        #            new_stack.extend(children[c])
+        #    stack = new_stack
+        #    starting_step += 1
+        #starting_step += 1 # In the first step I only receive
 
     #print(starting_step)
     # Now use the two pieces of info computed above to build the tx info
@@ -310,4 +321,4 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
                 print("Step {}: Peer: {} Blocks to send: ({}-{})".format(s, peer, min_block_id_s, max_block_id_s))
 
 validate_all()
-get_tx_info_swing_flat_contiguous(8, "ALLREDUCE", 1)
+get_tx_info_swing_flat_contiguous(8, "BCAST", 0, 3)
