@@ -1272,38 +1272,6 @@ void SwingBitmapCalculator::get_peer(int* coord_rank, size_t step, int* coord_pe
     coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
 }
 
-// We pass bitmap_tmp as a parameter only to avoid allocating/deallocating it at each call.
-// Otherwise, it could be local to a call (it is just needed to transform the bitmap into the vector of corresponding nodes).
-void SwingBitmapCalculator::remap(const std::vector<int>& nodes, uint start_range, uint end_range, int step, int* coord_rank, char* bitmap_tmp){    
-    if(nodes.size() < 2){ // Needed for cases with non-power of two sizes (e.g., 6x6)
-        return;
-    }else if(nodes.size() == 2){
-        remapping[nodes[0]] = start_range;
-        remapping[nodes[1]] = end_range - 1;
-        assert(end_range == start_range + 2);
-    }else{
-        // Find two partitions of node that talk with each other. If I have n nodes, 
-        // if I see what happens in next step, I have two disjoint sets of nodes.        
-        int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
-        get_peer(coord_rank, step, coord_peer);
-        get_blocks_bitmaps_multid(step, coord_peer, bitmap_tmp, NULL, coord_rank);
-
-        std::vector<int> left, right;
-        left.reserve(this->size);
-        right.reserve(this->size);
-        for(auto n : nodes){
-            if(bitmap_tmp[n] == 0){
-                left.push_back(n);
-            }else{
-                right.push_back(n);
-            }
-        }
- 
-        remap(left , start_range             , start_range + left.size(), step + 1, coord_rank, bitmap_tmp);
-        remap(right, end_range - right.size(), end_range                , step + 1, coord_peer, bitmap_tmp);
-    }
-}
-
 void SwingBitmapCalculator::compute_bitmaps(uint step, CollType coll_type){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
     while(block_step >= this->next_step){
@@ -1314,61 +1282,51 @@ void SwingBitmapCalculator::compute_bitmaps(uint step, CollType coll_type){
 void SwingBitmapCalculator::compute_next_bitmaps(){
     if(this->next_step >= this->num_steps){
         return;
-    }   
-    char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    for(size_t d = 0; d < this->dimensions_num; d++){
-        bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
-        bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
-    }        
-                    
+    }                       
     bitmap_send_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
     bitmap_recv_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
     
-    int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
-    this->scc.retrieve_coord_mapping(this->peers[this->next_step], false, coord_peer);
-
-    get_blocks_bitmaps_multid(this->next_step, 
-                              coord_peer, bitmap_send, 
-                              bitmap_recv, bitmap_send_merged[this->next_step], bitmap_recv_merged[this->next_step], 
-                              coord_mine);
-
     /*************/
     /* REMAPPING */
     /*************/
     if(remap_blocks){       
-        char* bitmap_tmp = NULL;
-        // If the remapping for this port has not yet been computed, compute it
-        if(remapping == NULL){
-            bitmap_tmp = (char*) malloc(sizeof(char)*this->size);       
-            std::vector<int> nodes(this->size);
-            for(size_t n = 0; n < (size_t) this->size; n++){nodes[n] = n;}     
-            int coord_zero[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            memset(coord_zero, 0, sizeof(int)*this->dimensions_num);
-            remapping = (uint*) malloc(sizeof(uint)*this->size);                          
-            remap(nodes, 0, this->size, 0, coord_zero, bitmap_tmp);
+        // We always assume reduce_scatter
+        this->min_block_s = this->min_block_r;
+        this->max_block_s = this->max_block_r;
+        size_t middle = (this->min_block_r + this->max_block_r + 1) / 2; // = min + (max-min)/2
+        if(this->remapped_rank < middle){
+            this->min_block_s = middle;
+            this->max_block_r = middle;
+        }else{
+            this->max_block_s = middle;
+            this->min_block_r = middle;
         }
+        memset(bitmap_send_merged[this->next_step], 0, sizeof(char)*this->size);
+        for(size_t i = this->min_block_s; i < this->max_block_s; i++){
+            bitmap_send_merged[this->next_step][i] = 1;            
+        }
+        memset(bitmap_recv_merged[this->next_step], 0, sizeof(char)*this->size);
+        for(size_t i = this->min_block_r; i < this->max_block_r; i++){
+            bitmap_recv_merged[this->next_step][i] = 1;
+        }
+    }else{
+        char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        for(size_t d = 0; d < this->dimensions_num; d++){
+            bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
+            bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
+        }        
+        int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
+        this->scc.retrieve_coord_mapping(this->peers[this->next_step], false, coord_peer);
 
-        char* tmp_s = (char*) malloc(sizeof(char)*this->size);
-        char* tmp_r = (char*) malloc(sizeof(char)*this->size);
-        memcpy(tmp_s, bitmap_send_merged[this->next_step], sizeof(char)*this->size);
-        memcpy(tmp_r, bitmap_recv_merged[this->next_step], sizeof(char)*this->size);
-        for(size_t i = 0; i < (uint) this->size; i++){
-            bitmap_send_merged[this->next_step][this->remapping[i]] = tmp_s[i];
-            bitmap_recv_merged[this->next_step][this->remapping[i]] = tmp_r[i];
+        get_blocks_bitmaps_multid(this->next_step, 
+                                coord_peer, bitmap_send, 
+                                bitmap_recv, bitmap_send_merged[this->next_step], bitmap_recv_merged[this->next_step], 
+                                coord_mine);
+        for(size_t d = 0; d < this->dimensions_num; d++){
+            free(bitmap_send[d]);
+            free(bitmap_recv[d]);
         }
-        if(bitmap_tmp){
-            free(bitmap_tmp);
-        }
-        free(tmp_s);
-        free(tmp_r);    
-    }
-#ifdef DEBUG
-    //print_bitmaps(info, step, bitmap_send_merged[step], bitmap_recv_merged[step]);
-#endif
-    for(size_t d = 0; d < this->dimensions_num; d++){
-        free(bitmap_send[d]);
-        free(bitmap_recv[d]);
     }
     ++this->next_step;
 }
@@ -1420,7 +1378,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     // Create bitmap calculators if not already created
     for(size_t p = 0; p < this->num_ports; p++){
         if(this->sbc[p] == NULL){
-            this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, p, (algo == ALGO_SWING_B_UTOFU || algo == ALGO_SWING_B_CONT));
+            this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, p, (algo == ALGO_SWING_B_UTOFU || algo == ALGO_SWING_B_CONT) && is_power_of_two(this->size));
         }
     }
     
@@ -1625,8 +1583,77 @@ ChunkParams SwingBitmapCalculator::get_chunk_params(uint step, CollType coll_typ
 }
 
 
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
+    // For the other ports reflect along the axis
+    if(port >= dimensions_num){
+        rank = -rank + num_ranks;
+    }
+    binary_to_negabinary(rank);
+    uint32_t nba = -1, nbb = -1;
+    size_t num_bits = ceil(log2(num_ranks));
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = binary_to_negabinary(rank);
+        }
+        if(in_range(rank - num_ranks, num_bits)){
+            nbb = binary_to_negabinary(rank - num_ranks);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = binary_to_negabinary(-rank);
+        }
+        if(in_range(-rank + num_ranks, num_bits)){
+            nbb = binary_to_negabinary(-rank + num_ranks);
+        }
+    }
+    assert(nba != -1 || nbb != -1);
+
+    if(nba == -1 && nbb != -1){
+        return nbb;
+    }else if(nba != -1 && nbb == -1){
+        return nba;
+    }else{ // Check MSB
+        if(nba & (80000000 >> (32 - num_bits))){
+            return nba;
+        }else{
+            return nbb;
+        }
+    }
+}
+
+static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
+    uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank, port, dimensions_num);    
+    remap_rank = remap_rank ^ (remap_rank >> 1);
+    size_t num_bits = ceil(log2(num_ranks));
+    remap_rank = reverse(remap_rank) >> (32 - num_bits);
+    return remap_rank;
+}
+
+void SwingBitmapCalculator::dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found){
+    for(size_t i = step; i < num_steps; i++){
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        get_peer(coord_rank, i, peer_rank);
+        dfs(peer_rank, i + 1, num_steps, target_rank, remap_rank, found);
+    }
+    if(*found){
+        (*remap_rank)--;
+    }
+    if(memcmp(coord_rank, target_rank, sizeof(int)*dimensions_num) == 0){
+        *found = true;
+    }
+}
+
 SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks):
-         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), next_step(0){
+         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), next_step(0), rank(rank){
     this->size = 1;
     this->num_steps = 0;
     for (uint i = 0; i < dimensions_num; i++) {
@@ -1639,7 +1666,20 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         assert("Max steps limit must be increased and constants updated.");
     }
     this->dimensions_num = dimensions_num;
-    this->remapping = NULL;
+    if(remap_blocks){
+        // Compute the remapped rank
+        //this->remapped_rank = remap_rank(this->size, rank, port, dimensions_num);
+        this->remapped_rank = this->size - 1;
+        int coord_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        this->scc.getCoordFromId(0, false, coord_rank);
+        int my_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        this->scc.getCoordFromId(rank, false, my_rank);
+        bool found = false;
+        dfs(coord_rank, 0, this->num_steps, my_rank, &(this->remapped_rank), &found);
+        assert(found);
+        this->min_block_r = this->min_block_s = 0;
+        this->max_block_r = this->max_block_s = this->size;
+    }
 
     this->peers = (uint*) malloc(sizeof(uint)*this->num_steps);
     bitmap_send_merged = (char**) malloc(sizeof(char*)*this->num_steps);
@@ -1675,10 +1715,6 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
         }
         free(reference_valid_distances[d]);
         free(num_valid_distances[d]);
-    }
-
-    if(this->remapping != NULL){
-        free(this->remapping); 
     }
 
     for(size_t s = 0; s < (uint) this->num_steps; s++){

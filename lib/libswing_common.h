@@ -142,7 +142,9 @@ class SwingBitmapCalculator {
         uint* peers; // Peers per step, computed on the original, non-shrinked topology.
         int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
-        uint* remapping;
+        int rank;
+        uint32_t remapped_rank;
+        size_t min_block_s, min_block_r, max_block_s, max_block_r;
         SwingCoordConverter scc;
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
@@ -174,6 +176,14 @@ class SwingBitmapCalculator {
         // @param coord_peer (OUT): the coordinates of the peer
         void get_peer(int* coord_rank, size_t step, int* coord_peer);
 
+        // Finds the remapped rank of a given rank.
+        // @param coord_rank (IN): It is always rank 0
+        // @param step (IN): the step. It must be 0.
+        // @param num_steps (IN): the number of steps
+        // @param target_rank (IN): the rank to find
+        // @param remap_rank (OUT): the remapped rank
+        // @param found (OUT): if true, the rank was found
+        void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found); 
 
         // Computes the bitmaps for the next step (assuming reduce_scatter)
         void compute_next_bitmaps();
@@ -186,7 +196,6 @@ class SwingBitmapCalculator {
                                        char** bitmap_send, char** bitmap_recv, 
                                        char* bitmap_send_merged, char* bitmap_recv_merged, 
                                        int* coord_mine, size_t* next_step_per_dim = NULL, size_t* current_d = NULL);
-        void remap(const std::vector<int>& nodes, uint start_range, uint end_range, int step, int* coord_rank, char* bitmap_tmp);        
     public:
         // Constructor
         // @param rank (IN): the rank
