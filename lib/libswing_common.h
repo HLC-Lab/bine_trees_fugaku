@@ -192,7 +192,7 @@ class SwingBitmapCalculator {
         // @param step (IN): the step. 
         // @param num_steps (IN): the number of steps
         // @param block_step (OUT): the array of steps at which each block must be sent
-        void compute_block_step(int* coord_rank, size_t starting_step, size_t step, size_t num_steps, uint32_t* block_step, uint32_t* arrival_step);
+        void compute_block_step(int* coord_rank, size_t starting_step, size_t step, size_t num_steps, uint32_t* block_step);
 
         // Computes the bitmaps for the next step (assuming reduce_scatter)
         void compute_next_bitmaps();
