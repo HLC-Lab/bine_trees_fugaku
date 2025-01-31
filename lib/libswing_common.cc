@@ -1279,13 +1279,33 @@ void SwingBitmapCalculator::compute_bitmaps(uint step, CollType coll_type){
     }
 }
 
+void SwingBitmapCalculator::compute_block_step(int* coord_rank, size_t starting_step, size_t step, size_t num_steps, uint32_t* block_step, uint32_t* arrival_step){
+    if(step < num_steps){
+        for(size_t i = step + 1; i < num_steps; i++){
+            int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+            get_peer(coord_rank, i, peer_rank);
+            compute_block_step(peer_rank, starting_step, i, num_steps, block_step, arrival_step);
+        }
+        uint rank = scc.getIdFromCoord(coord_rank, false);
+        if(block_step[rank] == num_steps || step >= arrival_step[rank]){
+            if(this->rank == 0){
+                printf("Setting block_step[%d] to %d and arrival_step[%d] to %d\n", rank, starting_step, rank, step);
+            }
+            block_step[rank] = starting_step;
+            arrival_step[rank] = step;
+        }
+    }
+}
+
 void SwingBitmapCalculator::compute_next_bitmaps(){
     if(this->next_step >= this->num_steps){
         return;
     }                       
     bitmap_send_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
     bitmap_recv_merged[this->next_step] = (char*) malloc(sizeof(char)*this->size);
-    
+    memset(bitmap_send_merged[this->next_step], 0, sizeof(char)*this->size);
+    memset(bitmap_recv_merged[this->next_step], 0, sizeof(char)*this->size);
+
     /*************/
     /* REMAPPING */
     /*************/
@@ -1293,7 +1313,7 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
         // We always assume reduce_scatter
         this->min_block_s = this->min_block_r;
         this->max_block_s = this->max_block_r;
-        size_t middle = (this->min_block_r + this->max_block_r + 1) / 2; // = min + (max-min)/2
+        size_t middle = (this->min_block_r + this->max_block_r + 1) / 2; // == min + (max - min) / 2
         if(this->remapped_rank < middle){
             this->min_block_s = middle;
             this->max_block_r = middle;
@@ -1301,31 +1321,52 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
             this->max_block_s = middle;
             this->min_block_r = middle;
         }
-        memset(bitmap_send_merged[this->next_step], 0, sizeof(char)*this->size);
         for(size_t i = this->min_block_s; i < this->max_block_s; i++){
             bitmap_send_merged[this->next_step][i] = 1;            
-        }
-        memset(bitmap_recv_merged[this->next_step], 0, sizeof(char)*this->size);
+        }        
         for(size_t i = this->min_block_r; i < this->max_block_r; i++){
             bitmap_recv_merged[this->next_step][i] = 1;
         }
     }else{
-        char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        for(size_t d = 0; d < this->dimensions_num; d++){
-            bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
-            bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
-        }        
-        int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];   
-        this->scc.retrieve_coord_mapping(this->peers[this->next_step], false, coord_peer);
+        for(size_t i = 0; i < this->size; i++){
+            // I am gonna send the blocks that I need to send at this step...
+            if(block_step[i] == this->next_step){
+                bitmap_send_merged[this->next_step][i] = 1;
+                //printf("[%d] Sending block %d at step %d\n", this->rank, i, this->next_step);
+            }
+            // ... and receive all those that my peer is going to send at this step.
+            // To know which are those without computing them from scratch everytime,
+            // I can make the following observations:
+            // - If rank 0 sends block i, rank 1 sends block (1-i) % num_ranks
+            // - If rank 1 sends block i, rank 0 sends block (1-i) % num_ranks
+            // - If rank 0 sends a block i, rank 0+k sends block (i+k) % num_ranks (for k even)
+            // - If rank 1 sends a block i, rank 1+k sends block (i+k) % num_ranks (for k even)
+            //
+            // Recall that even ranks only communicate with odd ranks (and vice-versa).
+            // Let's assume r sends to q. If r is even, we first try to understand which block 0 sends
+            // and from the blocks 0 sends, we can determine the blocks 1 sends, and thus the blocks q sends
+            size_t block_sent_by_peer;
+            if(rank % 2 == 0){
+                // I receive block i if my peer (r) sends block i
+                // r (odd) sends block i, iff 1 sends block (i - (r - 1)) % num_ranks
+                // 1 sends block j, iff 0 sends block (1-j) % num_ranks
+                // 0 sends block k, iff I send block (k + rank) % num_ranks
+                size_t block_sent_by_1 = mod((i - (get_peer(this->next_step, SWING_REDUCE_SCATTER) - 1)), this->size);
+                size_t block_sent_by_0 = mod((1 - block_sent_by_1), this->size);
+                block_sent_by_peer = mod((block_sent_by_0 + rank), this->size);
+            }else{
+                // I receive block i if my peer (r) sends block i
+                // r (even) sends block i, iff 0 sends block (i - r) % num_ranks
+                // 0 sends block j, iff 1 sends block (1-j) % num_ranks
+                // 1 sends block k, iff I send block (k + rank - 1) % num_ranks                
+                size_t block_sent_by_0 = mod((i - get_peer(this->next_step, SWING_REDUCE_SCATTER)), this->size);
+                size_t block_sent_by_1 = mod((1 - block_sent_by_0), this->size);
+                block_sent_by_peer = mod((block_sent_by_1 + rank - 1), this->size);
+            }
 
-        get_blocks_bitmaps_multid(this->next_step, 
-                                coord_peer, bitmap_send, 
-                                bitmap_recv, bitmap_send_merged[this->next_step], bitmap_recv_merged[this->next_step], 
-                                coord_mine);
-        for(size_t d = 0; d < this->dimensions_num; d++){
-            free(bitmap_send[d]);
-            free(bitmap_recv[d]);
+            if(block_step[block_sent_by_peer] == this->next_step){
+                bitmap_recv_merged[this->next_step][i] = 1;
+            }
         }
     }
     ++this->next_step;
@@ -1666,9 +1707,18 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         assert("Max steps limit must be increased and constants updated.");
     }
     this->dimensions_num = dimensions_num;
+
+    this->peers = (uint*) malloc(sizeof(uint)*this->num_steps);
+    bitmap_send_merged = (char**) malloc(sizeof(char*)*this->num_steps);
+    bitmap_recv_merged = (char**) malloc(sizeof(char*)*this->num_steps);                                          
+    memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
+    current_d = this->port % dimensions_num;
+    compute_peers(this->port, rank, false, this->peers, this->dimensions, this->dimensions_num, this->scc);
+    this->scc.getCoordFromId(rank, false, coord_mine);
+
+    /* Decide when each block must be sent. */
     if(remap_blocks){
         // Compute the remapped rank
-        //this->remapped_rank = remap_rank(this->size, rank, port, dimensions_num);
         this->remapped_rank = this->size - 1;
         int coord_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         this->scc.getCoordFromId(0, false, coord_rank);
@@ -1679,15 +1729,55 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         assert(found);
         this->min_block_r = this->min_block_s = 0;
         this->max_block_r = this->max_block_s = this->size;
-    }
+    }else{
+        block_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+        for(size_t i = 0; i < this->size; i++){
+            block_step[i] = this->num_steps;
+        }
+        uint32_t* arrival_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+        memset(arrival_step, 0, sizeof(uint32_t)*this->size);
+        if(is_power_of_two(this->size)){
+            for(size_t i = 0; i < this->num_steps; i++){
+                int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                get_peer(coord_mine, i, peer_rank);
+                compute_block_step(peer_rank, i, i, this->num_steps, block_step, arrival_step);
+            }
+        }else{
+#if 0
+            // If it is not a power of 2, we need to stop one step before
+            // Then, take all the unreached nodes, and reach those in the last step.
+            // It means that it is enough to see whom they are talking to in the last step,
+            // and to use as the block step the same as those peers.
 
-    this->peers = (uint*) malloc(sizeof(uint)*this->num_steps);
-    bitmap_send_merged = (char**) malloc(sizeof(char*)*this->num_steps);
-    bitmap_recv_merged = (char**) malloc(sizeof(char*)*this->num_steps);                                          
-    memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
-    current_d = this->port % dimensions_num;
-    compute_peers(this->port, rank, false, this->peers, this->dimensions, this->dimensions_num, this->scc);
-    this->scc.getCoordFromId(rank, false, coord_mine);
+            for(size_t i = 0; i < this->num_steps - 1; i++){ // By doing num_steps - 1, I also mark the node I am going to reach in the last step as unreached (I might still reach it twice)
+                int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                get_peer(coord_mine, i, peer_rank);
+                compute_block_step(peer_rank, i, i, this->num_steps - 1, block_step);
+            }
+            for(size_t i = 0; i < this->size; i++){
+                if(block_step[i] == this->num_steps && i != rank){ // (of course I'll never reach myself)                    
+                    int coord_i[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                    int coord_i_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                    scc.getCoordFromId(i, false, coord_i);
+                    get_peer(coord_i, this->num_steps - 1, coord_i_peer);
+                    int i_peer = scc.getIdFromCoord(coord_i_peer, false);
+                    if(i_peer == rank){ // If the rank is the one that I was supposed to reach in the last step, I set it accordingly (if I do = block_step[i_peer] that would be equal to num_steps whereas it should be num_steps - 1)
+                        block_step[i] = this->num_steps - 1;
+                    }else{
+                        block_step[i] = block_step[i_peer];
+                    }
+                }
+            }
+#endif            
+            for(size_t i = 0; i < this->num_steps; i++){
+                int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                get_peer(coord_mine, i, peer_rank);
+                compute_block_step(peer_rank, i, i, this->num_steps, block_step, arrival_step);
+            }
+            block_step[rank] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
+        }
+        free(arrival_step);
+    }
 
     /*************************/
     /* Distances calculation */
@@ -1723,5 +1813,8 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     }
     free(bitmap_send_merged);
     free(bitmap_recv_merged);
+    if(block_step){
+        free(block_step);
+    }
 }
 

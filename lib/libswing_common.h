@@ -148,6 +148,7 @@ class SwingBitmapCalculator {
         SwingCoordConverter scc;
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
+        uint32_t* block_step;
 
         ChunkParams chunk_params[LIBSWING_MAX_STEPS];
         bool valid_chunk_params[LIBSWING_MAX_STEPS];
@@ -184,6 +185,14 @@ class SwingBitmapCalculator {
         // @param remap_rank (OUT): the remapped rank
         // @param found (OUT): if true, the rank was found
         void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found); 
+
+        // Computes the step at which each block must be sent.
+        // @param coord_rank (IN): the coordinates of the rank
+        // @param starting_step (IN): the starting step. 
+        // @param step (IN): the step. 
+        // @param num_steps (IN): the number of steps
+        // @param block_step (OUT): the array of steps at which each block must be sent
+        void compute_block_step(int* coord_rank, size_t starting_step, size_t step, size_t num_steps, uint32_t* block_step, uint32_t* arrival_step);
 
         // Computes the bitmaps for the next step (assuming reduce_scatter)
         void compute_next_bitmaps();
