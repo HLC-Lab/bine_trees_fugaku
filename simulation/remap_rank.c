@@ -62,15 +62,17 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
     }
 }
 
+static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank){
+    uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank);    
+    remap_rank = remap_rank ^ (remap_rank >> 1);
+    size_t num_bits = ceil(log2(num_ranks));
+    remap_rank = reverse(remap_rank) >> (32 - num_bits);
+    return remap_rank;
+}
+
 int main(int argc, char** argv){
     uint32_t num_ranks = atoi(argv[1]);
     uint32_t rank = atoi(argv[2]);    
-    uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank);
-    printf("%d\n", remap_rank);
-    remap_rank = remap_rank ^ (remap_rank >> 1);
-    printf("%d\n", remap_rank);
-    size_t num_bits = ceil(log2(num_ranks));
-    remap_rank = reverse(remap_rank) >> (32 - num_bits);
-    printf("rank: %u, remap_rank: %u\n", rank, remap_rank);
+    printf("rank: %u, remap_rank: %u\n", rank, remap_rank(num_ranks, rank));
     return 0;
 }
