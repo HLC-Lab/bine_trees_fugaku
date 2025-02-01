@@ -1000,88 +1000,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 }
 #endif
 
-
-// Returns an array of valid distances (considering a plain collective on an even node)
-void SwingBitmapCalculator::compute_valid_distances(uint d, int step){
-    int max_steps = this->num_steps_per_dim[d];
-    int size = this->dimensions[d];
-    size_t max_num_blocks = pow(2, (max_steps - step - 1));
-    this->num_valid_distances[d][step] = 0;
-    // Generate all binary strings with a 0 in position step+1 and a 1 in all the bits in position j (j <= step)
-    for(size_t i = 0; i < max_num_blocks; i++){
-        if(!(i & 0x1)){ // Only if it has a 0 as LSB (we generate in one shot bot the string with LSB=0 and that with LSB=1)         
-            int nbin[2]; // At position 0, we have the numbers with 0 as LSB, at position 1, the numbers with 1 as LSB
-            nbin[1] = (i << (step + 1)) | ((1 << (step + 1)) - 1); // LSB=1
-            nbin[0] = ~nbin[1]          & ((1 <<  max_steps) - 1); // LSB=0
-            
-            int distance[2] = {negabinary_to_binary(nbin[0]),  // At position 0, we have the numbers with 0 as LSB, 
-                               negabinary_to_binary(nbin[1])}; // at position 1, the numbers with 1 as LSB.
-            char distance_valid_tmp[2] = {1, 1};
-            if(!is_power_of_two(size)){ // If size is not a power of two, I need to check for alternative ways of reaching a given distance, to avoid reaching it twice
-                for(size_t q = 0; q < 2; q++){                                     
-                    // We know that the distance, when size is not a power of two, can be in the range (-2*size, 2*size)
-                    // Thus, there are 4 different negabinary numbers that, modulo size, could give the same distance.
-                    // We need to check all the other three alternatives.
-                    int alternatives[3];
-                    if(distance[q] > size && distance[q] < 2*size){
-                        alternatives[0] = distance[q] - size;
-                        alternatives[1] = distance[q] - 2*size;
-                        alternatives[2] = distance[q] - 3*size;
-                    }else if(distance[q] > 0 && distance[q] < size){
-                        alternatives[0] = distance[q] + size;
-                        alternatives[1] = distance[q] - size;
-                        alternatives[2] = distance[q] - 2*size;
-                    }else if(distance[q] < 0 && distance[q] > -size){
-                        alternatives[0] = distance[q] + 2*size;
-                        alternatives[1] = distance[q] + size;
-                        alternatives[2] = distance[q] - size;
-                    }else if(distance[q] < -size && distance[q] > -2*size){
-                        alternatives[0] = distance[q] + 3*size;
-                        alternatives[1] = distance[q] + 2*size;
-                        alternatives[2] = distance[q] + size;
-                    }else{
-                         // distance[q] % size == 0
-#ifdef DEBUG
-                        assert(distance[q] >= -2*size && distance[q] <= 2*size);
-                        assert(distance[q] % size == 0);
-#endif                        
-                        distance_valid_tmp[q] = 0;
-                        continue;
-                    }
-
-                    for(size_t k = 0; k < 3; k++){
-                        if(in_range(alternatives[k], max_steps)){ // First of all, check if the corresponding negabinary number can be represented with the given number of bits
-                            int nbin_alt = binary_to_negabinary(alternatives[k]);
-                            int first_step_alt = get_first_step(nbin_alt);
-                            if(first_step_alt != step && first_step_alt > get_first_step(nbin[q])){
-                                distance_valid_tmp[q] = 0;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }else{
-                // I still need to check that distance[q] % size != 0
-                for(size_t q = 0; q < 2; q++){ 
-                    if(mod(distance[q], size) == 0){
-                        distance_valid_tmp[q] = 0;
-                    }
-                }
-            }
-
-            if(distance_valid_tmp[0]){
-                this->reference_valid_distances[d][step][this->num_valid_distances[d][step]] = -distance[0]; // Subtract form r all the strings with LSB=0
-                this->num_valid_distances[d][step]++;
-            }
-
-            if(distance_valid_tmp[1]){
-                this->reference_valid_distances[d][step][this->num_valid_distances[d][step]] = +distance[1]; // Sum to r all the strings with LSB=1
-                this->num_valid_distances[d][step]++;
-            }            
-        }
-    }
-}
-
 int SwingBitmapCalculator::get_distance_sign(size_t rank, size_t port){
     int multiplier = 1;
     if(is_odd(rank)){ // Invert sign if odd rank
@@ -1092,135 +1010,6 @@ int SwingBitmapCalculator::get_distance_sign(size_t rank, size_t port){
     }
     return multiplier;
 }
-
-void SwingBitmapCalculator::get_blocks_bitmaps_multid(size_t step,
-                                                      int* coord_peer, char** bitmap_send, 
-                                                      char** bitmap_recv, char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                                      int* coord_mine, size_t* next_step_per_dim, size_t *current_d){
-    if(next_step_per_dim == NULL){
-        next_step_per_dim = this->next_step_per_dim;
-    }    
-    if(current_d == NULL){
-        current_d = &(this->current_d);
-    }
-    // Compute the bitmap for each dimension
-    for(size_t k = 0; k < this->dimensions_num; k++){
-        size_t d = (k + *current_d) % this->dimensions_num;
-
-        memset(bitmap_send[d], 0, sizeof(char)*this->dimensions[d]);
-        memset(bitmap_recv[d], 0, sizeof(char)*this->dimensions[d]);
-
-        // To deal with the case where I don't move in that dimension.
-        // e.g. if I send on the row dimension to a node with ID 0001,
-        // (i.e., I send on the first step on the row, and never on the column (00))
-        if(k){
-            bitmap_send[d][coord_mine[d]] = 1;
-            bitmap_recv[d][coord_peer[d]] = 1;
-        }
-                        
-        // We skip dimension d if we are done with that dimension.
-        if(next_step_per_dim[d] >= this->num_steps_per_dim[d]){
-            continue;
-        }     
-                    
-        size_t last_step;
-        if(k == 0){
-            last_step = next_step_per_dim[d] + 1;
-        }else{
-            last_step = this->num_steps_per_dim[d];
-        }
-
-        //DPRINTF("[%d] step %d port %d target dim %d rel step %d last step %d\n", this->rank, step, p, d, rel_step, last_step);                
-        int sign_mine = get_distance_sign(coord_mine[d], port);
-        int sign_peer = get_distance_sign(coord_peer[d], port);
-        for(size_t sk = next_step_per_dim[d]; sk < last_step; sk++){
-            // Compute bitmaps for coord_mine and coord_peer. 
-            // I just need to adjust the distance according to the port 
-            // and oddness of the node (reflected in the sign variables).
-            for(size_t i = 0; i < (uint) this->num_valid_distances[d][sk]; i++){
-                int distance = this->reference_valid_distances[d][sk][i];
-                int distance_mine = sign_mine*distance;
-                int distance_peer = sign_peer*distance;
-                bitmap_send[d][mod(coord_mine[d] + distance_mine, dimensions[d])] = 1;
-                bitmap_recv[d][mod(coord_peer[d] + distance_peer, dimensions[d])] = 1;
-            }
-        }
-    }
-
-    // Combine the per-dimension bitmaps
-    int coord_block[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
-    for(size_t i = 0; i < (uint) this->size; i++){
-        this->scc.retrieve_coord_mapping(i, false, coord_block);
-        //DPRINTF("[%d] Step %d Peer (%d, %d) Block %d coord (%d,%d) bitmap send (%d,%d)\n", this->rank, step, coord_peer[0], coord_peer[1], i, coord_block[0], coord_block[1], bitmap_send[0][coord_block[0]], bitmap_send[1][coord_block[1]]);
-        char set_s = 1, set_r = 1;
-        for(size_t d = 0; d < dimensions_num; d++){
-            set_s &= bitmap_send[d][coord_block[d]];
-            set_r &= bitmap_recv[d][coord_block[d]];
-        }
-
-        if(bitmap_send_merged){ // I can decide to retrieve only the send or only the recv bitmap
-            bitmap_send_merged[i] = set_s;
-        }
-
-        if(bitmap_recv_merged){ // I can decide to retrieve only the send or only the recv bitmap
-            bitmap_recv_merged[i] = set_r;
-        }
-    }
-
-    // Move to the next dimension for the next step
-    if(step < (size_t) this->num_steps - 1){
-        size_t d = *current_d;              
-        // Increase the next step, unless we are done with this dimension
-        if(next_step_per_dim[d] < this->num_steps_per_dim[d]){ 
-            next_step_per_dim[d] += 1;
-        }
-        
-        // Select next dimension
-        do{ 
-            *current_d = (*current_d + 1) % dimensions_num;
-            d = *current_d;
-        }while(next_step_per_dim[d] >= this->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
-    }
-}
-
-
-// Same as the one above, but we compute next_step_per_dim and current_d on the fly so that we do not need to do bookeping
-void SwingBitmapCalculator::get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
-                                                      char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                                      int* coord_mine){
-    size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    size_t current_d;
-    char* bitmap_send[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    char* bitmap_recv[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
-    for(size_t d = 0; d < dimensions_num; d++){
-        bitmap_send[d] = (char*) malloc(sizeof(char)*dimensions[d]);
-        bitmap_recv[d] = (char*) malloc(sizeof(char)*dimensions[d]);   
-    }
-
-    current_d = port % dimensions_num;
-    memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
-
-    for(size_t i = 0; i < step; i++){
-        // Move to the next dimension for the next step
-        size_t d = current_d;              
-        // Increase the next step, unless we are done with this dimension
-        if(next_step_per_dim[d] < this->num_steps_per_dim[d]){ 
-            next_step_per_dim[d] += 1;
-        }
-        
-        // Select next dimension
-        do{ 
-            current_d = (current_d + 1) % dimensions_num;
-            d = current_d;
-        }while(next_step_per_dim[d] >= this->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
-    }
-    get_blocks_bitmaps_multid(step, coord_peer, bitmap_send, bitmap_recv, bitmap_send_merged, bitmap_recv_merged, coord_mine, next_step_per_dim, &current_d);
-    for(size_t d = 0; d < dimensions_num; d++){
-        free(bitmap_send[d]);
-        free(bitmap_recv[d]);   
-    }
-}
-
 
 #ifdef DEBUG
 /*
@@ -1765,34 +1554,11 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         }
         block_step[rank] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
     }
-
-    /*************************/
-    /* Distances calculation */
-    /*************************/
-    // For each dimension, and each step (relative to that dimension), 
-    // we compute all the valid distances at that step (considering a plain collective on an even node)
-    for(size_t d = 0; d < dimensions_num; d++){
-        this->num_valid_distances[d] = (uint*) malloc(sizeof(uint)*this->num_steps);
-        this->reference_valid_distances[d] = (int**) malloc(sizeof(int*)*this->num_steps);
-        memset(this->reference_valid_distances[d], 0, sizeof(int*)*this->num_steps);            
-        for(size_t sk = 0; sk < (uint) this->num_steps; sk++){
-            this->reference_valid_distances[d][sk] = (int*) malloc(sizeof(int)*this->size);
-            compute_valid_distances(d, sk);
-        }
-    }
     memset(valid_chunk_params, 0, sizeof(valid_chunk_params));
 }
 
 SwingBitmapCalculator::~SwingBitmapCalculator(){
     free(this->peers);
-
-    for(size_t d = 0; d < this->dimensions_num; d++){
-        for(size_t i = 0; i < this->num_steps_per_dim[d]; i++){
-            free(reference_valid_distances[d][i]);
-        }
-        free(reference_valid_distances[d]);
-        free(num_valid_distances[d]);
-    }
 
     for(size_t s = 0; s < (uint) this->num_steps; s++){
         free(bitmap_send_merged[s]);

@@ -140,8 +140,6 @@ class SwingBitmapCalculator {
         char** bitmap_recv_merged;
 
         uint* peers; // Peers per step, computed on the original, non-shrinked topology.
-        int** reference_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        uint* num_valid_distances[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         int rank;
         uint32_t remapped_rank;
         size_t min_block_s, min_block_r, max_block_s, max_block_r;
@@ -196,15 +194,6 @@ class SwingBitmapCalculator {
 
         // Computes the bitmaps for the next step (assuming reduce_scatter)
         void compute_next_bitmaps();
-
-        // Magic support functions (TODO: Document)
-        void get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
-                                       char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                       int* coord_mine);
-        void get_blocks_bitmaps_multid(size_t step, int* coord_peer, 
-                                       char** bitmap_send, char** bitmap_recv, 
-                                       char* bitmap_send_merged, char* bitmap_recv_merged, 
-                                       int* coord_mine, size_t* next_step_per_dim = NULL, size_t* current_d = NULL);
     public:
         // Constructor
         // @param rank (IN): the rank
