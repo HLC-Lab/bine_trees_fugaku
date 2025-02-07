@@ -1120,32 +1120,39 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
             bitmap_recv_merged[this->next_step][i] = 1;
         }
     }else{
+        // To know what to receive, I must know what my peer is going to send
+        uint32_t* peer_block_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+        for(size_t i = 0; i < this->size; i++){
+            peer_block_step[i] = this->num_steps;
+        }
+        uint peer = get_peer(this->next_step, SWING_REDUCE_SCATTER);
+        int peer_coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        scc.getCoordFromId(peer, false, peer_coord);
+
+        for(size_t j = this->next_step; j < this->num_steps; j++){
+            int peer_peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+            get_peer(peer_coord, j, peer_peer_rank);
+            compute_block_step(peer_peer_rank, j, j, this->num_steps, peer_block_step);
+        }
+
+        peer_block_step[peer] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
         for(size_t i = 0; i < this->size; i++){
             // I am gonna send the blocks that I need to send at this step...
             if(block_step[i] == this->next_step){
                 bitmap_send_merged[this->next_step][i] = 1;
             }
-
-            uint32_t* peer_block_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-            for(size_t i = 0; i < this->size; i++){
-                peer_block_step[i] = this->num_steps;
-            }
-            uint peer = get_peer(this->next_step, SWING_REDUCE_SCATTER);
-            int peer_coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            scc.getCoordFromId(peer, false, peer_coord);
-
-            for(size_t j = this->next_step; j < this->num_steps; j++){
-                int peer_peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-                get_peer(peer_coord, j, peer_peer_rank);
-                compute_block_step(peer_peer_rank, j, j, this->num_steps, peer_block_step);
-            }
-
-            peer_block_step[peer] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
             if(peer_block_step[i] == this->next_step){
                 bitmap_recv_merged[this->next_step][i] = 1;
-            }
-            free(peer_block_step);
+            }            
+        }
+        free(peer_block_step);
 #if 0
+        // TODO: The following only work for 1D. For multidimensional would be more complicated/messy
+
+        // For the way Swing works, communications between nodes never happen "in diagonal", i.e.,
+        // the coordinates of two communicating nodes differ at most for the coordinate of one and
+        // only one dimension. So we just need to adjust that dimension to know what to send/receive.
+        for(size_t i = 0; i < this->size; i++){
             // ... and receive all those that my peer is going to send at this step.
             // To know which are those without computing them from scratch everytime,
             // I can make the following observations:
@@ -1179,8 +1186,8 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
             if(block_step[block_sent_by_peer] == this->next_step){
                 bitmap_recv_merged[this->next_step][i] = 1;
             }
-#endif
         }
+#endif
     }
     ++this->next_step;
 }
