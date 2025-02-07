@@ -121,10 +121,10 @@ class SwingCoordConverter {
 
 
 typedef struct{
-    size_t send_offset;
-    size_t send_count;
-    size_t recv_offset;
-    size_t recv_count;
+    size_t send_offset; // In bytes
+    size_t send_count; // In number of elements
+    size_t recv_offset; // In bytes
+    size_t recv_count; // In number of elements
 }ChunkParams;
 
 class SwingBitmapCalculator {
@@ -133,11 +133,16 @@ class SwingBitmapCalculator {
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint dimensions_num; 
         uint port;
+        BlockInfo** blocks_info;
         uint size;
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint num_steps;
+
+        // I use either bitmaps or chunk params
+        // depending on whether I can send contiguous blocks or not
         char** bitmap_send_merged;
         char** bitmap_recv_merged;
+        ChunkParams* chunk_params_per_step; // For each step, the chunk params 
 
         uint* peers; // Peers per step, computed on the original, non-shrinked topology.
         int rank;
@@ -147,13 +152,8 @@ class SwingBitmapCalculator {
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         uint32_t* block_step;
-
-        ChunkParams chunk_params[LIBSWING_MAX_STEPS];
-        bool valid_chunk_params[LIBSWING_MAX_STEPS];
         
         size_t next_step; 
-        size_t current_d; // What's the current dimension we are sending in.
-        size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // For each port and for each dimension, what's the next step to execute in that dimension.
         volatile char padding2[CACHE_LINE_SIZE];
 
         // Computes an array of valid distances (considering a plain collective on an even node),
@@ -200,8 +200,9 @@ class SwingBitmapCalculator {
         // @param dimensions (IN): the dimensions of the torus
         // @param dimensions_num (IN): the number of dimensions
         // @param port (IN): the port the collective starts from
+        // @param blocks_info (IN): the blocks info
         // @param remap_blocks (IN): if true, the blocks are remapped to be contiguous
-        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks);
+        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks);
 
         // Destructor
         ~SwingBitmapCalculator();
@@ -235,7 +236,11 @@ class SwingBitmapCalculator {
         // @return true if the block must be received, false otherwise  
         bool block_must_be_recvd(uint step, CollType coll_type, uint block_id);
 
-        ChunkParams get_chunk_params(uint step, CollType coll_type, const BlockInfo *const *const blocks_info);
+        // Gets the chunk params for a given step.
+        // @param step (IN): the step
+        // @param coll_type (IN): the collective type
+        // @param chunk_params (OUT): the chunk params
+        void get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params);
 };
 
 class SwingCommon {
@@ -299,6 +304,22 @@ class SwingCommon {
         int swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                             
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type);
+
+                                      // Bandwidth-optimal Swing collective with contiguous blocks
+        // @param buf (IN): the sendbuf
+        // @param rbuf (OUT): the recvbuf
+        // @param blocks_info (IN): the blocks info
+        // @param step (IN): the step
+        // @param op (IN): the operation to perform
+        // @param comm (IN): the communicator
+        // @param sendtype (IN): the send datatype
+        // @param recvtype (IN): the recv datatype
+        // @param coll_type (IN): the collective type
+        // @param bitmap_send (IN): the bitmap of the send
+        // @param bitmap_recv (IN): the bitmap of the recv
+        int swing_coll_step_coalesce(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+            MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+            CollType coll_type);
 
         // Bandwidth-optimal Swing collective with contiguous blocks
         // @param buf (IN): the sendbuf

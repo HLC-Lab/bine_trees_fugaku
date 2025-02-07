@@ -1,6 +1,6 @@
 #!/bin/bash
 declare -a COLLECTIVES=("MPI_Allreduce" "MPI_Reduce_scatter" "MPI_Allgather")
-#declare -a COLLECTIVES=("MPI_Allreduce")
+#declare -a COLLECTIVES=("MPI_Allgather")
 COUNT=0
 
 for COLLECTIVE in "${COLLECTIVES[@]}"
@@ -8,6 +8,7 @@ do
     #Algos
     if [ ${COLLECTIVE} = "MPI_Allreduce" ]; then
         declare -a ALGORITHMS=("SWING_L" "SWING_B" "SWING_B_COALESCE" "SWING_B_CONT")
+        #declare -a ALGORITHMS=("SWING_B_CONT")
         declare -a COUNTS=("131072")
     fi
 

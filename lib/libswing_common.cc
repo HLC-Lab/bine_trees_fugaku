@@ -685,9 +685,9 @@ int SwingCommon::swing_coll_step_b(void *buf, void* tmpbuf, BlockInfo** blocks_i
     return res;
 }
 
-int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
-                                MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                CollType coll_type){
+int SwingCommon::swing_coll_step_coalesce(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
+                                          MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                                          CollType coll_type){
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     memset(requests_s, 0, sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
@@ -720,7 +720,7 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
         for(size_t i = 0; i < (uint) this->size; i++){
             bool send_block = sbc[port]->block_must_be_sent(step, coll_type, i);
             bool recv_block = sbc[port]->block_must_be_recvd(step, coll_type, i);
-            
+
             size_t block_count = blocks_info[port][i].count;
             size_t block_offset = blocks_info[port][i].offset;
 
@@ -777,16 +777,16 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
     if(coll_type == SWING_REDUCE_SCATTER){
 //#define ALWAYS_WAITALL
 #ifdef ALWAYS_WAITALL     
-      res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
+        res = MPI_Waitall(num_requests_r, requests_r, MPI_STATUSES_IGNORE);
 #endif
-      
+
         int index;
         for(size_t i = 0; i < num_requests_r; i++){
 #ifndef ALWAYS_WAITALL	  
             res = MPI_Waitany(num_requests_r, requests_r, &index, MPI_STATUS_IGNORE);	    
             if(res != MPI_SUCCESS){return res;}
 #else
-	        index = i;
+            index = i;
 #endif	    
             void* tmpbuf_block = (void*) (((char*) tmpbuf) + req_idx_to_block_idx[index].offset);
             void* buf_block = (void*) (((char*) buf) + req_idx_to_block_idx[index].offset);  
@@ -808,13 +808,91 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
     return res;
 }
 
+
+int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
+                                MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
+                                CollType coll_type){
+    MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
+    MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(requests_s, 0, sizeof(requests_s));
+    memset(requests_r, 0, sizeof(requests_r));
+    assert(sendtype == recvtype);
+    int dtsize;
+    MPI_Type_size(sendtype, &dtsize);    
+    int tag, res = MPI_SUCCESS;
+           
+    for(size_t port = 0; port < this->num_ports; port++){
+        if(step == 0){
+            sbc[port]->compute_bitmaps(0, coll_type);
+        }
+        uint peer = sbc[port]->get_peer(step, coll_type);
+        DPRINTF("[%d] Starting step %d on port %d (out of %d) peer %d\n", this->rank, step, port, this->num_ports, peer);                
+
+        if(coll_type == SWING_REDUCE_SCATTER){
+            tag = TAG_SWING_REDUCESCATTER + port;
+        }else{
+            tag = TAG_SWING_ALLGATHER + port;
+        }
+
+        ChunkParams cp;
+        sbc[port]->get_chunk_params(step, coll_type, &cp);
+
+        // Sendrecv 
+        res = MPI_Isend(((char*) buf) + cp.send_offset, cp.send_count, sendtype, peer, tag, comm, &(requests_s[port]));
+        if(res != MPI_SUCCESS){return res;}
+        res = MPI_Irecv(((char*) tmpbuf) + cp.recv_offset, cp.recv_count, recvtype, peer, tag, comm, &(requests_r[port]));
+        if(res != MPI_SUCCESS){return res;}
+    }
+    if(step < this->num_steps - 1){
+        for(size_t port = 0; port < this->num_ports; port++){
+            sbc[port]->compute_bitmaps(step + 1, coll_type);
+        }
+    }
+
+    // Wait for all the recvs to be over
+    if(coll_type == SWING_REDUCE_SCATTER){
+//#define ALWAYS_WAITALL
+#ifdef ALWAYS_WAITALL     
+        res = MPI_Waitall(this->num_ports, requests_r, MPI_STATUSES_IGNORE);
+#endif
+      
+        int port;
+        for(size_t i = 0; i < this->num_ports; i++){
+#ifndef ALWAYS_WAITALL	  
+            res = MPI_Waitany(this->num_ports, requests_r, &port, MPI_STATUS_IGNORE);	    
+            if(res != MPI_SUCCESS){return res;}
+#else
+            port = i;
+#endif	    
+            ChunkParams cp;
+            sbc[port]->get_chunk_params(step, coll_type, &cp);
+            void* tmpbuf_block = (void*) (((char*) tmpbuf) + cp.recv_offset);
+            void* buf_block = (void*) (((char*) buf) + cp.recv_offset);  
+            MPI_Reduce_local(tmpbuf_block, buf_block, cp.recv_count, sendtype, op); 
+        }
+    }else{
+        res = MPI_Waitall(this->num_ports, requests_r, MPI_STATUSES_IGNORE);
+        if(res != MPI_SUCCESS){return res;}            
+    }
+
+    // Wait for all the sends to be over    
+    res = MPI_Waitall(this->num_ports, requests_s, MPI_STATUSES_IGNORE);
+    return res;
+}
+
 int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
     if(algo == ALGO_SWING_B){
         return swing_coll_step_b(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
-    }else if(algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE){
-        return swing_coll_step_cont(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+    }else if(algo == ALGO_SWING_B_COALESCE){
+        return swing_coll_step_coalesce(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+    }else if(algo == ALGO_SWING_B_CONT){
+        if(is_power_of_two(this->size)){
+            return swing_coll_step_cont(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+        }else{
+            return swing_coll_step_coalesce(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+        }
     }else{
         assert("Unknown algo" == 0);
         return MPI_ERR_OTHER;
@@ -835,11 +913,10 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     }    
 
     timer.reset("== swing_coll_step_utofu (indexes calc)");
-    ChunkParams cp = sbc[port]->get_chunk_params(step, coll_type, blocks_info);
-    offsets_s = cp.send_offset;
-    counts_s = cp.send_count;
-    offsets_r = cp.recv_offset;
-    counts_r = cp.recv_count;
+    offsets_s = chunk_params_per_step.send_offset;
+    counts_s = chunk_params_per_step.send_count;
+    offsets_r = chunk_params_per_step.recv_offset;
+    counts_r = chunk_params_per_step.recv_count;
 
     timer.reset("== swing_coll_step_utofu (misc)");
     int dtsize;
@@ -1113,13 +1190,29 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
             this->max_block_s = middle;
             this->min_block_r = middle;
         }
+        
+        
+        chunk_params_per_step[this->next_step].send_offset = blocks_info[port][this->min_block_s].offset;
+        chunk_params_per_step[this->next_step].send_count = 0;
         for(size_t i = this->min_block_s; i < this->max_block_s; i++){
-            bitmap_send_merged[this->next_step][i] = 1;            
+            chunk_params_per_step[this->next_step].send_count += blocks_info[port][i].count;        
         }        
+
+        chunk_params_per_step[this->next_step].recv_offset = blocks_info[port][this->min_block_r].offset;
+        chunk_params_per_step[this->next_step].recv_count = 0;
         for(size_t i = this->min_block_r; i < this->max_block_r; i++){
-            bitmap_recv_merged[this->next_step][i] = 1;
+            chunk_params_per_step[this->next_step].recv_count += blocks_info[port][i].count;        
         }
+
+        DPRINTF("[%d] Chunk Params %d %d %d %d\n", rank, chunk_params_per_step[this->next_step].send_count, chunk_params_per_step[this->next_step].send_offset, chunk_params_per_step[this->next_step].recv_count, chunk_params_per_step[this->next_step].recv_offset);
     }else{
+        for(size_t i = 0; i < this->size; i++){
+            // I am gonna send the blocks that I need to send at this step...
+            if(block_step[i] == this->next_step){
+                bitmap_send_merged[this->next_step][i] = 1;
+            }
+        }
+#if 1
         // To know what to receive, I must know what my peer is going to send
         uint32_t* peer_block_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
         for(size_t i = 0; i < this->size; i++){
@@ -1137,16 +1230,12 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
 
         peer_block_step[peer] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
         for(size_t i = 0; i < this->size; i++){
-            // I am gonna send the blocks that I need to send at this step...
-            if(block_step[i] == this->next_step){
-                bitmap_send_merged[this->next_step][i] = 1;
-            }
             if(peer_block_step[i] == this->next_step){
                 bitmap_recv_merged[this->next_step][i] = 1;
             }            
         }
         free(peer_block_step);
-#if 0
+#else
         // TODO: The following only work for 1D. For multidimensional would be more complicated/messy
 
         // For the way Swing works, communications between nodes never happen "in diagonal", i.e.,
@@ -1239,7 +1328,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     // Create bitmap calculators if not already created
     for(size_t p = 0; p < this->num_ports; p++){
         if(this->sbc[p] == NULL){
-            this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, p, (algo == ALGO_SWING_B_UTOFU || algo == ALGO_SWING_B_CONT) && is_power_of_two(this->size));
+            this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, p, blocks_info, (algo == ALGO_SWING_B_UTOFU || algo == ALGO_SWING_B_CONT) && is_power_of_two(this->size));
         }
     }
     
@@ -1368,81 +1457,17 @@ bool SwingBitmapCalculator::block_must_be_recvd(uint step, CollType coll_type, u
     }
 }
 
-ChunkParams SwingBitmapCalculator::get_chunk_params(uint step, CollType coll_type, const BlockInfo *const *const blocks_info){
-    uint block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);
-    
-    if(!valid_chunk_params[block_step]){
-        ChunkParams cp;
-        bool start_found_s = false, start_found_r = false, chunk_sent = false, chunk_recvd = false;
-        size_t offset_s, offset_r, count_s = 0, count_r = 0;
-        for(size_t i = 0; i < (uint) this->size; i++){
-            bool send_block = block_must_be_sent(step, SWING_REDUCE_SCATTER, i);
-            bool recv_block = block_must_be_recvd(step, SWING_REDUCE_SCATTER, i);      
-            size_t block_count = blocks_info[port][i].count;
-            size_t block_offset = blocks_info[port][i].offset;
-
-            if(send_block){
-                if(!start_found_s){
-                    start_found_s = true;
-                    offset_s = block_offset;
-                }
-                count_s += block_count;
-            }
-            if(start_found_s && (!send_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-                if(chunk_sent){
-                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                    exit(-1);
-                }
-                chunk_sent = true;
-                cp.send_offset = offset_s;
-                cp.send_count = count_s;
-
-                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-                // Reset everything in case we need to send another train of blocks //TODO: Fix it for this case so to have one single consecutive train of blocks
-                count_s = 0;
-                offset_s = 0;
-                start_found_s = false;
-            }
-
-            if(recv_block){
-                if(!start_found_r){
-                    start_found_r = true;
-                    offset_r = block_offset;
-                }
-                count_r += block_count;
-            }            
-            if(start_found_r && (!recv_block || i == (size_t) this->size - 1)){ // The train of consecutive blocks is over
-                if(chunk_recvd){
-                    fprintf(stderr, "With uTofu we support at most one send/recv per port\n");
-                    exit(-1);
-                }
-                chunk_recvd = true;
-                cp.recv_offset = offset_r;
-                cp.recv_count = count_r;
-                
-                // In some rare cases (e.g., for 10 nodes), I might have not one but two consecutive trains of blocks
-                // Reset everything in case we need to send another train of blocks
-                count_r = 0;
-                offset_r = 0;
-                start_found_r = false;
-            }
-        }
-        chunk_params[block_step] = cp;
-        valid_chunk_params[block_step] = true;
-    }
-
-    ChunkParams r;
+void SwingBitmapCalculator::get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params){
+    compute_bitmaps(step, coll_type); // This is going to be a nop if compute_bitmaps was already called before
     if(coll_type == SWING_REDUCE_SCATTER){
-        r = chunk_params[block_step];
-    }else{
-        r.send_count = chunk_params[block_step].recv_count;
-        r.send_offset = chunk_params[block_step].recv_offset;
-        r.recv_count = chunk_params[block_step].send_count;
-        r.recv_offset = chunk_params[block_step].send_offset;
+        *chunk_params = this->chunk_params_per_step[step];
+    }else{                
+        chunk_params->recv_count = this->chunk_params_per_step[this->num_steps - step - 1].send_count;
+        chunk_params->recv_offset = this->chunk_params_per_step[this->num_steps - step - 1].send_offset;
+        chunk_params->send_count = this->chunk_params_per_step[this->num_steps - step - 1].recv_count;
+        chunk_params->send_offset = this->chunk_params_per_step[this->num_steps - step - 1].recv_offset;
     }
-    return r;
 }
-
 
 static inline uint32_t reverse(uint32_t x){
     x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
@@ -1491,6 +1516,7 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
     }
 }
 
+// Only works for 1D
 static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
     uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank, port, dimensions_num);    
     remap_rank = remap_rank ^ (remap_rank >> 1);
@@ -1513,8 +1539,8 @@ void SwingBitmapCalculator::dfs(int* coord_rank, size_t step, size_t num_steps, 
     }
 }
 
-SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, bool remap_blocks):
-         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), remap_blocks(remap_blocks), next_step(0), rank(rank){
+SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks):
+         scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), blocks_info(blocks_info), remap_blocks(remap_blocks), next_step(0), rank(rank){
     this->size = 1;
     this->num_steps = 0;
     for (uint i = 0; i < dimensions_num; i++) {
@@ -1531,10 +1557,10 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
     this->peers = (uint*) malloc(sizeof(uint)*this->num_steps);
     bitmap_send_merged = (char**) malloc(sizeof(char*)*this->num_steps);
     bitmap_recv_merged = (char**) malloc(sizeof(char*)*this->num_steps);                                          
-    memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
-    current_d = this->port % dimensions_num;
     compute_peers(this->port, rank, false, this->peers, this->dimensions, this->dimensions_num, this->scc);
     this->scc.getCoordFromId(rank, false, coord_mine);
+
+    chunk_params_per_step = (ChunkParams*) malloc(sizeof(ChunkParams)*this->num_steps);
 
     /* Decide when each block must be sent. */
     if(remap_blocks){
@@ -1561,7 +1587,6 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         }
         block_step[rank] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
     }
-    memset(valid_chunk_params, 0, sizeof(valid_chunk_params));
 }
 
 SwingBitmapCalculator::~SwingBitmapCalculator(){
@@ -1576,5 +1601,6 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     if(block_step){
         free(block_step);
     }
+    free(chunk_params_per_step);
 }
 

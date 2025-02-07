@@ -165,7 +165,7 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     *recvbuf = (char*) malloc(dtsize*recv_count);
     *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
     // Initialize sendbuf with random values
-    for(size_t i = 0; i < count; i++){
+    for(size_t i = 0; i < dtsize*count; i++){
         (*sendbuf)[i] = (char) rand() % 1024;
     }
 }
