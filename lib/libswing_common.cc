@@ -45,7 +45,7 @@ void Timer::stop() {
     auto start = std::chrono::time_point_cast<std::chrono::microseconds>(_start_time_point).time_since_epoch().count();
     auto end = std::chrono::time_point_cast<std::chrono::microseconds>(_end_time_point).time_since_epoch().count();
     auto duration = end - start;
-    _ss << "Timer [" << _name << "]: " << duration << " us | Start: " << start << " End: " << end << std::endl;
+    _ss << "THREAD " << omp_get_thread_num() << " Timer [" << _name << "]: " << duration << " us | Start: " << start << " End: " << end << std::endl;
     _timer_stopped = true;
 #endif
 }
@@ -906,17 +906,14 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
-    Timer timer("== swing_coll_step_utofu (compute bitmaps 0)");
+    Timer timer("== swing_coll_step_utofu (indexes calc)");
+    ChunkParams cp;
+    sbc[port]->get_chunk_params(step, coll_type, &cp);
 
-    if(step == 0){
-        sbc[port]->compute_bitmaps(step, coll_type);
-    }    
-
-    timer.reset("== swing_coll_step_utofu (indexes calc)");
-    offsets_s = chunk_params_per_step.send_offset;
-    counts_s = chunk_params_per_step.send_count;
-    offsets_r = chunk_params_per_step.recv_offset;
-    counts_r = chunk_params_per_step.recv_count;
+    offsets_s = cp.send_offset;
+    counts_s = cp.send_count;
+    offsets_r = cp.recv_offset;
+    counts_r = cp.recv_count;
 
     timer.reset("== swing_coll_step_utofu (misc)");
     int dtsize;
@@ -948,10 +945,21 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         utofu_offset_r_start = utofu_offset_r;
     }
 
+    // TODO: At most 256 segments are supported (edata is 8 bits)
+    // TODO: Just scale the number of segments so that it is never >= 256
+    assert(counts_s / max_count < 256);
+    assert(counts_r / max_count < 256);
+
     timer.reset("== swing_coll_step_utofu (sends)");
     // We first enqueue all the send. Then, we receive and aggregate
     // Aggregation and reception of next block should be overlapped
     // Issue isends for all the blocks
+    uint64_t edata = 0;
+    if(is_first_coll){
+        edata = step; 
+    }else{
+        edata = this->num_steps + step; // Second collective (e.g., allgather after reduce_scatter)
+    }
     if(counts_s){ 
         size_t remaining = counts_s;
         size_t bytes_to_send = 0;
@@ -984,16 +992,17 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }else{
                 assert("Unknown collective type" == 0);
             }        
-   
+
 #if !(UTOFU_THREAD_SAFE)
             #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
 #endif
-            swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr); 
-            
+            swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
+
+            // Update for the next segment
             offset += bytes_to_send;
             utofu_offset_r += bytes_to_send;
             remaining -= count;
-            ++issued_sends;
+            ++issued_sends;            
         }
     }
 
@@ -1008,17 +1017,24 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
 
     //double start = MPI_Wtime();
     // Receive and aggregate
+    uint64_t expected_step = 0;
+    if(is_first_coll){
+        expected_step = step; 
+    }else{
+        expected_step = this->num_steps + step; // Second collective (e.g., allgather after reduce_scatter)
+    }
     offset = 0;
+    size_t expected_segment = 0;
     if(counts_r){
         size_t remaining = counts_r;
         size_t bytes_to_recv = 0;
         // Segment the transmission
+        timer.reset("== swing_coll_step_utofu (recv/aggr loop)");
         while(remaining){
             count = remaining < max_count ? remaining : max_count;
             bytes_to_recv = count*dtsize;
             DPRINTF("[%d] Receiving %d bytes at step %d (coll %d)\n", this->rank, bytes_to_recv, step, coll_type);
-
-            utofu_stadd_t end_addr; // = stadd + offset + length;
+            
             size_t recvbuf_offset = offsets_r + offset;
             char* recvbuf_block = (char*) recvbuf + recvbuf_offset;
 
@@ -1026,31 +1042,23 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 if(step == 0){
                     // In the first step I receive in recvbuf and I aggregate from sendbuf and recvbuf in recvbuf (at same offsets)
                     size_t sendbuf_offset = recvbuf_offset;
-                    end_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + recvbuf_offset + bytes_to_recv;
-                    timer.reset("== swing_coll_step_utofu (recv)");
-                    swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
-                    timer.reset("== swing_coll_step_utofu (aggr)");
+                    swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);
                     reduce_local((char*) sendbuf + sendbuf_offset, recvbuf_block, count, sendtype, op);
                 }else{
                     // In the other steps I receive in tmpbuf and I aggregate from tmpbuf and recvbuf in recvbuf (for tmbuf we use adjusted offset)
                     size_t tempbuf_offset = utofu_offset_r_start + offset;
-                    end_addr = utofu_descriptor->port_info[port].lcl_temp_stadd + tempbuf_offset + bytes_to_recv;
-                    timer.reset("== swing_coll_step_utofu (recv)");
-                    swing_utofu_wait_recv(utofu_descriptor, port, end_addr);                    
-                    timer.reset("== swing_coll_step_utofu (aggr)");
-                    reduce_local((char*) tempbuf + tempbuf_offset, recvbuf_block, count, sendtype, op);
-                    //MPI_Reduce_local(tmpbuf_block + offset, buf_block + offset, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
+                    swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);                    
+                    reduce_local((char*) tempbuf + tempbuf_offset, recvbuf_block, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
                 }
             }else{
-                end_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + recvbuf_offset + bytes_to_recv;
-                timer.reset("== swing_coll_step_utofu (recv)");
-                swing_utofu_wait_recv(utofu_descriptor, port, end_addr);
+                swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);
             }
-            
 
+            // Update values for next segment
             offset += bytes_to_recv;
             remaining -= count;
             ++issued_recvs;
+            ++expected_segment;
         }            
     }
     /*
@@ -1484,7 +1492,7 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
         rank = -rank + num_ranks;
     }
     binary_to_negabinary(rank);
-    uint32_t nba = -1, nbb = -1;
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
     size_t num_bits = ceil(log2(num_ranks));
     if(rank % 2){
         if(in_range(rank, num_bits)){
@@ -1501,11 +1509,11 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
             nbb = binary_to_negabinary(-rank + num_ranks);
         }
     }
-    assert(nba != -1 || nbb != -1);
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
 
-    if(nba == -1 && nbb != -1){
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
         return nbb;
-    }else if(nba != -1 && nbb == -1){
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
         return nba;
     }else{ // Check MSB
         if(nba & (80000000 >> (32 - num_bits))){

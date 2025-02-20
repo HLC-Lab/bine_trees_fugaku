@@ -20,9 +20,6 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
         //std::unordered_map<uint, swing_utofu_remote_info>& m = (desc->port_info[i].rmt_info);
         ////m[peer] = rmt;
         //m.insert({peer, rmt});
-
-        // embed the default communication path coordinates into the received VCQ ID.
-        assert(utofu_set_vcq_id_path(&(rmt.vcq_id), NULL) == UTOFU_SUCCESS);
     }
 }
 
@@ -40,24 +37,33 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
     desc->num_ports = num_ports;
     desc->sbc = sbc;    
 
+    utofu_tni_id_t* tni_ids;
+    size_t num_tnis;
+    int rc = utofu_get_onesided_tnis(&tni_ids, &num_tnis);
+    if (rc != UTOFU_SUCCESS || num_tnis == 0) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+        return NULL;
+    }
+    assert(num_tnis >= num_ports);
+    
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
         desc->port_info[p].acked = 0;
-        utofu_tni_id_t tni_id = p;
+        utofu_tni_id_t tni_id = tni_ids[p];
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(desc->port_info[p].lcl_vcq_id)) == UTOFU_SUCCESS);
         
         // register memory regions and get their STADDs
+        // TODO: One single registration of a large buffer? (I should do it only once regardless of num_ports!!)
         assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
         assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
         assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, temp_buffer, length_t, 0, &(desc->port_info[p].lcl_temp_stadd)) == UTOFU_SUCCESS);
         desc->port_info[p].rmt_info = new std::unordered_map<uint, swing_utofu_remote_info>();
-
-        desc->port_info[p].completed_recv = new std::unordered_set<utofu_stadd_t>();
+        memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
     }
-
+    free(tni_ids);
     
     desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     pack_local_info(desc);
@@ -92,7 +98,6 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
         utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_temp_stadd, 0);
         utofu_free_vcq(desc->port_info[p].vcq_hdl);
         delete desc->port_info[p].rmt_info;
-        delete desc->port_info[p].completed_recv;
     }    
     free(desc);
 }
@@ -100,50 +105,22 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
 // send data and confirm its completion
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length, 
-                       utofu_stadd_t rmt_addr){    
+                       utofu_stadd_t rmt_addr, uint64_t edata){    
     if(length > MAX_PUTGET_SIZE){
         fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
         exit(-1);
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
-    uint64_t edata = 0; // not used
     utofu_vcq_id_t vcq_id = (*(desc->port_info[port].rmt_info))[peer].vcq_id;
     // instruct the TNI to perform a Put communication
     {
-    utofu_put(desc->port_info[port].vcq_hdl, vcq_id, 
-              lcl_addr, rmt_addr, length,
-              edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
+    // embed the default communication path coordinates into the received VCQ ID.
+        assert(utofu_set_vcq_id_path(&(vcq_id), NULL) == UTOFU_SUCCESS);
+
+        utofu_put(desc->port_info[port].vcq_hdl, vcq_id, 
+                  lcl_addr, rmt_addr, length,
+                  edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
     }
-}
-
-static void swing_utofu_wait_tcq(swing_utofu_comm_descriptor* desc, uint port){
-    int rc;    
-    // confirm the TCQ notification
-    void *cbdata;
-    do {
-        rc = utofu_poll_tcq(desc->port_info[port].vcq_hdl, 0, &cbdata);
-    } while (rc == UTOFU_ERR_NOT_FOUND);
-    assert(rc == UTOFU_SUCCESS);
-    //assert((uintptr_t)cbdata == cbvalue);
-}
-
-static void swing_utofu_wait_rmq(swing_utofu_comm_descriptor* desc, uint port){
-    int rc;    
-    struct utofu_mrq_notice notice;
-    do {
-        rc = utofu_poll_mrq(desc->port_info[port].vcq_hdl, 0, &notice);
-    } while (rc == UTOFU_ERR_NOT_FOUND);
-    assert(rc == UTOFU_SUCCESS);
-    if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){ // Remote put (recv) completed      
-        DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
-        desc->port_info[port].completed_recv->insert(notice.rmt_stadd);
-    }else if(notice.notice_type == UTOFU_MRQ_TYPE_LCL_PUT){ // Local put (send) completed
-        ++desc->port_info[port].acked; // We do not need to store the address
-    }else{
-        fprintf(stderr, "Unknown notice type.\n");
-        exit(-1);
-    }    
-    //assert(step == expected_step);
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count){    
@@ -151,28 +128,61 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
     // the sends to the next peer if the sends to the previous peer are not completed.
     // i.e., we do not need to match the exact send addresses but just count how many of those completed
     for(size_t i = 0; i < expected_count; i++){
-        swing_utofu_wait_tcq(desc, port);        
+        int rc;    
+        // confirm the TCQ notification
+        void *cbdata;
+        do {
+            rc = utofu_poll_tcq(desc->port_info[port].vcq_hdl, 0, &cbdata);
+        } while (rc == UTOFU_ERR_NOT_FOUND);
+        assert(rc == UTOFU_SUCCESS);
     }    
-    while(desc->port_info[port].acked < expected_count){
-        swing_utofu_wait_rmq(desc, port);
-    }
     desc->port_info[port].acked = 0;
 }
 
-/*
-std::ostream& operator<<(std::ostream& os, std::unordered_set<utofu_stadd_t> const& s)
-{
-    os << "{";
-    for (auto i : s)
-        os << i << ' ';
-    return os << "}\n";
-}
-*/
-
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, utofu_stadd_t end_addr){
-    DPRINTF("Wait for %ld\n", end_addr);
-    while(!desc->port_info[port].completed_recv->count(end_addr)){
-        swing_utofu_wait_rmq(desc, port);
+// uTofu guarantees that the data sent from a given source to a given destination is received in order, as long as it uses the same VCQ 
+// and the same path. The same applies for remote RMQ notifications.
+// However, the order is not guaranteed across different sources. For example, rank 0 might receive some data from rank p-1 (from which it
+// receives from at step 1) before all the data from rank 1 (from which it receives from at step 0) has been received. 
+// Thus, we need to use the EDATA to keep track of the order of the segments received from a given source.
+// The EDATA is a 64-bit value that is sent with the PUT operation and is received with the MRQ notification.
+// However, only 8 bits are usable. Thus, we have 256 possible values. We use the EDATA to mark the step at which that data was sent.
+// Everytime we receive a segment with a given EDATA, we increment the count of segments for that EDATA/step. Since segments
+// of the same step are received from the same source, they are received in order, so if we want to know if a specific segment
+// has been received, we can just check how many segments were received for that step.
+//
+// TODO Check EDATA range
+// Max putget size: 16777215
+// Max edata size: 1
+// Num reserved stags: 256
+// STag address alignment: 256
+// Cache line size: 256
+//
+// completed_recv[i] corresponds to the number of segments received for step i.
+// i.e., if completed_recv[2] == 3, then 3 segments have been received at step 2.
+// This works under the assumption that the segments from a given source are received in order (which holds for utofu).
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
+    // If it was already received, return
+    if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
+        return;
     }
-    desc->port_info[port].completed_recv->erase(end_addr);
+    int rc;    
+    struct utofu_mrq_notice notice;
+    char poll = 1;
+    while(poll){
+        rc = utofu_poll_mrq(desc->port_info[port].vcq_hdl, 0, &notice);
+        if(rc == UTOFU_SUCCESS){
+            if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){
+                DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
+                desc->port_info[port].completed_recv[notice.edata] += 1;
+                if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
+                    poll = 0;
+                }
+            }else if(notice.notice_type != UTOFU_MRQ_TYPE_LCL_PUT){
+                fprintf(stderr, "Unknown notice type.\n");
+                exit(-1);
+            }
+        }else{
+            assert(rc == UTOFU_ERR_NOT_FOUND);
+        }
+    }   
 }
