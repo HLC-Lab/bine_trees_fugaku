@@ -14,7 +14,7 @@
 #define MAX_EDATA 255 // 8 bits
 
 // TODO: Add cache injection?
-#define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE | UTOFU_ONESIDED_FLAG_LOCAL_MRQ_NOTICE)
+#define SWING_UTOFU_POST_FLAGS (UTOFU_ONESIDED_FLAG_TCQ_NOTICE | UTOFU_ONESIDED_FLAG_REMOTE_MRQ_NOTICE)
 
 #define UTOFU_THREAD_SAFE 0
 
@@ -37,7 +37,7 @@ typedef struct{
     utofu_stadd_t lcl_recv_stadd;
     utofu_stadd_t lcl_temp_stadd;
     std::unordered_map<uint, swing_utofu_remote_info>* rmt_info; // mapping the peer to the addresses
-    std::unordered_set<utofu_stadd_t>* completed_recv; // set of completed but unacknowledged recvs
+    char completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
     size_t acked;
     volatile char padding[CACHE_LINE_SIZE];
 }swing_utofu_port_info;
@@ -61,8 +61,10 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
 void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length,
-                       utofu_stadd_t rmt_addr);
+                       utofu_stadd_t rmt_addr, uint64_t edata);
 
 // Sends and recv are waited in the same order they are posted
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, utofu_stadd_t end_addr);
+
+// expected_segment starts from 0
+void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment);
