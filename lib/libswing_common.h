@@ -57,7 +57,7 @@ typedef struct{
 //#define ACTIVE_WAIT
 
 //#define DEBUG
-#define PROFILE
+//#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
@@ -271,17 +271,20 @@ class SwingCommon {
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
         // @param sendbuf (INOUT): the allreduce sendbuf
+        // @param recvbuf (IN): the allreduce recvbuf
+        // @param tempbuf (IN): the allreduce tempbuf
         // @param count (IN): the number of elements in the sendbuf
         // @param datatype (IN): the datatype of the elements in the sendbuf
         // @param op (IN): the operation to perform
-        // @param comm (IN): the communicator
-        // @param recvbuf (IN): the allreduce recvbuf
+        // @param comm (IN): the communicator        
         // @param idle (OUT): if 1, the rank is one of the "extra" ranks and is going to be idle
         // @param rank_virtual (OUT): the virtual rank
+        // @param first_copy_done (OUT): if 1, the copy from sendbuf to recvbuf has been already done
         // @return MPI_SUCCESS or an error code
-        int shrink_non_power_of_two(const void *sendbuf, int count, 
+        int shrink_non_power_of_two(const void *sendbuf, void* recvbuf, void* tempbuf, int count, 
                                     MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
-                                    void* recvbuf, int* idle, int* rank_virtual);  
+                                    int* idle, int* rank_virtual,
+                                    int* first_copy_done);  
 
         // Enlarges the data from nodes within the power-of-two boundary to nodes outside the boundary.
         // This is done one dimension at a time.

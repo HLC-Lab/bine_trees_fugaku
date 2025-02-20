@@ -45,7 +45,7 @@ void Timer::stop() {
     auto start = std::chrono::time_point_cast<std::chrono::microseconds>(_start_time_point).time_since_epoch().count();
     auto end = std::chrono::time_point_cast<std::chrono::microseconds>(_end_time_point).time_since_epoch().count();
     auto duration = end - start;
-    _ss << "THREAD " << omp_get_thread_num() << " Timer [" << _name << "]: " << duration << " us | Start: " << start << " End: " << end << std::endl;
+    _ss << " Timer [" << _name << "]: " << duration << " us | Start: " << start << " End: " << end << std::endl;
     _timer_stopped = true;
 #endif
 }
@@ -362,9 +362,10 @@ static void compute_peers(int port, uint rank, bool virt, uint* peers, uint* dim
 // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
 // This is done one dimension at a time.
 // Returns the new rank.
-int SwingCommon::shrink_non_power_of_two(const void *sendbuf, int count, 
+int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void* recvbuf, void* tempbuf, int count, 
                                          MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
-                                         void* recvbuf, int* idle, int* rank_virtual){    
+                                         int* idle, int* rank_virtual,
+                                         int* first_copy_done){    
     int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     
@@ -374,24 +375,38 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, int count,
     
     this->scc.retrieve_coord_mapping(rank, false, coord);
 
+    const void* real_sendbuf;
+    void* real_recvbuf;
+    const void* real_aggbuf;
+
     for(size_t i = 0; i < this->dimensions_num; i++){
         // This dimensions is not a power of two, shrink it
         if(!is_power_of_two(dimensions[i])){
             memcpy(coord_peer, coord, sizeof(uint)*this->dimensions_num);
             int extra = dimensions[i] - this->dimensions_virtual[i];
+            if(!*first_copy_done){
+                real_sendbuf = sendbuf;
+                real_recvbuf = recvbuf;
+                real_aggbuf = sendbuf;
+            }else{
+                real_sendbuf = recvbuf;
+                real_recvbuf = tempbuf;
+                real_aggbuf = tempbuf;
+            }
             if(coord[i] >= this->dimensions_virtual[i]){            
                 coord_peer[i] = coord[i] - extra;
                 int peer = this->scc.getIdFromCoord(coord_peer, false);
-                int res = MPI_Send(sendbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
+                int res = MPI_Send(real_sendbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
                 if(res != MPI_SUCCESS){return res;}
                 *idle = 1;
                 break;
             }else if(coord[i] + extra >= this->dimensions_virtual[i]){
                 coord_peer[i] = coord[i] + extra;
                 int peer = this->scc.getIdFromCoord(coord_peer, false);
-                int res = MPI_Recv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);                
+                int res = MPI_Recv(real_recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);                
                 if(res != MPI_SUCCESS){return res;}
-                MPI_Reduce_local(sendbuf, recvbuf, count, datatype, op);
+                MPI_Reduce_local(real_aggbuf, recvbuf, count, datatype, op);
+                *first_copy_done = 1;
             }
         }
     }
@@ -433,8 +448,8 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
     return MPI_SUCCESS;
 }
 
-
 int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+#ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_coll_l_utofu (init)");
     Timer timer("swing_coll_l_utofu (init)");
     int dtsize;
@@ -467,9 +482,10 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
     this->scc.retrieve_coord_mapping(this->rank, false, coord);
 
     int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
+    int first_copy_done = 0;
     if(!all_p2_dimensions){
         timer.reset("= swing_coll_l_utofu (shrink)");
-        res = shrink_non_power_of_two(sendbuf, count, datatype, op, comm, recvbuf, &idle, &rank_virtual);
+        res = shrink_non_power_of_two(sendbuf, recvbuf, tmpbuf, count, datatype, op, comm, &idle, &rank_virtual, &first_copy_done);
         if(res != MPI_SUCCESS){return res;}
     }    
 
@@ -520,9 +536,9 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
 
                 utofu_stadd_t base_lcl_stadd, base_rmt_stadd;
                 const void* base_agg_buf;
-                // If I did not do the shrink, in the first step I must send
+                // If I did not copied during the shrink, in the first step I must send
                 // from sendbuf, receive in recvbuf, and aggregate recvbuf = recvbuf + sendbuf
-                if(step == 0 && all_p2_dimensions){
+                if(step == 0 && !first_copy_done){
                     base_lcl_stadd = utofu_descriptor->port_info[p].lcl_send_stadd;
                     base_rmt_stadd = (*(utofu_descriptor->port_info[p].rmt_info))[peer].recv_stadd;
                     base_agg_buf = sendbuf;
@@ -569,6 +585,10 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
         free(tmpbuf);
     }
     return res;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif
 }
 
 // This works the following way:
@@ -583,7 +603,17 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
     
-    char* tmpbuf = (char*) malloc(count*dtsize); // Temporary buffer (to avoid overwriting sendbuf)
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*dtsize;
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+
+
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     this->scc.retrieve_coord_mapping(this->rank, false, coord);
 
@@ -595,10 +625,11 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
     //   Then they aggregate recvbuf = recvbuf + tempbuf.
     // By doing so we can avoid doing a memcpy at the beginning of the execution.
 
-    int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
+    int res = MPI_SUCCESS, idle = 0, rank_virtual = rank; 
+    int first_copy_done = 0;       
     if(!all_p2_dimensions){
         timer.reset("= swing_coll_l_mpi (shrink)");
-        res = shrink_non_power_of_two(sendbuf, count, datatype, op, comm, recvbuf, &idle, &rank_virtual);
+        res = shrink_non_power_of_two(sendbuf, recvbuf, tmpbuf, count, datatype, op, comm, &idle, &rank_virtual, &first_copy_done);
         if(res != MPI_SUCCESS){return res;}
     }    
 
@@ -621,7 +652,7 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
             const void *base_agg_buf;
             // If I did not do the shrink, in the first step I must send
             // from sendbuf, receive in recvbuf, and aggregate recvbuf = recvbuf + sendbuf
-            if(step == 0 && all_p2_dimensions){
+            if((step == 0) && !first_copy_done){
                 base_send_buf = sendbuf;
                 base_recv_buf = recvbuf;
                 base_agg_buf = sendbuf;
@@ -669,7 +700,9 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
         DPRINTF("[%d] Data propagated\n", rank);
     }    
     timer.reset("= swing_coll_l_mpi (writing profile data to file)");
-    free(tmpbuf);
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
     return res;
 }
 
@@ -677,7 +710,12 @@ int SwingCommon::swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI
     if(algo == ALGO_SWING_L){
         return swing_coll_l_mpi(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(algo == ALGO_SWING_L_UTOFU){
+#ifdef FUGAKU
         return swing_coll_l_utofu(sendbuf, recvbuf, count, datatype, op, comm);
+#else
+        fprintf(stderr, "uTofu can only be used on Fugaku.\n");
+        exit(-1);
+#endif
     }else{
         assert("Unknown algorithm");
     }
