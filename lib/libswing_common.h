@@ -55,7 +55,7 @@ typedef struct{
 //#define ACTIVE_WAIT
 
 //#define DEBUG
-//#define PROFILE
+#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
