@@ -270,18 +270,18 @@ class SwingCommon {
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.
-        // @param recvbuf (INOUT): the allreduce recvbuf
+        // @param sendbuf (INOUT): the allreduce sendbuf
         // @param count (IN): the number of elements in the sendbuf
         // @param datatype (IN): the datatype of the elements in the sendbuf
         // @param op (IN): the operation to perform
         // @param comm (IN): the communicator
-        // @param tmpbuf (IN): a temporary buffer, as large as the sendbuf/recvbuf
+        // @param recvbuf (IN): the allreduce recvbuf
         // @param idle (OUT): if 1, the rank is one of the "extra" ranks and is going to be idle
         // @param rank_virtual (OUT): the virtual rank
         // @return MPI_SUCCESS or an error code
-        int shrink_non_power_of_two(void *recvbuf, int count, 
+        int shrink_non_power_of_two(const void *sendbuf, int count, 
                                     MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
-                                    char* tmpbuf, int* idle, int* rank_virtual);  
+                                    void* recvbuf, int* idle, int* rank_virtual);  
 
         // Enlarges the data from nodes within the power-of-two boundary to nodes outside the boundary.
         // This is done one dimension at a time.
