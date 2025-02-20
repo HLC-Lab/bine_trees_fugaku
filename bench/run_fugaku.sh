@@ -94,7 +94,7 @@ do
         #if [ "$n" -le 1048576 ]; then
         #    for PORTS in 1 3 6
 	#    do
-#		LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L" LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
+#		LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L_UTOFU" LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} INT ${n} ${iterations}
 #		mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
 #                mkdir ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_e/
 #                mv ${ERR_PREFIX}* ${OUT_FOLDER}/${p}_${n}_lat_${PORTS}_e/	       

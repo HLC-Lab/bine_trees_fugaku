@@ -94,6 +94,8 @@ static inline void read_env(MPI_Comm comm){
                 algo = ALGO_DEFAULT;
             }else if(strcmp(env_str, "SWING_L") == 0){
                 algo = ALGO_SWING_L;
+            }else if(strcmp(env_str, "SWING_L_UTOFU") == 0){
+                algo = ALGO_SWING_L_UTOFU;
             }else if(strcmp(env_str, "SWING_B") == 0){
                 algo = ALGO_SWING_B;
             }else if(strcmp(env_str, "SWING_B_COALESCE") == 0){
@@ -119,7 +121,7 @@ static inline void read_env(MPI_Comm comm){
 
         char* prealloc_buf = NULL;
         if(prealloc_size){
-            prealloc_buf = (char*) malloc(prealloc_size);
+            posix_memalign((void**) &prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, prealloc_size);
         }
 
         swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf);
@@ -590,11 +592,11 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
-        if(algo == ALGO_SWING_L || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
+        if(algo == ALGO_SWING_L || algo == ALGO_SWING_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
-            int res = swing_common->MPI_Allreduce_lat_optimal(sendbuf, recvbuf, count, datatype, op, comm);
+            int res = swing_common->swing_coll_l(sendbuf, recvbuf, count, datatype, op, comm);
             // Free blocks_info
             for(size_t p = 0; p < swing_common->get_num_ports(); p++){
                 free(blocks_info[p]);

@@ -17,9 +17,6 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
         rmt.recv_stadd = buffer[3*i+1];
         rmt.temp_stadd = buffer[3*i+2];
         desc->port_info[i].rmt_info->insert({peer, rmt});
-        //std::unordered_map<uint, swing_utofu_remote_info>& m = (desc->port_info[i].rmt_info);
-        ////m[peer] = rmt;
-        //m.insert({peer, rmt});
     }
 }
 
@@ -28,14 +25,14 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
 swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t length_s, 
                                                void* recv_buffer, size_t length_r, 
                                                void* temp_buffer, size_t length_t,
-                                               uint num_ports, uint num_steps, SwingBitmapCalculator* sbc){
+                                               uint num_ports, uint num_steps, uint* peers){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
     
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
     desc->num_ports = num_ports;
-    desc->sbc = sbc;    
+    desc->peers = peers;    
 
     utofu_tni_id_t* tni_ids;
     size_t num_tnis;
@@ -48,7 +45,6 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
     
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
-        desc->port_info[p].acked = 0;
         utofu_tni_id_t tni_id = tni_ids[p];
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
@@ -70,7 +66,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
     // Send the local info for my the ports, to all the peers
     // TODO: Replace the individual sends with a collective so that this is done with HW tofu barrier which would be faster?
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);	
+        uint peer = peers[step];	
         MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
     return desc;
@@ -80,7 +76,7 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ 
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = desc->sbc->get_peer(step, SWING_REDUCE_SCATTER);
+        uint peer = desc->peers[step];
         MPI_Recv(rbuffer, 3*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         unpack_remote_info(desc, rbuffer, peer);
     }
@@ -136,7 +132,6 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
         } while (rc == UTOFU_ERR_NOT_FOUND);
         assert(rc == UTOFU_SUCCESS);
     }    
-    desc->port_info[port].acked = 0;
 }
 
 // uTofu guarantees that the data sent from a given source to a given destination is received in order, as long as it uses the same VCQ 

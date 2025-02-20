@@ -437,19 +437,132 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
     return MPI_SUCCESS;
 }
 
+
+int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_coll_l_utofu (init)");
+    Timer timer("swing_coll_l_utofu (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+    
+    // Temporary buffer (to avoid overwriting sendbuf)
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    // Since data might be written to a given rank in a different order 
+    // (e.g., rank p-1 might write to rank 0 memory before rank 1 writes)
+    // we allocate a buffer which is num_steps time larger than the original buffer
+    // so that at each step the source rank can write at a different offset.
+    size_t tmpbuf_size = count*dtsize*num_steps_virtual;
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+
+    // TODO: Do the same swapping trick we do for bandwidth optimal to avoid the first memcpy
+    memcpy(recvbuf, sendbuf, count*dtsize); // I send from recvbuf, which is where I aggregate the data. I receive data in tmpbuf
+    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+
+    int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
+    if(!all_p2_dimensions){
+        timer.reset("= swing_coll_l_utofu (shrink)");
+        res = shrink_non_power_of_two(recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
+        if(res != MPI_SUCCESS){return res;}
+    }    
+
+    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
+
+    if(!idle){                
+        // Do the step-by-step communication on the shrunk topology.         
+
+        timer.reset("= swing_coll_l_utofu (utofu setup)");        
+
+        uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+        compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc);
+        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
+                                                                          this->num_ports, num_steps_virtual, peers);
+        timer.reset("= swing_coll_l_utofu (utofu wait)");            
+        swing_utofu_setup_wait(utofu_descriptor, num_steps_virtual);
+        // Needed to be sure everyone registered the buffers
+        timer.reset("= swing_coll_l_utofu (utofu barrier)");
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        timer.reset("= swing_coll_l_utofu (actual sendrecvs)");
+        uint partition_size = count / this->num_ports;
+        uint remaining = count % this->num_ports;        
+
+#pragma omp parallel for num_threads(this->num_ports) schedule(static, 1) collapse(1)
+        for(size_t p = 0; p < this->num_ports; p++){
+            // Get the peer
+            if(virtual_peers[p] == NULL){
+                virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+                compute_peers(p, rank_virtual, true, virtual_peers[p], this->dimensions_virtual, this->dimensions_num, this->scc);
+            }
+            for(size_t step = 0; step < (uint) num_steps_virtual; step++){                 
+                // Schedule all the send and recv
+                //timer.reset("= swing_coll_l_utofu (sendrecv for step " + std::to_string(step) + ")");
+                int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                int virtual_peer = virtual_peers[p][step];                 
+                this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer); // Get the virtual coordinates of the peer
+                int peer = this->scc.getIdFromCoord(coord_peer, false); // Convert the virtual coordinates to the real rank
+                DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
+
+                // Compute the count and the offset of the piece of buffer that is aggregated on this port
+                size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                size_t offset_port = 0;
+                for(size_t j = 0; j < p; j++){
+                    offset_port += partition_size + (j < remaining ? 1 : 0);
+                }
+                offset_port *= dtsize;
+
+                utofu_stadd_t lcl_addr = utofu_descriptor->port_info[p].lcl_recv_stadd + offset_port;
+                utofu_stadd_t rmt_addr = (*(utofu_descriptor->port_info[p].rmt_info))[peer].temp_stadd + count*dtsize*step + offset_port; // We need to add an additional offset because at each step we write on a different offset (see comment above)
+
+#if !(UTOFU_THREAD_SAFE) // TODO: critical can probably be moved within isend before put
+#pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
+#endif
+                {
+                    swing_utofu_isend(utofu_descriptor, p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
+                }
+                swing_utofu_wait_recv(utofu_descriptor, p, step, 0);                
+                // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
+                swing_utofu_wait_sends(utofu_descriptor, p, 1); 
+                reduce_local((char*) tmpbuf + count*dtsize*step + offset_port, (char*) recvbuf + offset_port, count_port, datatype, op); // TODO: Try to replace again with MPI_Reduce_local ?                
+                DPRINTF("[%d] Step %d completed\n", rank, step);    
+            }        
+        }
+        timer.reset("= swing_coll_l_utofu (utofu teardown)");
+        // Cleanup utofu resources
+        swing_utofu_teardown(utofu_descriptor);
+        free(peers);
+    }else{
+        MPI_Barrier(MPI_COMM_WORLD); // For the uTofu correctness
+    }
+
+    if(!all_p2_dimensions){
+        timer.reset("= swing_coll_l_utofu (enlarge)");
+        DPRINTF("[%d] Propagating data to extra nodes\n", rank);
+        res = enlarge_non_power_of_two(recvbuf, count, datatype, comm);
+        if(res != MPI_SUCCESS){return res;}
+        DPRINTF("[%d] Data propagated\n", rank);
+    }    
+    timer.reset("= swing_coll_l_utofu (writing profile data to file)");
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
+    return res;
+}
+
 // This works the following way:
 // 1. Shrink the topology by sending ranks that are outside the power of two boundary, to ranks within the boundary
 // 2. Run allreduce on a configuration where each dimension has a power of two size
 // 3. Enlarge the topology by sending data to ranks outside the boundary.
 //
-// TODO: Implement a multiport version? There was a partial one (pre August 2024). In principle it does not have much sense to
-// have it since we are in the latency-optimal case. Might help a bit for medium-sized messages, but probably needs 
-// to be implemented using uTofu rather than MPI so that transmissions actually happen in parallel.
-
-// TODO: Utofu implementation of latency optimal?
-int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= MPI_Allreduce_lat_optimal (init)");
-    Timer timer("MPI_Allreduce_lat_optimal (init)");
+// TODO: Implement a multiport version of the shrink/enlarge? 
+int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_coll_l_mpi (init)");
+    Timer timer("swing_coll_l_mpi (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
     
@@ -460,7 +573,7 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
 
     int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
     if(!all_p2_dimensions){
-        timer.reset("= MPI_Allreduce_lat_optimal (shrink)");
+        timer.reset("= swing_coll_l_mpi (shrink)");
         res = shrink_non_power_of_two(recvbuf, count, datatype, op, comm, tmpbuf, &idle, &rank_virtual);
         if(res != MPI_SUCCESS){return res;}
     }    
@@ -469,12 +582,12 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
 
     if(!idle){                
         // Do the step-by-step communication on the shrunk topology.         
-        timer.reset("= MPI_Allreduce_lat_optimal (actual sendrecvs)");
+        timer.reset("= swing_coll_l_mpi (actual sendrecvs)");
         uint partition_size = count / this->num_ports;
         uint remaining = count % this->num_ports;        
         for(size_t step = 0; step < (uint) num_steps_virtual; step++){                 
             // Schedule all the send and recv
-            //timer.reset("= MPI_Allreduce_lat_optimal (sendrecv for step " + std::to_string(step) + ")");
+            //timer.reset("= swing_coll_l_mpi (sendrecv for step " + std::to_string(step) + ")");
             uint count_so_far = 0;
             MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
             MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -508,15 +621,26 @@ int SwingCommon::MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, i
     }
 
     if(!all_p2_dimensions){
-        timer.reset("= MPI_Allreduce_lat_optimal (enlarge)");
+        timer.reset("= swing_coll_l_mpi (enlarge)");
         DPRINTF("[%d] Propagating data to extra nodes\n", rank);
         res = enlarge_non_power_of_two(recvbuf, count, datatype, comm);
         if(res != MPI_SUCCESS){return res;}
         DPRINTF("[%d] Data propagated\n", rank);
     }    
-    timer.reset("= MPI_Allreduce_lat_optimal (writing profile data to file)");
+    timer.reset("= swing_coll_l_mpi (writing profile data to file)");
     free(tmpbuf);
     return res;
+}
+
+int SwingCommon::swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    if(algo == ALGO_SWING_L){
+        return swing_coll_l_mpi(sendbuf, recvbuf, count, datatype, op, comm);
+    }else if(algo == ALGO_SWING_L_UTOFU){
+        return swing_coll_l_utofu(sendbuf, recvbuf, count, datatype, op, comm);
+    }else{
+        assert("Unknown algorithm");
+    }
+    return -1;
 }
 
 /*
@@ -1325,7 +1449,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             tmpbuf_size = count*dtsize;        
         }        
         if(tmpbuf_size > prealloc_size){
-            tmpbuf = (char*) malloc(tmpbuf_size);
+            posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
             free_tmpbuf = true;
         }else{
             tmpbuf = prealloc_buf;
@@ -1380,8 +1504,9 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         // Setup all the communications        
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
         timer.reset("= swing_coll_b (utofu setup)");        
+
         swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
-                                                                          this->num_ports, this->num_steps, this->sbc[0]);
+                                                                          this->num_ports, this->num_steps, this->sbc[0]->get_peers());
         
         timer.reset("= swing_coll_b (utofu wait)");            
         swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
@@ -1418,7 +1543,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     }else{
         if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
             size_t total_size_bytes = count*dtsize;
-            memcpy(recvbuf, sendbuf, total_size_bytes);    
+            memcpy(recvbuf, sendbuf, total_size_bytes);  // TODO: If we are going to compare with the non utofu version we should remove this memcpy from here as well.
         }
         for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
             for(size_t step = 0; step < this->num_steps; step++){                        

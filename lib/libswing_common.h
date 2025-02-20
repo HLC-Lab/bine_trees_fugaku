@@ -16,6 +16,7 @@ typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
 #define LIBSWING_MAX_SUPPORTED_PORTS (LIBSWING_MAX_SUPPORTED_DIMENSIONS*2)
 #define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
 #define LIBSWING_MAX_COLLECTIVE_SEQUENCE 2
+#define LIBSWING_TMPBUF_ALIGNMENT 256 // uTofu STag alignment
 
 #define CACHE_LINE_SIZE 256
 
@@ -36,6 +37,7 @@ typedef enum{
 typedef enum{
     ALGO_DEFAULT = 0,
     ALGO_SWING_L,
+    ALGO_SWING_L_UTOFU,
     ALGO_SWING_B,
     ALGO_SWING_B_COALESCE,
     ALGO_SWING_B_CONT,
@@ -241,6 +243,8 @@ class SwingBitmapCalculator {
         // @param coll_type (IN): the collective type
         // @param chunk_params (OUT): the chunk params
         void get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params);
+
+        uint* get_peers(){return peers;}
 };
 
 class SwingCommon {
@@ -360,6 +364,10 @@ class SwingCommon {
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                   CollType coll_type, bool is_first_coll);
 
+        
+        int swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+
     public:
         // Constructor
         // @param comm (IN): the communicator
@@ -387,7 +395,7 @@ class SwingCommon {
         // @param op (IN): the operation to perform
         // @param comm (IN): the communicator
         // @return MPI_SUCCESS or an error code
-        int MPI_Allreduce_lat_optimal(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
         
         // TODO: Document
         int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);

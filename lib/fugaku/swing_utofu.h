@@ -38,13 +38,12 @@ typedef struct{
     utofu_stadd_t lcl_temp_stadd;
     std::unordered_map<uint, swing_utofu_remote_info>* rmt_info; // mapping the peer to the addresses
     char completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
-    size_t acked;
     volatile char padding[CACHE_LINE_SIZE];
 }swing_utofu_port_info;
 
 struct swing_utofu_comm_d{
     uint num_ports;
-    SwingBitmapCalculator* sbc;
+    uint* peers;
     swing_utofu_port_info port_info[LIBSWING_MAX_SUPPORTED_PORTS];
     uint64_t* sbuffer;
     MPI_Request reqs[LIBSWING_MAX_STEPS];
@@ -54,7 +53,7 @@ struct swing_utofu_comm_d{
 swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t length_s, 
                                                void* recv_buffer, size_t length_r, 
                                                void* tmp_buffer, size_t length_t,
-                                               uint num_ports, uint num_steps, SwingBitmapCalculator* sbc);
+                                               uint num_ports, uint num_steps, uint* peers);
 void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
 
 // teardown communication
