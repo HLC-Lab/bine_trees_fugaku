@@ -565,12 +565,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 utofu_stadd_t lcl_addr = base_lcl_stadd + offset_port;
                 utofu_stadd_t rmt_addr = base_rmt_stadd + count*dtsize*step + offset_port; // We need to add an additional offset because at each step we write on a different offset (see comment above)
 
-//#if !(UTOFU_THREAD_SAFE) // TODO: critical can probably be moved within isend before put
-//#pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
-//#endif
-                {
-                    swing_utofu_isend(utofu_descriptor, p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
-                }
+                swing_utofu_isend(utofu_descriptor, p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
                 swing_utofu_wait_recv(utofu_descriptor, p, step, 0);                
                 // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
                 swing_utofu_wait_sends(utofu_descriptor, p, 1); 
@@ -1205,10 +1200,6 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }else{
                 assert("Unknown collective type" == 0);
             }        
-
-//#if !(UTOFU_THREAD_SAFE) // TODO: mmm...
-//            #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
-//#endif
             swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
 
             // Update for the next segment
