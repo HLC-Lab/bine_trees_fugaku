@@ -55,6 +55,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
                                                void* tmp_buffer, size_t length_t,
                                                uint num_ports, uint num_steps, uint* peers);
 void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
+void swing_utofu_reset(swing_utofu_comm_descriptor* desc);
 
 // teardown communication
 void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);

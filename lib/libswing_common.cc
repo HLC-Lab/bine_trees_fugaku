@@ -515,6 +515,8 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             timer.reset("= swing_coll_l_utofu (utofu barrier)");
             MPI_Barrier(MPI_COMM_WORLD);
             free(peers);
+        }else{
+            swing_utofu_reset(utofu_descriptor);
         }
 
         timer.reset("= swing_coll_l_utofu (actual sendrecvs)");
@@ -563,9 +565,9 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 utofu_stadd_t lcl_addr = base_lcl_stadd + offset_port;
                 utofu_stadd_t rmt_addr = base_rmt_stadd + count*dtsize*step + offset_port; // We need to add an additional offset because at each step we write on a different offset (see comment above)
 
-#if !(UTOFU_THREAD_SAFE) // TODO: critical can probably be moved within isend before put
-#pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
-#endif
+//#if !(UTOFU_THREAD_SAFE) // TODO: critical can probably be moved within isend before put
+//#pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
+//#endif
                 {
                     swing_utofu_isend(utofu_descriptor, p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
                 }
@@ -1158,10 +1160,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
         utofu_offset_r_start = utofu_offset_r;
     }
 
-    // TODO: At most 256 segments are supported (edata is 8 bits)
-    // TODO: Just scale the number of segments so that it is never >= 256
-    assert(counts_s / max_count < 256);
-    assert(counts_r / max_count < 256);
+    // TODO: At most 256 steps are supported (edata is 8 bits)
+    assert(this->num_steps < 256);
 
     timer.reset("== swing_coll_step_utofu (sends)");
     // We first enqueue all the send. Then, we receive and aggregate
@@ -1206,9 +1206,9 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 assert("Unknown collective type" == 0);
             }        
 
-#if !(UTOFU_THREAD_SAFE)
-            #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
-#endif
+//#if !(UTOFU_THREAD_SAFE) // TODO: mmm...
+//            #pragma omp critical // To remove this we should put SWING_UTOFU_VCQ_FLAGS to UTOFU_VCQ_FLAG_EXCLUSIVE. However, this adds crazy overhead when creating/destroying the VCQs
+//#endif
             swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
 
             // Update for the next segment
@@ -1604,6 +1604,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             // Needed to be sure everyone registered the buffers
             timer.reset("= swing_coll_b (utofu barrier)");
             MPI_Barrier(MPI_COMM_WORLD);
+        }else{
+            swing_utofu_reset(utofu_descriptor);
         }
         
         timer.reset("= swing_coll_b (utofu main loop)");

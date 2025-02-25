@@ -44,6 +44,10 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
         return NULL;
     }
     assert(num_tnis >= num_ports);
+
+
+    // TODO: Actually everything could be done in parallel as long as different CQs are managed by different threads
+    // this should always be true since each thread works on a different TNI.
     
     // Create all the VCQs (one per port) and register the buffers (once per port)
     for(size_t p = 0; p < num_ports; p++){
@@ -63,6 +67,11 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
     }
     free(tni_ids);
     
+    // TODO: Might it make sense to use an allgather instead of log2(n) individual send and recv?
+    // The number of send/recv would probably be the same, but the total numnber of transferred bytes will be higher
+    // (each rank will eventually receive info about all the ranks QPs, also those with whom it does not communicate)
+    // The other advantage of the allgather is that it is hw accelerated (???)
+
     desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     pack_local_info(desc);
     // Send the local info for my the ports, to all the peers
@@ -86,6 +95,12 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ 
 
     free(desc->sbuffer);
     free(rbuffer);
+}
+
+void swing_utofu_reset(swing_utofu_comm_descriptor* desc){
+    for(size_t p = 0; p < desc->num_ports; p++){
+        memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
+    }
 }
 
 // teardown communication
@@ -161,21 +176,18 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
     // If it was already received, return
     if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
-        desc->port_info[port].completed_recv[expected_step] = 0;
         return;
     }
     int rc;    
     struct utofu_mrq_notice notice;
-    char poll = 1;
-    while(poll){
+    while(1){
         rc = utofu_poll_mrq(desc->port_info[port].vcq_hdl, 0, &notice);
         if(rc == UTOFU_SUCCESS){
             if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){
                 DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
                 desc->port_info[port].completed_recv[notice.edata] += 1;
                 if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
-                    poll = 0;
-                    desc->port_info[port].completed_recv[expected_step] = 0;
+                    return;
                 }
             }else if(notice.notice_type != UTOFU_MRQ_TYPE_LCL_PUT){
                 fprintf(stderr, "Unknown notice type.\n");
