@@ -32,7 +32,9 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
     
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
     desc->num_ports = num_ports;
-    desc->peers = peers;    
+
+    desc->peers = (uint*) malloc(sizeof(uint)*num_steps);
+    memcpy(desc->peers, peers, sizeof(uint)*num_steps);
 
     utofu_tni_id_t* tni_ids;
     size_t num_tnis;
@@ -95,6 +97,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
         utofu_free_vcq(desc->port_info[p].vcq_hdl);
         delete desc->port_info[p].rmt_info;
     }    
+    free(desc->peers);
     free(desc);
 }
 
@@ -158,6 +161,7 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
     // If it was already received, return
     if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
+        desc->port_info[port].completed_recv[expected_step] = 0;
         return;
     }
     int rc;    
@@ -171,6 +175,7 @@ void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t 
                 desc->port_info[port].completed_recv[notice.edata] += 1;
                 if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
                     poll = 0;
+                    desc->port_info[port].completed_recv[expected_step] = 0;
                 }
             }else if(notice.notice_type != UTOFU_MRQ_TYPE_LCL_PUT){
                 fprintf(stderr, "Unknown notice type.\n");

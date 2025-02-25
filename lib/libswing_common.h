@@ -57,7 +57,7 @@ typedef struct{
 //#define ACTIVE_WAIT
 
 //#define DEBUG
-//#define PROFILE
+#define PROFILE
 
 #ifdef DEBUG
 #define DPRINTF(...) printf(__VA_ARGS__); fflush(stdout)
@@ -267,6 +267,9 @@ class SwingCommon {
         size_t num_steps_virtual;
         size_t prealloc_size;
         char* prealloc_buf;
+#ifdef FUGAKU
+        swing_utofu_comm_descriptor* utofu_descriptor;
+#endif
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
         // This is done one dimension at a time.

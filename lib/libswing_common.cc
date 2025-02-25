@@ -208,9 +208,14 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     for(size_t i = 0; i < this->num_ports; i++){
         virtual_peers[i] = NULL;
     }
+    this->utofu_descriptor = NULL;
 }
 
 SwingCommon::~SwingCommon(){
+    // Cleanup utofu resources
+    if(this->utofu_descriptor != NULL){
+        swing_utofu_teardown(this->utofu_descriptor);
+    }
     for(size_t i = 0; i < this->num_ports; i++){
         if(this->sbc[i] != NULL){
             delete this->sbc[i];
@@ -466,6 +471,11 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
     if(tmpbuf_size > prealloc_size){
         posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
+
+        // TODO: This is because we register the tempbuffer only once and reuse it across the calls
+        // must be fixed in swing_utofu.cc
+        fprintf(stderr, "For the moment, this only works if the preallocd buffer is large enough\n");
+        exit(-1); 
     }else{
         tmpbuf = prealloc_buf;
     }
@@ -493,18 +503,19 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
 
     if(!idle){                
         // Do the step-by-step communication on the shrunk topology.         
-
-        timer.reset("= swing_coll_l_utofu (utofu setup)");        
-
-        uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-        compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc);
-        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
-                                                                          this->num_ports, num_steps_virtual, peers);
-        timer.reset("= swing_coll_l_utofu (utofu wait)");            
-        swing_utofu_setup_wait(utofu_descriptor, num_steps_virtual);
-        // Needed to be sure everyone registered the buffers
-        timer.reset("= swing_coll_l_utofu (utofu barrier)");
-        MPI_Barrier(MPI_COMM_WORLD);
+        if(utofu_descriptor == NULL){
+            timer.reset("= swing_coll_l_utofu (utofu setup)");        
+            uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+            compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc);
+            utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
+                                                                            this->num_ports, num_steps_virtual, peers);
+            timer.reset("= swing_coll_l_utofu (utofu wait)");            
+            swing_utofu_setup_wait(utofu_descriptor, num_steps_virtual);
+            // Needed to be sure everyone registered the buffers
+            timer.reset("= swing_coll_l_utofu (utofu barrier)");
+            MPI_Barrier(MPI_COMM_WORLD);
+            free(peers);
+        }
 
         timer.reset("= swing_coll_l_utofu (actual sendrecvs)");
         uint partition_size = count / this->num_ports;
@@ -565,12 +576,11 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 DPRINTF("[%d] Step %d completed\n", rank, step);    
             }        
         }
-        timer.reset("= swing_coll_l_utofu (utofu teardown)");
-        // Cleanup utofu resources
-        swing_utofu_teardown(utofu_descriptor);
-        free(peers);
     }else{
-        MPI_Barrier(MPI_COMM_WORLD); // For the uTofu correctness
+        if(utofu_descriptor == NULL){
+            MPI_Barrier(MPI_COMM_WORLD); // For the uTofu correctness
+            utofu_descriptor = (swing_utofu_comm_descriptor*) 0xBADF00D;
+        }
     }
 
     if(!all_p2_dimensions){
@@ -1582,17 +1592,19 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 #ifdef FUGAKU   
         // Setup all the communications        
         // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
-        timer.reset("= swing_coll_b (utofu setup)");        
+        if(utofu_descriptor == NULL){
+            timer.reset("= swing_coll_b (utofu setup)");        
 
-        swing_utofu_comm_descriptor* utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
+            utofu_descriptor = swing_utofu_setup((void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
                                                                           this->num_ports, this->num_steps, this->sbc[0]->get_peers());
         
-        timer.reset("= swing_coll_b (utofu wait)");            
-        swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
+            timer.reset("= swing_coll_b (utofu wait)");            
+            swing_utofu_setup_wait(utofu_descriptor, this->num_steps);
         
-        // Needed to be sure everyone registered the buffers
-        timer.reset("= swing_coll_b (utofu barrier)");
-        MPI_Barrier(MPI_COMM_WORLD);
+            // Needed to be sure everyone registered the buffers
+            timer.reset("= swing_coll_b (utofu barrier)");
+            MPI_Barrier(MPI_COMM_WORLD);
+        }
         
         timer.reset("= swing_coll_b (utofu main loop)");
 
@@ -1612,9 +1624,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
                 }
             }
         }
-        timer.reset("= swing_coll_b (utofu teardown)");
-        // Cleanup utofu resources
-        swing_utofu_teardown(utofu_descriptor);
 #else
         fprintf(stderr, "uTofu can only be used on Fugaku.\n");
         exit(-1);
