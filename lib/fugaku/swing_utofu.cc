@@ -22,26 +22,20 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
 
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t length_s, 
-                                               void* recv_buffer, size_t length_r, 
-                                               void* temp_buffer, size_t length_t,
-                                               uint num_ports, uint num_steps, uint* peers){
+void swing_utofu_setup(swing_utofu_comm_descriptor* desc, uint num_ports){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
     
-    swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));    
+    memset(desc, 0, sizeof(swing_utofu_comm_descriptor));
     desc->num_ports = num_ports;
-
-    desc->peers = (uint*) malloc(sizeof(uint)*num_steps);
-    memcpy(desc->peers, peers, sizeof(uint)*num_steps);
 
     utofu_tni_id_t* tni_ids;
     size_t num_tnis;
     int rc = utofu_get_onesided_tnis(&tni_ids, &num_tnis);
     if (rc != UTOFU_SUCCESS || num_tnis == 0) {
         MPI_Abort(MPI_COMM_WORLD, 1);
-        return NULL;
+        return;
     }
     assert(num_tnis >= num_ports);
 
@@ -56,7 +50,18 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
         // create a VCQ and get its VCQ ID
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(desc->port_info[p].lcl_vcq_id)) == UTOFU_SUCCESS);
-        
+    }
+    free(tni_ids);    
+}
+
+void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
+                         const void* send_buffer, size_t length_s, 
+                         void* recv_buffer, size_t length_r, 
+                         void* temp_buffer, size_t length_t,
+                         uint num_ports, uint num_steps, uint* peers){
+    desc->peers = (uint*) malloc(sizeof(uint)*num_steps);
+    memcpy(desc->peers, peers, sizeof(uint)*num_steps);
+    for(size_t p = 0; p < num_ports; p++){        
         // register memory regions and get their STADDs
         // TODO: One single registration of a large buffer? (I should do it only once regardless of num_ports!!)
         assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
@@ -65,12 +70,6 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
         desc->port_info[p].rmt_info = new std::unordered_map<uint, swing_utofu_remote_info>();
         memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
     }
-    free(tni_ids);
-    
-    // TODO: Might it make sense to use an allgather instead of log2(n) individual send and recv?
-    // The number of send/recv would probably be the same, but the total numnber of transferred bytes will be higher
-    // (each rank will eventually receive info about all the ranks QPs, also those with whom it does not communicate)
-    // The other advantage of the allgather is that it is hw accelerated (???)
 
     desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     pack_local_info(desc);
@@ -80,10 +79,9 @@ swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t l
         uint peer = peers[step];	
         MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
-    return desc;
 }
 
-void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ // TODO: Do it synchronously with sendrecv ?
+void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ // TODO: Do it synchronously with sendrecv ?
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
@@ -97,14 +95,8 @@ void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ 
     free(rbuffer);
 }
 
-void swing_utofu_reset(swing_utofu_comm_descriptor* desc){
-    for(size_t p = 0; p < desc->num_ports; p++){
-        memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
-    }
-}
-
 // teardown communication
-void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
+void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc){
     for(size_t p = 0; p < desc->num_ports; p++){        
         utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_send_stadd, 0);
         utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_recv_stadd, 0);
@@ -113,7 +105,6 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc){
         delete desc->port_info[p].rmt_info;
     }    
     free(desc->peers);
-    free(desc);
 }
 
 // send data and confirm its completion

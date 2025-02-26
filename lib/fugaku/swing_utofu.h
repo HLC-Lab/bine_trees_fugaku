@@ -42,22 +42,17 @@ struct swing_utofu_comm_d{
     MPI_Request reqs[LIBSWING_MAX_STEPS];
 };
 
-// setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup(const void* send_buffer, size_t length_s, 
-                                               void* recv_buffer, size_t length_r, 
-                                               void* tmp_buffer, size_t length_t,
-                                               uint num_ports, uint num_steps, uint* peers);
-void swing_utofu_setup_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
-void swing_utofu_reset(swing_utofu_comm_descriptor* desc);
 
-// teardown communication
-void swing_utofu_teardown(swing_utofu_comm_descriptor* desc);
+void swing_utofu_setup(swing_utofu_comm_descriptor* desc, uint num_ports);
+void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
+                         const void* send_buffer, size_t length_s, 
+                         void* recv_buffer, size_t length_r, 
+                         void* temp_buffer, size_t length_t,
+                         uint num_ports, uint num_steps, uint* peers);
+void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
+void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc);
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
-                       utofu_stadd_t lcl_addr, size_t length,
-                       utofu_stadd_t rmt_addr, uint64_t edata);
-
-// Sends and recv are waited in the same order they are posted
+    utofu_stadd_t lcl_addr, size_t length, 
+    utofu_stadd_t rmt_addr, uint64_t edata);
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);
-
-// expected_segment starts from 0
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment);
