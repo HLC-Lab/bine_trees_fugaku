@@ -273,7 +273,7 @@ class SwingCommon {
 #ifdef FUGAKU
         swing_utofu_comm_descriptor* utofu_descriptor;
         utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
-        utofu_stadd_t lcl_temp_stadd;
+        utofu_stadd_t lcl_temp_stadd[LIBSWING_MAX_SUPPORTED_PORTS];
         utofu_stadd_t* temp_buffers[LIBSWING_MAX_SUPPORTED_PORTS]; // temp_buffers[p][r] contains the address of the buffer for the rank r on port p
 #endif
 

@@ -71,7 +71,8 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
             assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
             desc->port_info[p].registration_cache->insert({(void*) send_buffer, desc->port_info[p].lcl_send_stadd});
         }
-
+        // TODO: What if a buffer is freed and then malloced with a different size?
+        // We should probably cache the size as well ...
         it = desc->port_info[p].registration_cache->find(recv_buffer);
         if(it != desc->port_info[p].registration_cache->end()){
             desc->port_info[p].lcl_recv_stadd = it->second;
@@ -88,8 +89,6 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                 assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, temp_buffer, length_t, 0, &(desc->port_info[p].lcl_temp_stadd)) == UTOFU_SUCCESS);
                 desc->port_info[p].registration_cache->insert({temp_buffer, desc->port_info[p].lcl_temp_stadd});
             }
-        }else{
-            desc->port_info[p].lcl_temp_stadd = 0;
         }
         memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
     }

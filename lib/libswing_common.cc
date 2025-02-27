@@ -266,8 +266,8 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
         // If a temporary preallocd buffer was already allocated, register and exchange its info
         if(prealloc_size){
             this->temp_buffers[p] = (utofu_stadd_t*) malloc(sizeof(utofu_stadd_t)*this->size);
-            assert(utofu_reg_mem(this->utofu_descriptor->port_info[p].vcq_hdl, prealloc_buf, prealloc_size, 0, &(lcl_temp_stadd)) == UTOFU_SUCCESS);
-            PMPI_Allgather(&lcl_temp_stadd, 1, MPI_UINT64_T, 
+            assert(utofu_reg_mem(this->utofu_descriptor->port_info[p].vcq_hdl, prealloc_buf, prealloc_size, 0, &(lcl_temp_stadd[p])) == UTOFU_SUCCESS);
+            PMPI_Allgather(&(lcl_temp_stadd[p]), 1, MPI_UINT64_T, 
                            this->temp_buffers[p], 1, MPI_UINT64_T, comm);
         }
     }
@@ -283,7 +283,7 @@ SwingCommon::~SwingCommon(){
         free(this->vcq_ids[i]);
         if(prealloc_size){
             free(this->temp_buffers[i]);
-            utofu_dereg_mem(this->utofu_descriptor->port_info[i].vcq_hdl, lcl_temp_stadd, 0);
+            utofu_dereg_mem(this->utofu_descriptor->port_info[i].vcq_hdl, lcl_temp_stadd[i], 0);
         }
     }
     swing_utofu_teardown(this->utofu_descriptor, this->num_ports);
@@ -1654,14 +1654,21 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     if(algo == ALGO_SWING_B_UTOFU){     
 #ifdef FUGAKU   
         // Setup all the communications        
-        // TODO: Cache also utofu descriptors to avoid exchanging pointers at each allreduce?
-        timer.reset("= swing_coll_b (utofu setup)");     
-        swing_utofu_reg_buf(this->utofu_descriptor,
-                            (void*) sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, 
-                            this->num_ports);
-
-        timer.reset("= swing_coll_b (utofu wait)");            
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers());
+        if(tmpbuf_size > prealloc_size){
+            timer.reset("= swing_coll_b (utofu buf reg)");        
+            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, this->num_ports); 
+            timer.reset("= swing_coll_b (utofu buf exch)");           
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+        }else{
+            timer.reset("= swing_coll_b (utofu buf reg)");        
+            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, this->num_ports); 
+            // Tempbuf not registered, so add it manually
+            for(size_t i = 0; i < num_ports; i++){
+                this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
+            }
+            timer.reset("= swing_coll_b (utofu buf exch)");           
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+        }
             
         timer.reset("= swing_coll_b (utofu main loop)");
 
