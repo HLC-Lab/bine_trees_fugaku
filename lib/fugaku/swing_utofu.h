@@ -18,16 +18,13 @@
 #define SWING_UTOFU_VCQ_FLAGS 0
 
 typedef struct{
-    utofu_stadd_t recv_stadd;
-    utofu_stadd_t temp_stadd;
-}swing_utofu_remote_info;
-
-typedef struct{
     utofu_vcq_hdl_t vcq_hdl;
     utofu_stadd_t lcl_send_stadd;
     utofu_stadd_t lcl_recv_stadd;
     utofu_stadd_t lcl_temp_stadd;
-    std::unordered_map<uint, swing_utofu_remote_info>* rmt_info; // mapping the peer to the addresses
+    utofu_stadd_t* rmt_recv_stadd; 
+    utofu_stadd_t* rmt_temp_stadd; 
+    std::unordered_map<void*, utofu_stadd_t>* registration_cache; // Cache for the registration of the buffers
     char completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
     volatile char padding[CACHE_LINE_SIZE];
 }swing_utofu_port_info;
@@ -36,19 +33,17 @@ struct swing_utofu_comm_d{
     uint num_ports;
     uint* peers;
     swing_utofu_port_info port_info[LIBSWING_MAX_SUPPORTED_PORTS];
-    uint64_t* sbuffer;
-    MPI_Request reqs[LIBSWING_MAX_STEPS];
 };
 
 
-void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_ids, uint num_ports);
+swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num_ports, uint size);
+void swing_utofu_teardown(swing_utofu_comm_descriptor* desc, uint num_ports);
 void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          const void* send_buffer, size_t length_s, 
                          void* recv_buffer, size_t length_r, 
                          void* temp_buffer, size_t length_t,
-                         uint num_ports, uint num_steps, uint* peers);
-void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
-void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc);
+                         uint num_ports);
+void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_steps, uint* peers);
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
     utofu_stadd_t lcl_addr, size_t length, 
     utofu_stadd_t rmt_addr, uint64_t edata);

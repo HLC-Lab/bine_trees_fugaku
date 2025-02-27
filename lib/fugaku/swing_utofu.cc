@@ -1,30 +1,13 @@
 #include "swing_utofu.h"
 
-static void pack_local_info(swing_utofu_comm_descriptor* desc){
-    for(size_t i = 0; i < desc->num_ports; i++){
-        desc->sbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
-        desc->sbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
-    }
-}
-
-static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buffer, uint peer){
-    for(size_t i = 0; i < desc->num_ports; i++){
-        assert(desc->port_info[i].rmt_info->count(peer) == 0);
-        // Add an empty entry for the peer
-        swing_utofu_remote_info rmt;
-        rmt.recv_stadd = buffer[2*i];
-        rmt.temp_stadd = buffer[2*i+1];
-        desc->port_info[i].rmt_info->insert({peer, rmt});
-    }
-}
-
 
 // setup send/recv communication
-void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_ids, uint num_ports){
+swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num_ports, uint size){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
     
+    swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));
     memset(desc, 0, sizeof(swing_utofu_comm_descriptor));
     desc->num_ports = num_ports;
 
@@ -33,7 +16,7 @@ void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id
     int rc = utofu_get_onesided_tnis(&tni_ids, &num_tnis);
     if (rc != UTOFU_SUCCESS || num_tnis == 0) {
         MPI_Abort(MPI_COMM_WORLD, 1);
-        return;
+        return NULL;
     }
     assert(num_tnis >= num_ports);
 
@@ -48,61 +31,98 @@ void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id
         // create a VCQ and get its VCQ ID
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(vcq_ids[p])) == UTOFU_SUCCESS);
+        desc->port_info[p].rmt_recv_stadd = (utofu_stadd_t*) malloc(sizeof(utofu_stadd_t)*size);
+        desc->port_info[p].rmt_temp_stadd = (utofu_stadd_t*) malloc(sizeof(utofu_stadd_t)*size);
+        desc->port_info[p].registration_cache = new std::unordered_map<void*, utofu_stadd_t>();
     }
     free(tni_ids);    
+    return desc;
+}
+
+void swing_utofu_teardown(swing_utofu_comm_descriptor* desc, uint num_ports){
+    for(size_t p = 0; p < num_ports; p++){
+        // Deregister all STADD in cache
+        for(auto it = desc->port_info[p].registration_cache->begin(); it != desc->port_info[p].registration_cache->end(); it++){
+            utofu_dereg_mem(desc->port_info[p].vcq_hdl, it->second, 0);
+        }
+        utofu_free_vcq(desc->port_info[p].vcq_hdl);        
+        free(desc->port_info[p].rmt_recv_stadd);
+        free(desc->port_info[p].rmt_temp_stadd);
+        delete desc->port_info[p].registration_cache;
+    }
+    free(desc);
 }
 
 void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          const void* send_buffer, size_t length_s, 
                          void* recv_buffer, size_t length_r, 
                          void* temp_buffer, size_t length_t,
-                         uint num_ports, uint num_steps, uint* peers){
-    desc->peers = (uint*) malloc(sizeof(uint)*num_steps);
-    memcpy(desc->peers, peers, sizeof(uint)*num_steps);
+                         uint num_ports){
     for(size_t p = 0; p < num_ports; p++){        
         // register memory regions and get their STADDs
-        // TODO: One single registration of a large buffer? (I should do it only once regardless of num_ports!!)
-        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
-        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
-        assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, temp_buffer, length_t, 0, &(desc->port_info[p].lcl_temp_stadd)) == UTOFU_SUCCESS);
-        desc->port_info[p].rmt_info = new std::unordered_map<uint, swing_utofu_remote_info>();
-        memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
-    }
 
-    desc->sbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
-    pack_local_info(desc);
-    // Send the local info for my the ports, to all the peers
-    // TODO: Replace the individual sends with a collective so that this is done with HW tofu barrier which would be faster?
-    for(size_t step = 0; step < num_steps; step++){
-        uint peer = peers[step];	
-        MPI_Isend(desc->sbuffer, 2*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
+        // If send_buffer has already been registered, use the cached STADD
+        // Otherwise, register it and cache the STADD
+        // Use iterators/find instead of count to avoid multiple lookups
+        auto it = desc->port_info[p].registration_cache->find((void*) send_buffer);
+        if(it != desc->port_info[p].registration_cache->end()){
+            desc->port_info[p].lcl_send_stadd = it->second;
+        }else{
+            assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
+            desc->port_info[p].registration_cache->insert({(void*) send_buffer, desc->port_info[p].lcl_send_stadd});
+        }
+
+        it = desc->port_info[p].registration_cache->find(recv_buffer);
+        if(it != desc->port_info[p].registration_cache->end()){
+            desc->port_info[p].lcl_recv_stadd = it->second;
+        }else{
+            assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
+            desc->port_info[p].registration_cache->insert({recv_buffer, desc->port_info[p].lcl_recv_stadd});
+        }
+
+        if(length_t){
+            it = desc->port_info[p].registration_cache->find(temp_buffer);
+            if(it != desc->port_info[p].registration_cache->end()){
+                desc->port_info[p].lcl_temp_stadd = it->second;
+            }else{
+                assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, temp_buffer, length_t, 0, &(desc->port_info[p].lcl_temp_stadd)) == UTOFU_SUCCESS);
+                desc->port_info[p].registration_cache->insert({temp_buffer, desc->port_info[p].lcl_temp_stadd});
+            }
+        }else{
+            desc->port_info[p].lcl_temp_stadd = 0;
+        }
+        memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
     }
 }
 
-void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ // TODO: Do it synchronously with sendrecv ?
+void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_steps, uint* peers){
+    uint64_t* sbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
+    MPI_Request reqs[LIBSWING_MAX_STEPS];
+    for(size_t i = 0; i < desc->num_ports; i++){
+        sbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
+        sbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
+    }
+    // Send the local info for my the ports, to all the peers
+    for(size_t step = 0; step < num_steps; step++){
+        uint peer = peers[step];	
+        MPI_Isend(sbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(reqs[step]));
+    }
+
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
-        uint peer = desc->peers[step];
+        uint peer = peers[step];
         MPI_Recv(rbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        unpack_remote_info(desc, rbuffer, peer);
+        for(size_t i = 0; i < desc->num_ports; i++){
+            // Add an empty entry for the peer
+            desc->port_info[i].rmt_recv_stadd[peer] = rbuffer[2*i];
+            desc->port_info[i].rmt_temp_stadd[peer] = rbuffer[2*i+1];
+        }
     }
-    MPI_Waitall(num_steps, desc->reqs, MPI_STATUSES_IGNORE);
+    MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE);
 
-    free(desc->sbuffer);
+    free(sbuffer);
     free(rbuffer);
-}
-
-// teardown communication
-void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc){
-    for(size_t p = 0; p < desc->num_ports; p++){        
-        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_send_stadd, 0);
-        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_recv_stadd, 0);
-        utofu_dereg_mem(desc->port_info[p].vcq_hdl, desc->port_info[p].lcl_temp_stadd, 0);
-        utofu_free_vcq(desc->port_info[p].vcq_hdl);
-        delete desc->port_info[p].rmt_info;
-    }    
-    free(desc->peers);
 }
 
 // send data and confirm its completion
