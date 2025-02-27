@@ -18,14 +18,12 @@
 #define SWING_UTOFU_VCQ_FLAGS 0
 
 typedef struct{
-    utofu_vcq_id_t vcq_id;
     utofu_stadd_t recv_stadd;
     utofu_stadd_t temp_stadd;
 }swing_utofu_remote_info;
 
 typedef struct{
     utofu_vcq_hdl_t vcq_hdl;
-    utofu_vcq_id_t lcl_vcq_id;
     utofu_stadd_t lcl_send_stadd;
     utofu_stadd_t lcl_recv_stadd;
     utofu_stadd_t lcl_temp_stadd;
@@ -43,7 +41,7 @@ struct swing_utofu_comm_d{
 };
 
 
-void swing_utofu_setup(swing_utofu_comm_descriptor* desc, uint num_ports);
+void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_ids, uint num_ports);
 void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          const void* send_buffer, size_t length_s, 
                          void* recv_buffer, size_t length_r, 
@@ -51,7 +49,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          uint num_ports, uint num_steps, uint* peers);
 void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps);
 void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc);
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
     utofu_stadd_t lcl_addr, size_t length, 
     utofu_stadd_t rmt_addr, uint64_t edata);
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);

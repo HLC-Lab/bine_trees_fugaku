@@ -208,13 +208,29 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     for(size_t i = 0; i < this->num_ports; i++){
         virtual_peers[i] = NULL;
     }
+#ifdef FUGAKU    
     this->utofu_descriptor = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));
-    swing_utofu_setup(this->utofu_descriptor, this->num_ports);
+    utofu_vcq_id_t* vcq_ids_pp = (utofu_vcq_id_t*) malloc(sizeof(utofu_vcq_id_t)*this->num_ports);
+    swing_utofu_setup(this->utofu_descriptor, vcq_ids_pp, this->num_ports);
+    
+    for(size_t p = 0; p < this->num_ports; p++){
+        this->vcq_ids[p] = (utofu_vcq_id_t*) malloc(sizeof(utofu_vcq_id_t)*this->size);
+        PMPI_Allgather(&(vcq_ids_pp[p]), 1, MPI_UINT64_T, 
+                       this->vcq_ids[p], 1, MPI_UINT64_T, comm);
+    }
+
+    free(vcq_ids_pp);
+#endif
 }
 
 SwingCommon::~SwingCommon(){
     // Cleanup utofu resources
+#ifdef FUGAKU
     free(this->utofu_descriptor);
+    for(size_t i = 0; i < this->num_ports; i++){
+        free(this->vcq_ids[i]);
+    }
+#endif
     for(size_t i = 0; i < this->num_ports; i++){
         if(this->sbc[i] != NULL){
             delete this->sbc[i];
@@ -556,7 +572,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 utofu_stadd_t lcl_addr = base_lcl_stadd + offset_port;
                 utofu_stadd_t rmt_addr = base_rmt_stadd + count*dtsize*step + offset_port; // We need to add an additional offset because at each step we write on a different offset (see comment above)
 
-                swing_utofu_isend(utofu_descriptor, p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
+                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
                 swing_utofu_wait_recv(utofu_descriptor, p, step, 0);                
                 // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
                 swing_utofu_wait_sends(utofu_descriptor, p, 1); 
@@ -1188,7 +1204,7 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
             }else{
                 assert("Unknown collective type" == 0);
             }        
-            swing_utofu_isend(utofu_descriptor, port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
+            swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
 
             // Update for the next segment
             offset += bytes_to_send;

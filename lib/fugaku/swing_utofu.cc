@@ -2,9 +2,8 @@
 
 static void pack_local_info(swing_utofu_comm_descriptor* desc){
     for(size_t i = 0; i < desc->num_ports; i++){
-        desc->sbuffer[3*i] = desc->port_info[i].lcl_vcq_id;
-        desc->sbuffer[3*i+1] = desc->port_info[i].lcl_recv_stadd;
-        desc->sbuffer[3*i+2] = desc->port_info[i].lcl_temp_stadd;
+        desc->sbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
+        desc->sbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
     }
 }
 
@@ -13,16 +12,15 @@ static void unpack_remote_info(swing_utofu_comm_descriptor* desc, uint64_t* buff
         assert(desc->port_info[i].rmt_info->count(peer) == 0);
         // Add an empty entry for the peer
         swing_utofu_remote_info rmt;
-        rmt.vcq_id     = buffer[3*i];
-        rmt.recv_stadd = buffer[3*i+1];
-        rmt.temp_stadd = buffer[3*i+2];
+        rmt.recv_stadd = buffer[2*i];
+        rmt.temp_stadd = buffer[2*i+1];
         desc->port_info[i].rmt_info->insert({peer, rmt});
     }
 }
 
 
 // setup send/recv communication
-void swing_utofu_setup(swing_utofu_comm_descriptor* desc, uint num_ports){
+void swing_utofu_setup(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_ids, uint num_ports){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
@@ -49,7 +47,7 @@ void swing_utofu_setup(swing_utofu_comm_descriptor* desc, uint num_ports){
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
         assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
-        assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(desc->port_info[p].lcl_vcq_id)) == UTOFU_SUCCESS);
+        assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(vcq_ids[p])) == UTOFU_SUCCESS);
     }
     free(tni_ids);    
 }
@@ -71,22 +69,22 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
         memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
     }
 
-    desc->sbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
+    desc->sbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
     pack_local_info(desc);
     // Send the local info for my the ports, to all the peers
     // TODO: Replace the individual sends with a collective so that this is done with HW tofu barrier which would be faster?
     for(size_t step = 0; step < num_steps; step++){
         uint peer = peers[step];	
-        MPI_Isend(desc->sbuffer, 3*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
+        MPI_Isend(desc->sbuffer, 2*num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(desc->reqs[step]));
     }
 }
 
 void swing_utofu_reg_buf_wait(swing_utofu_comm_descriptor* desc, uint num_steps){ // TODO: Do it synchronously with sendrecv ?
     // Receive the remote info for all the ports, from all the peers
-    uint64_t* rbuffer = (uint64_t*) malloc(3*sizeof(uint64_t)*desc->num_ports);
+    uint64_t* rbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
         uint peer = desc->peers[step];
-        MPI_Recv(rbuffer, 3*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(rbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         unpack_remote_info(desc, rbuffer, peer);
     }
     MPI_Waitall(num_steps, desc->reqs, MPI_STATUSES_IGNORE);
@@ -108,7 +106,8 @@ void swing_utofu_dereg_buffers(swing_utofu_comm_descriptor* desc){
 }
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer,
+void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+                       uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length, 
                        utofu_stadd_t rmt_addr, uint64_t edata){    
     if(length > MAX_PUTGET_SIZE){
@@ -116,13 +115,12 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, uint port, size_t peer
         exit(-1);
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
-    utofu_vcq_id_t vcq_id = (*(desc->port_info[port].rmt_info))[peer].vcq_id;
     // instruct the TNI to perform a Put communication
     {
     // embed the default communication path coordinates into the received VCQ ID.
-        assert(utofu_set_vcq_id_path(&(vcq_id), NULL) == UTOFU_SUCCESS);
+        assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
 
-        utofu_put(desc->port_info[port].vcq_hdl, vcq_id, 
+        utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
                   lcl_addr, rmt_addr, length,
                   edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
     }

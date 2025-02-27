@@ -9,6 +9,9 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#ifdef FUGAKU
+#include <utofu.h>
+#endif
 
 typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
 
@@ -269,6 +272,7 @@ class SwingCommon {
         char* prealloc_buf;
 #ifdef FUGAKU
         swing_utofu_comm_descriptor* utofu_descriptor;
+        utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
 #endif
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
