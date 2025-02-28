@@ -48,6 +48,8 @@ typedef enum{
     ALGO_RING,
     ALGO_RECDOUB_L,
     ALGO_RECDOUB_B,
+    ALGO_RECDOUB_L_UTOFU,
+    ALGO_RECDOUB_B_UTOFU,
 }Algo;
 
 typedef struct{
@@ -157,7 +159,7 @@ class SwingBitmapCalculator {
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         uint32_t* block_step;
-        
+        Algo algo;
         size_t next_step; 
         volatile char padding2[CACHE_LINE_SIZE];
 
@@ -173,6 +175,18 @@ class SwingBitmapCalculator {
         // @param port (IN): the port
         // @return -1 or +1
         int get_distance_sign(size_t rank, size_t port);
+
+        // Computes the peer of an arbitrary rank for an arbitrary step and port.
+        // @param coord_rank (IN): the coordinates of the rank
+        // @param step (IN): the step
+        // @param coord_peer (OUT): the coordinates of the peer
+        void get_peer_swing(int* coord_rank, size_t step, int* coord_peer);
+
+        // Computes the peer of an arbitrary rank for an arbitrary step and port.
+        // @param coord_rank (IN): the coordinates of the rank
+        // @param step (IN): the step
+        // @param coord_peer (OUT): the coordinates of the peer
+        void get_peer_recdoub(int* coord_rank, size_t step, int* coord_peer);
 
         // Computes the peer of an arbitrary rank for an arbitrary step and port.
         // @param coord_rank (IN): the coordinates of the rank
@@ -207,7 +221,7 @@ class SwingBitmapCalculator {
         // @param port (IN): the port the collective starts from
         // @param blocks_info (IN): the blocks info
         // @param remap_blocks (IN): if true, the blocks are remapped to be contiguous
-        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks);
+        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, Algo algo);
 
         // Destructor
         ~SwingBitmapCalculator();

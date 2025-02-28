@@ -113,6 +113,10 @@ static inline void read_env(MPI_Comm comm){
             }else if(strcmp(env_str, "RECDOUB_B") == 0){
                 algo = ALGO_RECDOUB_B;
                 assert(dimensions_num == 1 && num_ports == 1);
+            }else if(strcmp(env_str, "RECDOUB_L_UTOFU") == 0){
+                algo = ALGO_RECDOUB_L_UTOFU;
+            }else if(strcmp(env_str, "RECDOUB_B_UTOFU") == 0){
+                algo = ALGO_RECDOUB_B_UTOFU;
             }else{
                 fprintf(stderr, "Unknown LIBSWING_ALGO\n");
                 exit(-1);
@@ -592,7 +596,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
-        if(algo == ALGO_SWING_L || algo == ALGO_SWING_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
+        if(algo == ALGO_SWING_L || algo == ALGO_SWING_L_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
@@ -603,7 +607,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             }
             free(blocks_info);
             return res;
-        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU){ // Swing_b
+        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
