@@ -1513,7 +1513,7 @@ void SwingBitmapCalculator::get_peer_recdoub(int* coord_rank, size_t step, int* 
 }
 
 void SwingBitmapCalculator::get_peer(int* coord_rank, size_t step, int* coord_peer){
-    if(algo == ALGO_RECDOUB_L_UTOFU || ALGO_RECDOUB_B_UTOFU){
+    if(algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
         get_peer_recdoub(coord_rank, step, coord_peer);
     }else{
         get_peer_swing(coord_rank, step, coord_peer);
