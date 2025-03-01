@@ -135,14 +135,12 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id
     }
     uintptr_t cbvalue = 0; // for tcq polling; the value is not used
     // instruct the TNI to perform a Put communication
-    {
     // embed the default communication path coordinates into the received VCQ ID.
-        assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
+    assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
 
-        utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
-                  lcl_addr, rmt_addr, length,
-                  edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
-    }
+    utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
+                lcl_addr, rmt_addr, length,
+                edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count){    
@@ -161,7 +159,7 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
 }
 
 // uTofu guarantees that the data sent from a given source to a given destination is received in order, as long as it uses the same VCQ 
-// and the same path. The same applies for remote RMQ notifications.
+// and the same path if the UTOFU_ONESIDED_FLAG_STRONG_ORDER is used. The same applies for remote RMQ notifications.
 // However, the order is not guaranteed across different sources. For example, rank 0 might receive some data from rank p-1 (from which it
 // receives from at step 1) before all the data from rank 1 (from which it receives from at step 0) has been received. 
 // Thus, we need to use the EDATA to keep track of the order of the segments received from a given source.
@@ -180,7 +178,8 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char e
 //
 // completed_recv[i] corresponds to the number of segments received for step i.
 // i.e., if completed_recv[2] == 3, then 3 segments have been received at step 2.
-// This works under the assumption that the segments from a given source are received in order (which holds for utofu).
+// This works under the assumption that the segments from a given source are received in order 
+// (which holds for utofu since we specified the UTOFU_ONESIDED_FLAG_STRONG_ORDER flag).
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
     // If it was already received, return
     if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
