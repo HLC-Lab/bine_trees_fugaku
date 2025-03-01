@@ -430,7 +430,6 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
             terminated_dimensions_bitmap[target_dim] = true;
             terminated_dimensions++;                
         }        
-
     }        
 }
 
@@ -458,7 +457,7 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
         terminated_dimensions_bitmap[i] = false;            
     }
     
-    int target_dim, relative_step, last_dim = port - 1;
+    int target_dim, relative_step, distance, last_dim = port - 1;
     uint terminated_dimensions = 0, o = 0;
     
     // Generate peers
@@ -479,8 +478,12 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
             coord[0] = rank;
         }
 
+        distance = (coord[target_dim] ^ (1 << relative_step)) - coord[target_dim];
+        // Mirrored collectives
+        if((uint) port >= dimensions_num){distance *= -1;}
+
         if(relative_step < num_steps_per_dim[target_dim]){
-            coord[target_dim] = coord[target_dim] ^ (1 << relative_step);
+            coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
             if(dimensions_num > 1){
                 peers[i] = scc.getIdFromCoord(coord, virt);
             }else{
@@ -492,7 +495,6 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
             terminated_dimensions_bitmap[target_dim] = true;
             terminated_dimensions++;                
         }        
-
     }        
 }
 
@@ -1485,7 +1487,7 @@ void SwingBitmapCalculator::get_peer_swing(int* coord_rank, size_t step, int* co
             d = current_d;
         }while(next_step_per_dim[d] >= this->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
     }
-    size_t distance = rhos[next_step_per_dim[current_d]];
+    int distance = rhos[next_step_per_dim[current_d]];
     distance *= get_distance_sign(coord_rank[current_d], port);
     coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
 }
@@ -1509,7 +1511,11 @@ void SwingBitmapCalculator::get_peer_recdoub(int* coord_rank, size_t step, int* 
             d = current_d;
         }while(next_step_per_dim[d] >= this->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
     }
-    coord_peer[current_d] = coord_peer[current_d] ^ (1 << (next_step_per_dim[current_d]));
+    int distance = (coord_peer[current_d] ^ (1 << (next_step_per_dim[current_d]))) - coord_peer[current_d];
+    if(port >= this->dimensions_num){ // Invert sign if mirrored collective
+        distance *= -1;     
+    }
+    coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
 }
 
 void SwingBitmapCalculator::get_peer(int* coord_rank, size_t step, int* coord_peer){
