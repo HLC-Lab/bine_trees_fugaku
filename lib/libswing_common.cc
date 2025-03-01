@@ -645,13 +645,18 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
 
     if(!idle){
         if(tmpbuf_size > prealloc_size){
-            timer.reset("= swing_coll_l_utofu (peers comp)");        
-            uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-            compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
             timer.reset("= swing_coll_l_utofu (utofu buf reg)");        
             swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, this->num_ports); 
             timer.reset("= swing_coll_l_utofu (utofu buf exch)");           
+            uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            // TODO Probably easier/better to do allgather???
+            compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+            if(num_ports > dimensions_num){
+                compute_peers(num_ports - 1, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+            }
             free(peers);
         }else{
             timer.reset("= swing_coll_l_utofu (utofu buf reg)");        
@@ -1341,7 +1346,20 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                 rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + utofu_offset_r;
             }else{
                 assert("Unknown collective type" == 0);
-            }        
+            }    
+            #ifdef DEBUG
+            utofu_stadd_t base_rmt_add;
+            if(coll_type == SWING_REDUCE_SCATTER){
+                if(step == 0){
+                    base_rmt_add = utofu_descriptor->port_info[port].rmt_recv_stadd[peer];
+                }else{
+                    base_rmt_add = utofu_descriptor->port_info[port].rmt_temp_stadd[peer];
+                }
+            }else if(coll_type == SWING_ALLGATHER){
+                base_rmt_add = utofu_descriptor->port_info[port].rmt_recv_stadd[peer];
+            }
+            DPRINTF("[%d] Sending %d bytes from %p to %p (base rmt add: %p)\n", this->rank, bytes_to_send, lcl_addr+bytes_to_send, rmt_addr+bytes_to_send, base_rmt_add);
+            #endif
             swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, bytes_to_send, rmt_addr, edata); 
 
             // Update for the next segment
@@ -1761,8 +1779,12 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
         if(tmpbuf_size > prealloc_size){
             timer.reset("= swing_coll_b (utofu buf reg)");        
             swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, this->num_ports); 
-            timer.reset("= swing_coll_b (utofu buf exch)");           
+            timer.reset("= swing_coll_b (utofu buf exch)");     
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
             swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+            if(this->num_ports > this->dimensions_num){
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[this->num_ports - 1]->get_peers()); 
+            }
         }else{
             timer.reset("= swing_coll_b (utofu buf reg)");        
             swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, this->num_ports); 
@@ -1772,6 +1794,10 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             }
             timer.reset("= swing_coll_b (utofu buf exch)");           
             swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
+            if(this->num_ports > this->dimensions_num){
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[this->num_ports - 1]->get_peers()); 
+            }
         }
             
         timer.reset("= swing_coll_b (utofu main loop)");

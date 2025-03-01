@@ -191,7 +191,7 @@ void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t 
         rc = utofu_poll_mrq(desc->port_info[port].vcq_hdl, 0, &notice);
         if(rc == UTOFU_SUCCESS){
             if(notice.notice_type == UTOFU_MRQ_TYPE_RMT_PUT){
-                DPRINTF("Recv completed at [X, %ld]\n", notice.rmt_stadd);
+                DPRINTF("Recv completed at [X, %p]\n", notice.rmt_stadd);
                 desc->port_info[port].completed_recv[notice.edata] += 1;
                 if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
                     return;
