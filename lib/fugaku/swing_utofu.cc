@@ -91,6 +91,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
             }
         }
         memset(desc->port_info[p].completed_recv, 0, sizeof(desc->port_info[p].completed_recv));
+        desc->port_info[p].completed_send = 0;
     }
 }
 
@@ -124,6 +125,17 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
     free(rbuffer);
 }
 
+static inline void swing_utofu_wait_send(swing_utofu_comm_descriptor* desc, uint port){
+    int rc;    
+    // confirm the TCQ notification
+    void *cbdata;
+    do {
+        rc = utofu_poll_tcq(desc->port_info[port].vcq_hdl, 0, &cbdata);
+    } while (rc == UTOFU_ERR_NOT_FOUND);
+    assert(rc == UTOFU_SUCCESS);
+}
+
+
 // send data and confirm its completion
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
                        uint port, size_t peer,
@@ -138,23 +150,23 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id
     // embed the default communication path coordinates into the received VCQ ID.
     assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
 
-    utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
-                lcl_addr, rmt_addr, length,
-                edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
+    // If too many put requests are posted, we need to wait for some of the previous
+    // ones to be over.
+    while(utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
+                    lcl_addr, rmt_addr, length,
+                    edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue) == UTOFU_ERR_BUSY){
+        swing_utofu_wait_send(desc, port);
+        desc->port_info[port].completed_send += 1;
+    }
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count){    
     // For the sends it is enough to wait for the completion of expected_count sends, since we never issue
     // the sends to the next peer if the sends to the previous peer are not completed.
     // i.e., we do not need to match the exact send addresses but just count how many of those completed
-    for(size_t i = 0; i < expected_count; i++){
-        int rc;    
-        // confirm the TCQ notification
-        void *cbdata;
-        do {
-            rc = utofu_poll_tcq(desc->port_info[port].vcq_hdl, 0, &cbdata);
-        } while (rc == UTOFU_ERR_NOT_FOUND);
-        assert(rc == UTOFU_SUCCESS);
+    // Some send completions might have been checked during isend (if UTOFU_ERR_BUSY in utofu_put)
+    for(size_t i = desc->port_info[port].completed_send; i < expected_count; i++){
+        swing_utofu_wait_send(desc, port);
     }    
 }
 

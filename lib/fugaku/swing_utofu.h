@@ -26,6 +26,7 @@ typedef struct{
     utofu_stadd_t* rmt_temp_stadd; 
     std::unordered_map<void*, utofu_stadd_t>* registration_cache; // Cache for the registration of the buffers
     size_t completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
+    size_t completed_send; // set of completed sends
     volatile char padding[CACHE_LINE_SIZE];
 }swing_utofu_port_info;
 

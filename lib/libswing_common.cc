@@ -365,14 +365,34 @@ SwingCoordConverter::~SwingCoordConverter(){
     free(this->coordinates);
 }
 
-/*
-static int is_positive_direction(int port, uint num_ports, uint dimensions_num){
-    int positive_per_port = (num_ports / dimensions_num) / 2;
-    if(num_ports)
-    return port >= dimensions_num;
+static int is_mirroring_port(int port, uint dimensions_num){
+    if(dimensions_num == 3){
+        return port >= dimensions_num;
+    }else if(dimensions_num == 2){
+        if(port == 0 || port == 1){
+            return 0;
+        }else if(port == 2 || port == 3){
+            return 1;
+        }else if(port == 4 || port == 5){
+            // TODO: On 2D torus we might have some unbalance (i.e., 4 ports for plain collectives and 2 for mirrored) The data we sent on plain collectives is 2x higher than what we send on mirrored. We should unbalance the 6 partitions of the vector accordingly.
+            return 0;
+        }
+    }else if(dimensions_num == 1){
+        return port % 2;
+    }
+    return 0;
 }
-*/
-    
+
+static int get_mirroring_port(int num_ports, uint dimensions_num){
+    int p = -1;
+    for(size_t p = 0; p < num_ports; p++){
+        if(is_mirroring_port(p, dimensions_num)){
+            return p;
+        }
+    }
+    return p;
+}
+
 // Compute the peers of a rank in a torus which start transmitting from a specific port.
 // @param port (IN): the port from which the transmission starts
 // @param rank (IN): the rank
@@ -422,7 +442,7 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
         // Flip the sign for odd nodes
         if(is_odd(coord[target_dim])){distance *= -1;}
         // Mirrored collectives
-        if((uint) port >= dimensions_num){distance *= -1;}
+        if(is_mirroring_port(port, dimensions_num)){distance *= -1;}
 
         if(relative_step < num_steps_per_dim[target_dim]){
             coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
@@ -487,7 +507,7 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
 
         distance = (coord[target_dim] ^ (1 << relative_step)) - coord[target_dim];
         // Mirrored collectives
-        if((uint) port >= dimensions_num){distance *= -1;}
+        if(is_mirroring_port(port, dimensions_num)){distance *= -1;}
 
         if(relative_step < num_steps_per_dim[target_dim]){
             coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
@@ -660,8 +680,9 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             // TODO Probably easier/better to do allgather???
             compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
-            if(num_ports > dimensions_num){
-                compute_peers(num_ports - 1, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+            int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
+            if(mp != -1){
+                compute_peers(mp, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
             }
             free(peers);
@@ -1461,7 +1482,7 @@ int SwingBitmapCalculator::get_distance_sign(size_t rank, size_t port){
     if(is_odd(rank)){ // Invert sign if odd rank
         multiplier *= -1;
     }
-    if(port >= this->dimensions_num){ // Invert sign if mirrored collective
+    if(is_mirroring_port(port, this->dimensions_num)){ // Invert sign if mirrored collective
         multiplier *= -1;     
     }
     return multiplier;
@@ -1537,7 +1558,7 @@ void SwingBitmapCalculator::get_peer_recdoub(int* coord_rank, size_t step, int* 
         }while(next_step_per_dim[d] >= this->num_steps_per_dim[d]); // If we exhausted this dimension, move to the next one
     }
     int distance = (coord_peer[current_d] ^ (1 << (next_step_per_dim[current_d]))) - coord_peer[current_d];
-    if(port >= this->dimensions_num){ // Invert sign if mirrored collective
+    if(is_mirroring_port(port, this->dimensions_num)){ // Invert sign if mirrored collective
         distance *= -1;     
     }
     coord_peer[current_d] = mod(coord_peer[current_d] + distance, dimensions[current_d]);
@@ -1782,6 +1803,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     }
     if(algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){     
 #ifdef FUGAKU   
+        int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
         // Setup all the communications        
         if(tmpbuf_size > prealloc_size){
             timer.reset("= swing_coll_b (utofu buf reg)");        
@@ -1789,8 +1811,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             timer.reset("= swing_coll_b (utofu buf exch)");     
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
             swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
-            if(this->num_ports > this->dimensions_num){
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[this->num_ports - 1]->get_peers()); 
+            if(mp != -1){
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
             }
         }else{
             timer.reset("= swing_coll_b (utofu buf reg)");        
@@ -1802,8 +1824,8 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             timer.reset("= swing_coll_b (utofu buf exch)");           
             swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
-            if(this->num_ports > this->dimensions_num){
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[this->num_ports - 1]->get_peers()); 
+            if(mp != -1){
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
             }
         }
             
@@ -1902,7 +1924,7 @@ static inline uint32_t reverse(uint32_t x){
 
 static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
     // For the other ports reflect along the axis
-    if(port >= dimensions_num){
+    if(is_mirroring_port(port, dimensions_num)){
         rank = -rank + num_ranks;
     }
     binary_to_negabinary(rank);
