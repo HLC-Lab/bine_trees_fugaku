@@ -143,7 +143,7 @@ void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id
                 edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue);
 }
 
-void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count){    
+void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count){    
     // For the sends it is enough to wait for the completion of expected_count sends, since we never issue
     // the sends to the next peer if the sends to the previous peer are not completed.
     // i.e., we do not need to match the exact send addresses but just count how many of those completed

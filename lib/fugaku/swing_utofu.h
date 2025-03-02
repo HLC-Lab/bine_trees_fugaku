@@ -25,7 +25,7 @@ typedef struct{
     utofu_stadd_t* rmt_recv_stadd; 
     utofu_stadd_t* rmt_temp_stadd; 
     std::unordered_map<void*, utofu_stadd_t>* registration_cache; // Cache for the registration of the buffers
-    char completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
+    size_t completed_recv[LIBSWING_MAX_STEPS]; // set of completed recvs
     volatile char padding[CACHE_LINE_SIZE];
 }swing_utofu_port_info;
 
@@ -47,5 +47,5 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
 void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
     utofu_stadd_t lcl_addr, size_t length, 
     utofu_stadd_t rmt_addr, uint64_t edata);
-void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, char expected_count);
+void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count);
 void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment);

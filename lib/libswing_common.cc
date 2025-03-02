@@ -365,6 +365,13 @@ SwingCoordConverter::~SwingCoordConverter(){
     free(this->coordinates);
 }
 
+/*
+static int is_positive_direction(int port, uint num_ports, uint dimensions_num){
+    int positive_per_port = (num_ports / dimensions_num) / 2;
+    if(num_ports)
+    return port >= dimensions_num;
+}
+*/
     
 // Compute the peers of a rank in a torus which start transmitting from a specific port.
 // @param port (IN): the port from which the transmission starts

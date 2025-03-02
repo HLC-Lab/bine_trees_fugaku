@@ -57,7 +57,6 @@ typedef struct{
     size_t count;
 }BlockInfo;
 
-
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
@@ -69,7 +68,6 @@ typedef struct{
 #else
 #define DPRINTF(...) 
 #endif
-
 
 #define PROFILE_TIMER_TYPE steady_clock
 
