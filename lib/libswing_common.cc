@@ -2111,15 +2111,16 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
 #pragma omp parallel for num_threads(this->num_ports) schedule(static, 1) collapse(1)
     for(size_t p = 0; p < this->num_ports; p++){
         // Not actually needed, is just to use the get_peer, should be refactored
-        this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, 0, NULL, false, algo);
+        timer.reset("= swing_bcast_l (bitmap calc)");
+        this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, p, NULL, false, algo);
 
+        timer.reset("= swing_bcast_l (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         this->scc.retrieve_coord_mapping(this->rank, false, coord);
 
         int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         this->scc.getCoordFromId(root, false, coord_root);
 
-        timer.reset("= swing_bcast_l (actual sendrecvs)");
         uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
         uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
         for(size_t i = 0; i < this->size; i++){
@@ -2137,6 +2138,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         }
         offset_port *= dtsize;
 
+        // Pipeline the recv with the first send
         size_t remaining = count_port;
         size_t bytes_to_send = 0, count_segment, offset_segment = 0;
         size_t issued_sends = 0, issued_recvs = 0;
@@ -2144,6 +2146,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             count_segment = remaining < max_count ? remaining : max_count;
             bytes_to_send = count_segment*dtsize;
 
+            timer.reset("= swing_bcast_l (waiting recv)");
             if(root != this->rank){        
                 // Receive the data from the root    
                 swing_utofu_wait_recv(utofu_descriptor, p, 0, issued_recvs);
@@ -2153,9 +2156,9 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             }
         
             // Now perform all the subsequent steps
-            for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
+            size_t step = receiving_step + 1;
+            if(step < this->num_steps){            
                 peer = this->sbc[p]->get_peer(step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
-
                 if(parent[peer] == this->rank){
                     utofu_stadd_t lcl_addr;
                     if(this->rank == 0){
@@ -2171,7 +2174,38 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             offset_segment += bytes_to_send;
             remaining -= count_segment;            
         }
+        //swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
+
+        // Now pipeline each of the next steps
+        for(size_t step = receiving_step + 2; step < (uint) this->num_steps; step++){
+            timer.reset("= swing_bcast_l (sending step)");
+            remaining = count_port;
+            bytes_to_send = 0;
+            offset_segment = 0;
+            //issued_sends = 0;
+            while(remaining){
+                count_segment = remaining < max_count ? remaining : max_count;
+                bytes_to_send = count_segment*dtsize;
+                peer = this->sbc[p]->get_peer(step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
+                if(parent[peer] == this->rank){
+                    utofu_stadd_t lcl_addr;
+                    if(this->rank == 0){
+                        lcl_addr = utofu_descriptor->port_info[p].lcl_send_stadd + offset_port + offset_segment;
+                    }else{
+                        lcl_addr = utofu_descriptor->port_info[p].lcl_recv_stadd + offset_port + offset_segment;
+                    }
+                    utofu_stadd_t rmt_addr = utofu_descriptor->port_info[p].rmt_recv_stadd[peer] + offset_port + offset_segment;                                        
+                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, bytes_to_send, rmt_addr, 0);                                         
+                    ++issued_sends;                    
+                }
+                offset_segment += bytes_to_send;
+                remaining -= count_segment;            
+            }
+            
+        }
+        timer.reset("= swing_bcast_l (waiting all sends)");
         swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
+
         free(reached_at_step);
         free(parent);
         delete this->sbc[p];
