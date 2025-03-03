@@ -809,7 +809,7 @@ int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root,
                MPI_Comm comm ){
     read_env(comm);
     if(algo == ALGO_DEFAULT){
-        return MPI_Bcast(buffer, count, datatype, root, comm);
+        return PMPI_Bcast(buffer, count, datatype, root, comm);
     }else{        
         if(algo == ALGO_SWING_L){
             return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);

@@ -64,25 +64,30 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
         // If send_buffer has already been registered, use the cached STADD
         // Otherwise, register it and cache the STADD
         // Use iterators/find instead of count to avoid multiple lookups
-        auto it = desc->port_info[p].registration_cache->find((void*) send_buffer);
-        if(it != desc->port_info[p].registration_cache->end()){
-            desc->port_info[p].lcl_send_stadd = it->second;
-        }else{
-            assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
-            desc->port_info[p].registration_cache->insert({(void*) send_buffer, desc->port_info[p].lcl_send_stadd});
+        if(length_s){
+            auto it = desc->port_info[p].registration_cache->find((void*) send_buffer);
+            if(it != desc->port_info[p].registration_cache->end()){
+                desc->port_info[p].lcl_send_stadd = it->second;
+            }else{
+                assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, (void*) send_buffer, length_s, 0, &(desc->port_info[p].lcl_send_stadd)) == UTOFU_SUCCESS);
+                desc->port_info[p].registration_cache->insert({(void*) send_buffer, desc->port_info[p].lcl_send_stadd});
+            }
         }
+        
         // TODO: What if a buffer is freed and then malloced with a different size?
         // We should probably cache the size as well ...
-        it = desc->port_info[p].registration_cache->find(recv_buffer);
-        if(it != desc->port_info[p].registration_cache->end()){
-            desc->port_info[p].lcl_recv_stadd = it->second;
-        }else{
-            assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
-            desc->port_info[p].registration_cache->insert({recv_buffer, desc->port_info[p].lcl_recv_stadd});
+        if(length_r){
+            auto it = desc->port_info[p].registration_cache->find(recv_buffer);
+            if(it != desc->port_info[p].registration_cache->end()){
+                desc->port_info[p].lcl_recv_stadd = it->second;
+            }else{
+                assert(utofu_reg_mem(desc->port_info[p].vcq_hdl, recv_buffer, length_r, 0, &(desc->port_info[p].lcl_recv_stadd)) == UTOFU_SUCCESS);
+                desc->port_info[p].registration_cache->insert({recv_buffer, desc->port_info[p].lcl_recv_stadd});
+            }
         }
 
         if(length_t){
-            it = desc->port_info[p].registration_cache->find(temp_buffer);
+            auto it = desc->port_info[p].registration_cache->find(temp_buffer);
             if(it != desc->port_info[p].registration_cache->end()){
                 desc->port_info[p].lcl_temp_stadd = it->second;
             }else{

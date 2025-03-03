@@ -2073,7 +2073,95 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
 }
 
 int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
-    ;
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_bcast_l (init)");
+    Timer timer("swing_bcast_l (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+    
+    timer.reset("= swing_bcast_l (utofu buf reg)"); 
+    if(this->rank == root){
+        swing_utofu_reg_buf(this->utofu_descriptor, buffer, count*dtsize, NULL, 0, NULL, 0, this->num_ports); 
+    }else{
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, this->num_ports); 
+    }
+
+    timer.reset("= swing_bcast_l (utofu buf exch)");           
+    uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+    // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+    // TODO Probably easier/better to do allgather???
+    compute_peers(0, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+    swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+    int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
+    if(mp != -1){
+        compute_peers(mp, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+    }
+    free(peers);
+
+    uint partition_size = count / this->num_ports;
+    uint remaining = count % this->num_ports;        
+    int res = MPI_SUCCESS; 
+
+#pragma omp parallel for num_threads(this->num_ports) schedule(static, 1) collapse(1)
+    for(size_t p = 0; p < this->num_ports; p++){
+        // Not actually needed, is just to use the get_peer, should be refactored
+        this->sbc[p] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, 0, NULL, false, algo);
+
+        int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        this->scc.retrieve_coord_mapping(this->rank, false, coord);
+
+        int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        this->scc.getCoordFromId(root, false, coord_root);
+
+        timer.reset("= swing_bcast_l (actual sendrecvs)");
+        uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+        uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+        for(size_t i = 0; i < this->size; i++){
+            reached_at_step[i] = this->num_steps;
+            parent[i] = UINT32_MAX;
+        }
+        this->sbc[p]->get_step_from_root(coord, coord_root, reached_at_step, parent);
+        int receiving_step = reached_at_step[this->rank];
+        int peer;        
+
+        if(root != this->rank){        
+            // Receive the data from the root    
+            swing_utofu_wait_recv(utofu_descriptor, p, 0, 0);
+        }else{
+            receiving_step = -1;
+        }
+    
+        // Now perform all the subsequent steps
+        for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
+            peer = this->sbc[p]->get_peer(step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
+
+            if(parent[peer] == this->rank){
+                size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                size_t offset_port = 0;
+                for(size_t j = 0; j < p; j++){
+                    offset_port += partition_size + (j < remaining ? 1 : 0);
+                }
+                offset_port *= dtsize;
+
+                utofu_stadd_t lcl_addr;
+                if(this->rank == 0){
+                    lcl_addr = utofu_descriptor->port_info[p].lcl_send_stadd + offset_port;
+                }else{
+                    lcl_addr = utofu_descriptor->port_info[p].lcl_recv_stadd + offset_port;
+                }
+                utofu_stadd_t rmt_addr = utofu_descriptor->port_info[p].rmt_recv_stadd[peer] + offset_port; 
+
+                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, count_port*dtsize, rmt_addr, 0); 
+                swing_utofu_wait_sends(utofu_descriptor, p, 1);
+            }
+        }
+        free(reached_at_step);
+        free(parent);
+        delete this->sbc[p];
+    }
+    
+    timer.reset("= swing_bcast_l (writing profile data to file)");
+    return res;
 }
 
 int SwingCommon::swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
