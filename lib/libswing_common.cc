@@ -1878,7 +1878,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 }
 
 uint SwingBitmapCalculator::get_peer(uint step, CollType coll_type){
-    size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);            
+    size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);   
     return (this->peers)[block_step];
 }
 
@@ -1972,16 +1972,18 @@ static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, 
 }
 */
 
-void SwingBitmapCalculator::dfs_reversed(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step){
-    if(memcmp(coord_rank, target_rank, sizeof(int)*dimensions_num) == 0){
-        if(step < *reached_at_step){
-            *reached_at_step = step;
-        }
-    }
-    for(long i = num_steps - 1 - step; i >= 0; i--){
+void SwingBitmapCalculator::dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent){
+    for(size_t i = step; i < num_steps; i++){
+        int real_step = num_steps - 1 - i; // We consider allgather schedule
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer(coord_rank, i, peer_rank);
-        dfs_reversed(peer_rank, i - 1, num_steps, target_rank, reached_at_step);
+        get_peer(coord_rank, real_step, peer_rank);
+        
+        uint32_t rank = scc.getIdFromCoord(peer_rank, false);
+        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
+            parent[rank] = scc.getIdFromCoord(coord_rank, false);
+            reached_at_step[rank] = i;
+        }
+        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent);
     }
 }
 
@@ -2017,6 +2019,8 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
     this->peers = (uint*) malloc(sizeof(uint)*this->num_steps);
     bitmap_send_merged = (char**) malloc(sizeof(char*)*this->num_steps);
     bitmap_recv_merged = (char**) malloc(sizeof(char*)*this->num_steps);  
+    memset(bitmap_send_merged, 0, sizeof(char*)*this->num_steps);
+    memset(bitmap_recv_merged, 0, sizeof(char*)*this->num_steps);
     compute_peers(this->port, rank, false, this->peers, this->dimensions, this->dimensions_num, this->scc, algo);
     this->scc.getCoordFromId(rank, false, coord_mine);
 
@@ -2053,8 +2057,12 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     free(this->peers);
 
     for(size_t s = 0; s < (uint) this->num_steps; s++){
-        free(bitmap_send_merged[s]);
-        free(bitmap_recv_merged[s]);
+        if(bitmap_send_merged[s]){
+            free(bitmap_send_merged[s]);
+        }
+        if(bitmap_recv_merged[s]){
+            free(bitmap_recv_merged[s]);
+        }
     }
     free(bitmap_send_merged);
     free(bitmap_recv_merged);
@@ -2073,10 +2081,10 @@ int SwingCommon::swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, i
 }
 
 
-int SwingBitmapCalculator::get_step_from_root(int* coord_rank, int* coord_root){
-    uint32_t reached_at_step = UINT32_MAX;
-    dfs_reversed(coord_root, 0, this->num_steps, coord_rank, &reached_at_step);
-    return reached_at_step;
+void SwingBitmapCalculator::get_step_from_root(int* coord_rank, int* coord_root, uint32_t* reached_at_step, uint32_t* parent){
+    dfs_reversed(coord_root, coord_root, 0, this->num_steps, coord_rank, reached_at_step, parent);
+    parent[scc.getIdFromCoord(coord_root, false)] = UINT32_MAX;
+    reached_at_step[scc.getIdFromCoord(coord_root, false)] = 0; // To avoid sending the step for myself at a wrong value
 }
 
 int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
@@ -2096,6 +2104,9 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
         tmpbuf = prealloc_buf;
     }
 
+    // Not actually needed, is just to use the get_peer, should be refactored
+    this->sbc[0] = new SwingBitmapCalculator(this->rank, this->dimensions, this->dimensions_num, 0, NULL, false, algo);
+
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     this->scc.retrieve_coord_mapping(this->rank, false, coord);
     int res = MPI_SUCCESS; 
@@ -2104,14 +2115,24 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     this->scc.getCoordFromId(root, false, coord_root);
 
     timer.reset("= swing_bcast_l_mpi (actual sendrecvs)");
-    int receiving_step = -1;
+    uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+    uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+    for(size_t i = 0; i < this->size; i++){
+        reached_at_step[i] = this->num_steps;
+        parent[i] = UINT32_MAX;
+    }
+    this->sbc[0]->get_step_from_root(coord, coord_root, reached_at_step, parent);
+    int receiving_step = reached_at_step[this->rank];
     int peer;
-    if(root != this->rank){
-        receiving_step = this->sbc[0]->get_step_from_root(coord, coord_root);
+    if(root != this->rank){        
         // Receive the data from the root    
         peer = this->sbc[0]->get_peer(receiving_step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
+        assert(peer == parent[this->rank]); 
+        DPRINTF("[%d] Receiving from %d\n", rank, peer);
         res = MPI_Recv(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);                    
         if(res != MPI_SUCCESS){DPRINTF("[%d] Error on recv\n", rank); return res;}                
+    }else{
+        receiving_step = -1;
     }
 
     // Now perform all the subsequent steps
@@ -2119,9 +2140,12 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     size_t posted_send = 0;
     for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
         peer = this->sbc[0]->get_peer(step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
-        res = MPI_Isend(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, &(requests_s[posted_send]));
-        if(res != MPI_SUCCESS){DPRINTF("[%d] Error on isend\n", rank); return res;}
-        ++posted_send;
+        if(parent[peer] == this->rank){
+            DPRINTF("[%d] Sending to %d\n", rank, peer);
+            res = MPI_Isend(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, &(requests_s[posted_send]));
+            if(res != MPI_SUCCESS){DPRINTF("[%d] Error on isend\n", rank); return res;}
+            ++posted_send;
+        }
     }
     MPI_Waitall(posted_send, requests_s, MPI_STATUSES_IGNORE);
     
@@ -2129,6 +2153,9 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     if(free_tmpbuf){
         free(tmpbuf);
     }
+    free(reached_at_step);
+    free(parent);
+    delete this->sbc[0];
     return res;
 }
 

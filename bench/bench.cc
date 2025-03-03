@@ -307,7 +307,9 @@ int main(int argc, char** argv){
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     free(sendbuf);
-    free(recvbuf);
+    if(recvbuf != sendbuf){
+        free(recvbuf);
+    }
     free(samples);
     return 0;
 }
