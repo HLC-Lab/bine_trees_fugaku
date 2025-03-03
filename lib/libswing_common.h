@@ -30,6 +30,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 #define TAG_SWING_REDUCESCATTER (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*1)
 #define TAG_SWING_ALLGATHER     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*2)
 #define TAG_SWING_ALLREDUCE     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*3)
+#define TAG_SWING_BCAST         (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*4)
 
 typedef enum{
     SWING_REDUCE_SCATTER = 0,
@@ -192,7 +193,7 @@ class SwingBitmapCalculator {
         // @param coord_peer (OUT): the coordinates of the peer
         void get_peer(int* coord_rank, size_t step, int* coord_peer);
 
-        // Finds the remapped rank of a given rank.
+        // Finds the remapped rank of a given rank by applying the comm pattern of the reduce scatter.
         // @param coord_rank (IN): It is always rank 0
         // @param step (IN): the step. It must be 0.
         // @param num_steps (IN): the number of steps
@@ -200,6 +201,10 @@ class SwingBitmapCalculator {
         // @param remap_rank (OUT): the remapped rank
         // @param found (OUT): if true, the rank was found
         void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found); 
+
+        // Finds the remapped rank of a given rank, but by applying the comm pattern of the allgather rather than reduce scatter.
+
+        void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step); 
 
         // Computes the step at which each block must be sent.
         // @param coord_rank (IN): the coordinates of the rank
@@ -211,6 +216,7 @@ class SwingBitmapCalculator {
 
         // Computes the bitmaps for the next step (assuming reduce_scatter)
         void compute_next_bitmaps();
+
     public:
         // Constructor
         // @param rank (IN): the rank
@@ -258,6 +264,9 @@ class SwingBitmapCalculator {
         // @param coll_type (IN): the collective type
         // @param chunk_params (OUT): the chunk params
         void get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params);
+
+        // Returns the step at which a given rank will receive the data from a given root.
+        int get_step_from_root(int* coord_rank, int* coord_root);
 
         uint* get_peers(){return peers;}
 };
@@ -391,7 +400,6 @@ class SwingCommon {
         
         int swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
         int swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
-
     public:
         // Constructor
         // @param comm (IN): the communicator
@@ -423,6 +431,11 @@ class SwingCommon {
         
         // TODO: Document
         int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
+
+        int swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
 };
 
 

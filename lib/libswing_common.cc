@@ -1972,6 +1972,19 @@ static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, 
 }
 */
 
+void SwingBitmapCalculator::dfs_reversed(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step){
+    if(memcmp(coord_rank, target_rank, sizeof(int)*dimensions_num) == 0){
+        if(step < *reached_at_step){
+            *reached_at_step = step;
+        }
+    }
+    for(long i = num_steps - 1 - step; i >= 0; i--){
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        get_peer(coord_rank, i, peer_rank);
+        dfs_reversed(peer_rank, i - 1, num_steps, target_rank, reached_at_step);
+    }
+}
+
 void SwingBitmapCalculator::dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found){
     for(size_t i = step; i < num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -2051,3 +2064,74 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     free(chunk_params_per_step);
 }
 
+int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+    ;
+}
+
+int SwingCommon::swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+    ;
+}
+
+
+int SwingBitmapCalculator::get_step_from_root(int* coord_rank, int* coord_root){
+    uint32_t reached_at_step = UINT32_MAX;
+    dfs_reversed(coord_root, 0, this->num_steps, coord_rank, &reached_at_step);
+    return reached_at_step;
+}
+
+int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+    assert(this->num_ports == 1); // Hard to do without being able to call MPI from multiple threads at the same time
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_bcast_l_mpi (init)");
+    Timer timer("swing_bcast_l_mpi (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+    
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*dtsize;
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+
+    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+    int res = MPI_SUCCESS; 
+
+    int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc.getCoordFromId(root, false, coord_root);
+
+    timer.reset("= swing_bcast_l_mpi (actual sendrecvs)");
+    int receiving_step = -1;
+    int peer;
+    if(root != this->rank){
+        receiving_step = this->sbc[0]->get_step_from_root(coord, coord_root);
+        // Receive the data from the root    
+        peer = this->sbc[0]->get_peer(receiving_step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
+        res = MPI_Recv(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);                    
+        if(res != MPI_SUCCESS){DPRINTF("[%d] Error on recv\n", rank); return res;}                
+    }
+
+    // Now perform all the subsequent steps
+    MPI_Request requests_s[LIBSWING_MAX_STEPS];
+    size_t posted_send = 0;
+    for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
+        peer = this->sbc[0]->get_peer(step, SWING_ALLGATHER); // Consider the allgather peers since they start from the distant ones and then get closer.
+        res = MPI_Isend(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, &(requests_s[posted_send]));
+        if(res != MPI_SUCCESS){DPRINTF("[%d] Error on isend\n", rank); return res;}
+        ++posted_send;
+    }
+    MPI_Waitall(posted_send, requests_s, MPI_STATUSES_IGNORE);
+    
+    timer.reset("= swing_bcast_l_mpi (writing profile data to file)");
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
+    return res;
+}
+
+int SwingCommon::swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+    ;
+}

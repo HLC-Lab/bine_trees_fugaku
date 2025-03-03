@@ -130,6 +130,12 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }else{
             r = MPI_Allgather(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
         }
+    }else if(!strcmp(collective, "MPI_Bcast")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Bcast((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Bcast((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
+        }
     }
 
     /*
@@ -157,13 +163,22 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Allgather")){
         send_count = count;
         recv_count = count*size;
+    }else if(!strcmp(collective, "MPI_Bcast")){
+        send_count = count;
+        recv_count = count;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
     }
     *sendbuf = (char*) malloc(dtsize*send_count);
-    *recvbuf = (char*) malloc(dtsize*recv_count);
-    *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
+    
+    if(!strcmp(collective, "MPI_Bcast")){
+        *recvbuf = *sendbuf;
+        *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
+    }else{
+        *recvbuf = (char*) malloc(dtsize*recv_count);
+        *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
+    }
     // Initialize sendbuf with random values
     for(size_t i = 0; i < dtsize*count; i++){
         (*sendbuf)[i] = (char) rand() % 1024;
@@ -223,7 +238,9 @@ int main(int argc, char** argv){
         fprintf(stderr, "Rank %d: Validation failed with error %d\n", rank, r);
         return 1;
     }
-
+    if(!strcmp(collective, "MPI_Bcast")){
+        memcpy(recvbuf_validation, sendbuf, dtsize*count);
+    }
 
 #ifdef FUGAKU
     //uint64_t tnr_start[NUM_TNR][PA_LEN];

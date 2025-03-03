@@ -805,4 +805,24 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     }
 }
 
+int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root, 
+               MPI_Comm comm ){
+    read_env(comm);
+    if(algo == ALGO_DEFAULT){
+        return MPI_Bcast(buffer, count, datatype, root, comm);
+    }else{        
+        if(algo == ALGO_SWING_L){
+            return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);
+        }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_RECDOUB_L_UTOFU){ // Swing_l 
+            return swing_common->swing_bcast_l(buffer, count, datatype, root, comm);
+        }else if(algo == ALGO_SWING_B){
+            return swing_common->swing_bcast_b_mpi(buffer, count, datatype, root, comm);
+        }else if(algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
+            return swing_common->swing_bcast_b(buffer, count, datatype, root, comm);
+        }else{
+            return 1;
+        }
+    }
+}
+
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)
