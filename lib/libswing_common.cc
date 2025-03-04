@@ -2073,6 +2073,7 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
 }
 
 int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+#ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_bcast_l (init)");
     Timer timer("swing_bcast_l (init)");
     int dtsize;
@@ -2213,6 +2214,10 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     
     timer.reset("= swing_bcast_l (writing profile data to file)");
     return res;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif
 }
 
 int SwingCommon::swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){

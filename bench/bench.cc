@@ -136,6 +136,12 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }else{
             r = MPI_Bcast((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
         }
+    }else if(!strcmp(collective, "MPI_Alltoall")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Alltoall(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Alltoall(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
+        }
     }
 
     /*
@@ -152,7 +158,7 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
     return r;
 }
 
-static inline void allocate_buffers(const char* collective, size_t count, size_t size, size_t dtsize, char** sendbuf, char** recvbuf, char** recvbuf_validation){
+static inline void allocate_buffers(const char* collective, size_t count, size_t size, size_t dtsize, char** sendbuf, char** recvbuf, char** recvbuf_validation, int rank){
     size_t send_count, recv_count;
     if(!strcmp(collective, "MPI_Allreduce")){
         send_count = count;
@@ -166,6 +172,9 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Bcast")){
         send_count = count;
         recv_count = count;
+    }else if(!strcmp(collective, "MPI_Alltoall")){
+        send_count = count*size;
+        recv_count = count*size;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
@@ -180,7 +189,7 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
         *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
     }
     // Initialize sendbuf with random values
-    for(size_t i = 0; i < dtsize*count; i++){
+    for(size_t i = 0; i < dtsize*send_count; i++){
         (*sendbuf)[i] = (char) rand() % 1024;
     }
 }
@@ -225,13 +234,13 @@ int main(int argc, char** argv){
     }
     int dtsize;
     MPI_Type_size(dt, &dtsize);
-    srand(time(NULL));
+    srand(time(NULL)*rank);
     if(rank == 0){
         samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
     }
 
     char *sendbuf, *recvbuf, *recvbuf_validation; // To check correctness of results
-    allocate_buffers(collective, count, comm_size, dtsize, &sendbuf, &recvbuf, &recvbuf_validation);
+    allocate_buffers(collective, count, comm_size, dtsize, &sendbuf, &recvbuf, &recvbuf_validation, rank);
 
     r = run_collective(RUN_TYPE_VALIDATION, collective, sendbuf, recvbuf_validation, count, dt, op, comm_size);
     if(r != MPI_SUCCESS){
@@ -266,14 +275,38 @@ int main(int argc, char** argv){
         }
     }
 
+    size_t final_buffer_count = count;
+    if(!strcmp(collective, "MPI_Alltoall")){
+        final_buffer_count *= comm_size;
+    }
+
     // Check correctness of results
-    for(i = 0; i < dtsize*count; i++){
+    for(i = 0; i < dtsize*final_buffer_count; i++){
         if(recvbuf[i] != recvbuf_validation[i]){
             fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
             return 1;
         }
     }
+    
+    /*
+    printf("Rank %d Sendbuf: ", rank);
+    for(i = 0; i < dtsize*final_buffer_count; i++){
+        printf("%d ", sendbuf[i]);
+    }
+    printf("\n");
 
+    printf("Rank %d Recvbuf: ", rank);
+    for(i = 0; i < dtsize*final_buffer_count; i++){
+        printf("%d ", recvbuf[i]);
+    }
+    printf("\n");
+
+    printf("Rank %d  Valbuf: ", rank);
+    for(i = 0; i < dtsize*final_buffer_count; i++){
+        printf("%d ", recvbuf_validation[i]);
+    }
+    printf("\n");
+    */
 #ifdef FUGAKU
     //assert(read_tnr_stats(tnr_stop)==0);
     //diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);

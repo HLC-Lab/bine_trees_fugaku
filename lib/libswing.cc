@@ -825,4 +825,95 @@ int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root,
     }
 }
 
+
+#define BRUCK_SWING 1
+
+// Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
+void bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+	int rank, nprocs;
+	MPI_Comm_rank(comm, &rank);
+	MPI_Comm_size(comm, &nprocs);
+
+	int typesize;
+	MPI_Type_size(datatype, &typesize);
+
+    // 2. local rotation
+	char* temp_send_buffer = (char*)malloc(count*nprocs*typesize);
+	memset(temp_send_buffer, 0, count*nprocs*typesize);
+	int offset = 0;
+	for (int i = 0; i < nprocs; i++) {
+		int index = (i - rank + nprocs) % nprocs;
+		memcpy(&temp_send_buffer[index*count*typesize], &((char*) sendbuf)[offset], count*typesize);
+		offset += count*typesize;
+	}
+
+	// 3. exchange data with log(P) steps
+	long long unit_size = count * typesize;
+	char* temp_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
+	char* temp_recv_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
+#if BRUCK_SWING
+    for (int k = 0; k < int(log2(nprocs)); k++){
+#else
+	for (int k = 1; k < nprocs; k <<= 1) {
+#endif
+		// 1) find which data blocks to send
+		int send_indexes[(nprocs+1)/2];
+		int sendb_num = 0;
+		for (int i = k; i < nprocs; i++) {
+			if (i & k)
+				send_indexes[sendb_num++] = i;
+		}
+
+		// 2) copy blocks which need to be sent at this step
+		for (int i = 0; i < sendb_num; i++) {
+			long long offset = send_indexes[i] * unit_size;
+			memcpy(temp_buffer+(i*unit_size), temp_send_buffer+offset, unit_size);
+		}
+
+		// 3) send and receive
+		int recv_proc = (rank - k + nprocs) % nprocs; // receive data from rank - 2^step process
+		int send_proc = (rank + k) % nprocs; // send data from rank + 2^k process
+
+#if BRUCK_SWING
+        int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
+        if(rank % 2 == 0){
+            send_proc = (rank + rhos[k] + nprocs) % nprocs;
+        }else{
+            send_proc = (rank - rhos[k] + nprocs) % nprocs;
+        }
+        recv_proc = send_proc;
+#endif
+
+		long long comm_size = sendb_num * unit_size;
+		MPI_Sendrecv(temp_buffer, comm_size, MPI_CHAR, send_proc, 0, temp_recv_buffer, comm_size, MPI_CHAR, recv_proc, 0, comm, MPI_STATUS_IGNORE);
+
+		// 4) replace with received data
+		for (int i = 0; i < sendb_num; i++) {
+			long long offset = send_indexes[i] * unit_size;
+			memcpy(temp_send_buffer+offset, temp_recv_buffer+(i*unit_size), unit_size);
+		}
+	}
+	free(temp_buffer);
+	free(temp_recv_buffer);
+
+	// 4. second rotation
+	offset = 0;
+	for (int i = 0; i < nprocs; i++) {
+		int index = (rank - i + nprocs) % nprocs;
+		memcpy(&((char*)recvbuf)[index*count*typesize], &temp_send_buffer[i*unit_size], count*typesize);
+	}
+	free(temp_send_buffer);
+}
+
+int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                 void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+    read_env(comm);
+    if(algo == ALGO_DEFAULT){
+        return PMPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+    }else{        
+        bruck_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);
+        return MPI_SUCCESS;
+    }
+}
+
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)
