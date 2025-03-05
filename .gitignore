@@ -136,3 +136,13 @@ lib/test_profile
 bench/bench
 bench/get_coord_daint
 data/
+gmon.out
+lib/libswing_common.o
+.gitignore
+.gitignore
+lib/libswing_common_profile.o
+.vscode/settings.json
+simulation/*.png
+simulation/remap_rank
+plots/out
+bench/bench_profile

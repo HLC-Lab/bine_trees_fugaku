@@ -4,6 +4,8 @@
 #include <sched.h>
 #include <omp.h>
 
+#include "libswing_alltoall_perm_bitmaps.h"
+
 #include "libswing_common.h"
 #include <climits>
 #ifdef FUGAKU
@@ -2434,16 +2436,18 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
  * @param port The port on which we are working on
  * @param dimensions_num The number of dimensions of the torus
  * @param dimensions The dimensions of the torus
- * @param bitmap (OUT) If there is 1 in position i, then the data from rank i has been merged into the data received by rank. It MUST be set to 0 before calling this function.
+ * @param next_idx Next index
+ * @param history (OUT) An array of elements corresponding to the aggregated ranks.
  * // ATTENTION: At the time being it does not work for non p2.
  */
-void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, SwingCoordConverter& scc, char* bitmap){
+void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, SwingCoordConverter& scc, int* next_index, int* history){
     size_t real_step = num_steps - 1 - step;
     int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     get_peer_c(coord_rank, step, peer_rank, port, dimensions_num, dimensions, ALGO_SWING_B);
-    bitmap[scc.getIdFromCoord(peer_rank, false)] = 1;
+    history[*next_index] = scc.getIdFromCoord(peer_rank, false);
+    (*next_index)++;
     for(int s = step - 1; s >= 0; s--){
-        get_data_history_bitmap(peer_rank, s, num_steps, port, dimensions_num, dimensions, scc, bitmap);
+        get_data_history_bitmap(peer_rank, s, num_steps, port, dimensions_num, dimensions, scc, next_index, history);
     }
 }
 
@@ -2465,6 +2469,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     uint* block_in_position = (uint*) malloc(sizeof(uint)*size);
     // block_recvd contains the ids of the blocks I have received
     uint* block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
+
     // At the beginning I only have my blocks
     for(size_t i = 0; i < size; i++){
         block_in_position[i] = i;
@@ -2535,13 +2540,21 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
             if(block_in_position[i] == UINT_MAX){
                 DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
                 block_in_position[i] = block_recvd[block_recvd_cnt];
-                block_recvd_cnt++;
+                block_recvd_cnt++;        
             }
         }
         assert(block_recvd_cnt == size/2);
     }
 
     // Now I need to permute recvbuf
+    for(size_t i = 0; i < size; i++){
+        size_t index = get_alltoall_perm_index(size, rank, i);
+        size_t offset_src = i*count*dtsize;
+        size_t offset_dst = index*count*dtsize;
+        memcpy(tmpbuf + offset_dst, ((char*) recvbuf) + offset_src, count*dtsize);
+    }
+
+    memcpy(recvbuf, tmpbuf, count*dtsize*size);
 
     if(free_tmpbuf){
         free(tmpbuf);
