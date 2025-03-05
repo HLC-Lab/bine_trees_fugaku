@@ -2403,11 +2403,6 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 		}
 	}
 
-    if(free_tmpbuf){
-	    free(temp_buffer);
-	    free(temp_recv_buffer);
-    }
-
 	// 4. second rotation
 	offset = 0;
 	for (int i = 0; i < nprocs; i++) {
@@ -2415,6 +2410,8 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 		memcpy(&((char*)recvbuf)[index*count*typesize], &temp_send_buffer[i*unit_size], count*typesize);
 	}
     if(free_tmpbuf){
+        free(temp_buffer);
+	    free(temp_recv_buffer);
 	    free(temp_send_buffer);
     }
     return MPI_SUCCESS;
@@ -2440,6 +2437,7 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
  * @param history (OUT) An array of elements corresponding to the aggregated ranks.
  * // ATTENTION: At the time being it does not work for non p2.
  */
+/*
 void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, SwingCoordConverter& scc, int* next_index, int* history){
     size_t real_step = num_steps - 1 - step;
     int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -2450,6 +2448,7 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
         get_data_history_bitmap(peer_rank, s, num_steps, port, dimensions_num, dimensions, scc, next_index, history);
     }
 }
+*/
 
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
     int rank, size, dtsize;
@@ -2531,21 +2530,30 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         assert(block_recvd_cnt == size/2);
         assert(block_send_cnt == size/2);
 
+#if 0
         int r = MPI_Sendrecv_replace(tmpbuf, count*block_send_cnt, datatype,
                                       peer, 0, peer, 0,
                                       comm, MPI_STATUS_IGNORE);
+        size_t offset_src = 0;
+#else
+        size_t offset_src = count*block_send_cnt*dtsize; // Send from first half and receive in second half
+        int r = MPI_Sendrecv(tmpbuf, count*block_send_cnt, datatype,
+                            peer, 0,
+                            tmpbuf + offset_src, count*block_send_cnt, datatype,
+                            peer, 0, comm, MPI_STATUS_IGNORE);        
+#endif
         if(r != MPI_SUCCESS){
             return r;
         }      
 
-        block_recvd_cnt = 0;
-        offset_send = 0;
+        block_recvd_cnt = 0;        
         // Now I need to compute the new block_in_position
         for(size_t i = 0; i < this->size; i++){
             if(block_in_position[i] == UINT_MAX){
                 // Copy back data from tmpbuf to recvbuf
-                memcpy(((char*) recvbuf) + i*count*dtsize, tmpbuf + offset_send, count*dtsize);
-                offset_send += count*dtsize;
+                size_t offset_dst = i*count*dtsize;
+                memcpy(((char*) recvbuf) + offset_dst, tmpbuf + offset_src, count*dtsize);
+                offset_src += count*dtsize;
                 DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
                 block_in_position[i] = block_recvd[block_recvd_cnt];
                 block_recvd_cnt++;        
