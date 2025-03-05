@@ -1,0 +1,12 @@
+#!/bin/sh
+#PJM -L  "node=16:torus"
+#PJM -L  "rscgrp=small-torus"
+#PJM -L  "elapse=0:30:00"
+#PJM -g hp240454
+#PJM --mpi "max-proc-per-node=1"
+
+DIMENSIONS="16" # Must be equal to the one specified above
+EXTRA="1D"
+
+pushd bench
+./run_fugaku.sh -n 16 -d ${DIMENSIONS} -p 1,2,4,6 -e ${EXTRA}

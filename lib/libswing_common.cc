@@ -61,7 +61,7 @@ void Timer::reset(std::string name){
 
 #ifdef FUGAKU
 static inline void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
-    if(datatype == MPI_INT32){
+    if(datatype == MPI_INT32_T){
         const int32_t *in = (const int32_t *)inbuf;
         int32_t *inout = (int32_t *)inoutbuf;
         if(op == MPI_SUM){
@@ -116,7 +116,7 @@ static inline void reduce_local(const void* inbuf, void* inoutbuf, int count, MP
 }
 
 static inline void reduce_local(const void* inbuf_a, const void* inbuf_b, void* outbuf, int count, MPI_Datatype datatype, MPI_Op op) {
-    if(datatype == MPI_INT32){
+    if(datatype == MPI_INT32_T){
         const int32_t *in_a = (const int32_t *)inbuf_a;
         const int32_t *in_b = (const int32_t *)inbuf_b;
         int32_t *out = (int32_t *)outbuf;
@@ -1440,13 +1440,13 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     if(counts_s){ 
         size_t remaining = counts_s;
         size_t bytes_to_send = 0;
-        int peer = get_peer(step, coll_type, port, dimensions_num, dimensions, algo);
+        int peer = sbc[port]->get_peer(step, coll_type);
 
         // Segment the transmission
         while(remaining){
             count = remaining < max_count ? remaining : max_count;
             bytes_to_send = count*dtsize;
-            DPRINTF("[%d] Sending %d bytes to %d at step %d (coll %d)\n", this->rank, bytes_to_send, get_peer(step, coll_type, port, dimensions_num, dimensions, algo), step, coll_type);
+            DPRINTF("[%d] Sending %d bytes to %d at step %d (coll %d)\n", this->rank, bytes_to_send, sbc[port]->get_peer(step, coll_type), step, coll_type);
             
             utofu_stadd_t lcl_addr, rmt_addr;
             if(coll_type == SWING_REDUCE_SCATTER){
