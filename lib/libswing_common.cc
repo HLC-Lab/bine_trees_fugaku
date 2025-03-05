@@ -2477,15 +2477,22 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     uint port = 0; // TODO: Support multiport
     uint my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
 
-    memcpy(recvbuf, sendbuf, count*dtsize*size);
-
     // We always assume reduce_scatter
     size_t min_block_s = 0;
     size_t min_block_r = 0;
     size_t max_block_s = this->size;
     size_t max_block_r = this->size;
     
+    // We use recvbuf to receive/send the data, and tmpbuf to organize the data to send at the next step
+    // By doing so, we avoid a copy form tmpbuf to recvbuf at the end
+
+    void* srcbuf;
     for(size_t step = 0; step < this->num_steps; step++){
+        if(step == 0){
+            srcbuf = (void*) sendbuf;
+        }else{
+            srcbuf = tmpbuf;
+        }
         // Compute the range to send/recv
         min_block_s = min_block_r;
         max_block_s = max_block_r;
@@ -2505,7 +2512,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
             peer = mod(this->rank - rhos[step], size);
         }
         size_t block_recvd_cnt = 0, block_send_cnt = 0;
-        size_t offset_send = 0;
+        size_t offset_send = 0;        
         for(size_t i = 0; i < this->size; i++){
             uint block = block_in_position[i];
             // Shall I send this block? Check the negabinary thing            
@@ -2515,7 +2522,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
             if(remap_block >= min_block_s && remap_block < max_block_s){
                 size_t offset = i*count*dtsize;
                 DPRINTF("Rank %d sending block %d (from pos %d) to %d at offset %d at step %d\n", rank, block, i, peer, offset, step);                
-                memcpy(tmpbuf + offset_send, ((char*) recvbuf) + offset, count*dtsize);
+                memcpy((char*) recvbuf + offset_send, ((char*) srcbuf) + offset, count*dtsize);
                 offset_send += count*dtsize;
                 // I need to update block_in_position since now at this position
                 // I have the block I just received.
@@ -2523,6 +2530,11 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
                 block_in_position[i] = UINT_MAX;
                 block_send_cnt++;
             }else{
+                if(step == 0){
+                    // We need to copy it from sendbuf to tempbuf since we never copied it
+                    size_t offset = i*count*dtsize;
+                    memcpy((char*) tmpbuf + offset, (char*) sendbuf + offset, count*dtsize);
+                }
                 block_recvd[block_recvd_cnt] = block;
                 block_recvd_cnt++;
             }
@@ -2537,9 +2549,9 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         size_t offset_src = 0;
 #else
         size_t offset_src = count*block_send_cnt*dtsize; // Send from first half and receive in second half
-        int r = MPI_Sendrecv(tmpbuf, count*block_send_cnt, datatype,
+        int r = MPI_Sendrecv(recvbuf, count*block_send_cnt, datatype,
                             peer, 0,
-                            tmpbuf + offset_src, count*block_send_cnt, datatype,
+                            (char*) recvbuf + offset_src, count*block_send_cnt, datatype,
                             peer, 0, comm, MPI_STATUS_IGNORE);        
 #endif
         if(r != MPI_SUCCESS){
@@ -2550,9 +2562,9 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         // Now I need to compute the new block_in_position
         for(size_t i = 0; i < this->size; i++){
             if(block_in_position[i] == UINT_MAX){
-                // Copy back data from tmpbuf to recvbuf
+                // Copy back data from recvbuf to tmpbuf
                 size_t offset_dst = i*count*dtsize;
-                memcpy(((char*) recvbuf) + offset_dst, tmpbuf + offset_src, count*dtsize);
+                memcpy(((char*) tmpbuf) + offset_dst, (char*) recvbuf + offset_src, count*dtsize);
                 offset_src += count*dtsize;
                 DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
                 block_in_position[i] = block_recvd[block_recvd_cnt];
@@ -2562,15 +2574,13 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         assert(block_recvd_cnt == size/2);
     }
 
-    // Now I need to permute recvbuf
+    // Now I need to permute tmpbuf into recvbuf
     for(size_t i = 0; i < size; i++){
         size_t index = get_alltoall_perm_index(size, rank, i);
         size_t offset_src = i*count*dtsize;
         size_t offset_dst = index*count*dtsize;
-        memcpy(tmpbuf + offset_dst, ((char*) recvbuf) + offset_src, count*dtsize);
+        memcpy((char*) recvbuf + offset_dst, ((char*) tmpbuf) + offset_src, count*dtsize);
     }
-
-    memcpy(recvbuf, tmpbuf, count*dtsize*size);
 
     if(free_tmpbuf){
         free(tmpbuf);
