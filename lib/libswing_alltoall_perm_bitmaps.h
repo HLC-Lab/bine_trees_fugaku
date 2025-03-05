@@ -548,6 +548,6 @@ static inline size_t get_alltoall_perm_index(int ranks, int rank, int block){
             return libswing_alltoall_perm_bitmaps_256[rank][block];                       
         default:
             assert("Alltoall bitmap missing." && 0);
-            return -1;
+            return 0;
     }
 }

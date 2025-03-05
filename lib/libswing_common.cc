@@ -2478,9 +2478,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     uint port = 0; // TODO: Support multiport
     uint my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
 
-    // We only operate locally on recvbuf // TODO: tempbuf not needed
     memcpy(recvbuf, sendbuf, count*dtsize*size);
-
 
     // We always assume reduce_scatter
     size_t min_block_s = 0;
@@ -2507,37 +2505,47 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         }else{
             peer = mod(this->rank - rhos[step], size);
         }
-        size_t block_recvd_cnt = 0;
+        size_t block_recvd_cnt = 0, block_send_cnt = 0;
+        size_t offset_send = 0;
         for(size_t i = 0; i < this->size; i++){
             uint block = block_in_position[i];
             // Shall I send this block? Check the negabinary thing            
             uint remap_block = remap_rank(size, block, port, dimensions_num);            
 
-            // Send the block
+            // Send the block. Copy in the first half of tmpbuf (to send), receive in the other half, then copy back the received data from tmpbuf to recvbuf for the next round
             if(remap_block >= min_block_s && remap_block < max_block_s){
                 size_t offset = i*count*dtsize;
                 DPRINTF("Rank %d sending block %d (from pos %d) to %d at offset %d at step %d\n", rank, block, i, peer, offset, step);                
-                int r = MPI_Sendrecv_replace(((char*) recvbuf) + offset, count, datatype,
-                                             peer, 0, peer, 0,
-                                             comm, MPI_STATUS_IGNORE);
-                if(r != MPI_SUCCESS){
-                    return r;
-                }
+                memcpy(tmpbuf + offset_send, ((char*) recvbuf) + offset, count*dtsize);
+                offset_send += count*dtsize;
                 // I need to update block_in_position since now at this position
                 // I have the block I just received.
                 // I first mark them as empy, and then I will compute them
                 block_in_position[i] = UINT_MAX;
+                block_send_cnt++;
             }else{
                 block_recvd[block_recvd_cnt] = block;
                 block_recvd_cnt++;
             }
         }
         assert(block_recvd_cnt == size/2);
+        assert(block_send_cnt == size/2);
+
+        int r = MPI_Sendrecv_replace(tmpbuf, count*block_send_cnt, datatype,
+                                      peer, 0, peer, 0,
+                                      comm, MPI_STATUS_IGNORE);
+        if(r != MPI_SUCCESS){
+            return r;
+        }      
 
         block_recvd_cnt = 0;
+        offset_send = 0;
         // Now I need to compute the new block_in_position
         for(size_t i = 0; i < this->size; i++){
             if(block_in_position[i] == UINT_MAX){
+                // Copy back data from tmpbuf to recvbuf
+                memcpy(((char*) recvbuf) + i*count*dtsize, tmpbuf + offset_send, count*dtsize);
+                offset_send += count*dtsize;
                 DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
                 block_in_position[i] = block_recvd[block_recvd_cnt];
                 block_recvd_cnt++;        
