@@ -51,6 +51,7 @@ typedef enum{
     ALGO_RECDOUB_B,
     ALGO_RECDOUB_L_UTOFU,
     ALGO_RECDOUB_B_UTOFU,
+    ALGO_BRUCK,
 }Algo;
 
 typedef struct{
@@ -168,39 +169,6 @@ class SwingBitmapCalculator {
         // @param d (IN): the dimension
         // @param step (IN): the step
         void compute_valid_distances(uint d, int step);
-
-        // Gets the sign to be used for the distance calculation (-1 or +1), based on the rank and the port.
-        // @param rank (IN): the rank
-        // @param port (IN): the port
-        // @return -1 or +1
-        int get_distance_sign(size_t rank, size_t port);
-
-        // Computes the peer of an arbitrary rank for an arbitrary step and port.
-        // @param coord_rank (IN): the coordinates of the rank
-        // @param step (IN): the step
-        // @param coord_peer (OUT): the coordinates of the peer
-        void get_peer_swing(int* coord_rank, size_t step, int* coord_peer);
-
-        // Computes the peer of an arbitrary rank for an arbitrary step and port.
-        // @param coord_rank (IN): the coordinates of the rank
-        // @param step (IN): the step
-        // @param coord_peer (OUT): the coordinates of the peer
-        void get_peer_recdoub(int* coord_rank, size_t step, int* coord_peer);
-
-        // Computes the peer of an arbitrary rank for an arbitrary step and port.
-        // @param coord_rank (IN): the coordinates of the rank
-        // @param step (IN): the step
-        // @param coord_peer (OUT): the coordinates of the peer
-        void get_peer(int* coord_rank, size_t step, int* coord_peer);
-
-        // Finds the remapped rank of a given rank by applying the comm pattern of the reduce scatter.
-        // @param coord_rank (IN): It is always rank 0
-        // @param step (IN): the step. It must be 0.
-        // @param num_steps (IN): the number of steps
-        // @param target_rank (IN): the rank to find
-        // @param remap_rank (OUT): the remapped rank
-        // @param found (OUT): if true, the rank was found
-        void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found); 
 
         // Finds the remapped rank of a given rank, but by applying the comm pattern of the allgather rather than reduce scatter.
 
@@ -436,6 +404,8 @@ class SwingCommon {
         int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
+        int swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
 };
 
 
