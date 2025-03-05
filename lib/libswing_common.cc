@@ -5,6 +5,7 @@
 #include <omp.h>
 
 #include "libswing_common.h"
+#include <climits>
 #ifdef FUGAKU
 #include "fugaku/swing_utofu.h"
 #endif
@@ -195,8 +196,6 @@ static std::string vectostr(const std::vector<int>& v){
 }
 #endif
 
-
-/*
 // https://stackoverflow.com/questions/37637781/calculating-the-negabinary-representation-of-a-given-number-without-loops
 static uint32_t binary_to_negabinary(int32_t bin) {
     if (bin > 0x55555555) throw std::overflow_error("value out of range");
@@ -211,6 +210,7 @@ static int32_t negabinary_to_binary(uint32_t neg) {
     return (mask ^ neg) - mask;
 }
 
+/*
 static int32_t smallest_negabinary(uint32_t nbits){
     return -2 * ((pow(2, (nbits / 2)*2) - 1) / 3);
 }
@@ -223,13 +223,13 @@ static int32_t largest_negabinary(uint32_t nbits){
         return tmp + pow(2, nbits - 1);
     }
 }
+*/
 
 // Checks if a given number can be represented as a negabinary number with nbits bits
 // TODO: Check this directly on binary representation by comparing with the largest number on nbits!
 static inline int in_range(int x, uint32_t nbits){
     return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
 }
-*/
 
 static inline int is_power_of_two(int x){
     return (x != 0) && ((x & (x - 1)) == 0);
@@ -1937,7 +1937,6 @@ void SwingBitmapCalculator::get_chunk_params(uint step, CollType coll_type, Chun
     }
 }
 
-/** 
 static inline uint32_t reverse(uint32_t x){
     x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
     x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
@@ -1984,10 +1983,8 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
         }
     }
 }
-**/
 
 // Only works for 1D
-/*
 static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
     uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank, port, dimensions_num);    
     remap_rank = remap_rank ^ (remap_rank >> 1);
@@ -1995,7 +1992,6 @@ static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, 
     remap_rank = reverse(remap_rank) >> (32 - num_bits);
     return remap_rank;
 }
-*/
 
 void SwingBitmapCalculator::dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent){
     for(size_t i = step; i < num_steps; i++){
@@ -2422,9 +2418,36 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
     return MPI_SUCCESS;
 }
 
-#define DATA_NOT_AVAILABLE -1
+
+
+/**
+ * When receiving data from a peer, we need to know the data from which rank has been already aggregated/concatenated.
+ * This is needed to know where to place the data in the buffer in the case of the alltoall.
+ * E.g., if we have 4 ranks, at step 1 rank 3 receives from rank 0, and the data it receives from rank 0 contains the aggregated/concatenated data from rank 0 and 1.
+ * To compute it, we should somewhat backtrack which nodes have that data crossed. I.e., building a kind of reversed tree to understand which data it merged into that rank.
+ * This is basically the same tree that is generated during the allgather phase. 
+ * I.e., if a rank wants to know what concatenated data it is receiving at step s, it should check which peers it would reach in an allgather at step (num_steps - 1 - s).
+ * 
+ * @param coord_rank The rank receiving the data.
+ * @param step The step at which the data is received.
+ * @param num_steps The step at which the data is received.
+ * @param port The port on which we are working on
+ * @param dimensions_num The number of dimensions of the torus
+ * @param dimensions The dimensions of the torus
+ * @param bitmap (OUT) If there is 1 in position i, then the data from rank i has been merged into the data received by rank. It MUST be set to 0 before calling this function.
+ * // ATTENTION: At the time being it does not work for non p2.
+ */
+void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, SwingCoordConverter& scc, char* bitmap){
+    size_t real_step = num_steps - 1 - step;
+    int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    get_peer_c(coord_rank, step, peer_rank, port, dimensions_num, dimensions, ALGO_SWING_B);
+    bitmap[scc.getIdFromCoord(peer_rank, false)] = 1;
+    for(int s = step - 1; s >= 0; s--){
+        get_data_history_bitmap(peer_rank, s, num_steps, port, dimensions_num, dimensions, scc, bitmap);
+    }
+}
+
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
-    /*
     int rank, size, dtsize;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
@@ -2438,51 +2461,92 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     }else{
         tmpbuf = prealloc_buf;
     }
-    int* rank_data_offset = (int*) malloc(sizeof(int)*size);
-    int block_size = count*dtsize*size;
+    // block_in_position[i] tells me what block is in position i of the recvbuf. The same block can be in multiple position since we are doing alltoall
+    uint* block_in_position = (uint*) malloc(sizeof(uint)*size);
+    // block_recvd contains the ids of the blocks I have received
+    uint* block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
+    // At the beginning I only have my blocks
     for(size_t i = 0; i < size; i++){
-        rank_data_offset[i] = DATA_NOT_AVAILABLE;
-    }
-    rank_data_offset[rank] = 0;
-
-    // Compute the remapped rank
-    uint remapped_rank = size - 1;
-    int coord_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.getCoordFromId(0, false, coord_rank);
-    int my_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.getCoordFromId(rank, false, my_rank);
-    bool found = false;
-    int port = 0; // TODO: ADD SUPPORT FOR MULTIPORT
-    dfs(coord_rank, 0, this->num_steps, my_rank, &(remapped_rank), &found, port, dimensions_num, dimensions, algo);
-    assert(found);
-
-    // We keep track of which block arrived at which node
-    int** block_present = (int**) malloc(sizeof(int*)*size);
-    for(size_t i = 0; i < size; i++){
-        block_present[i] = (int*) malloc(sizeof(int)*size);
-        for(size_t j = 0; j < size; j++){
-            block_present[i][j] = 0;
-        }
+        block_in_position[i] = i;
     }
 
+    uint port = 0; // TODO: Support multiport
+    uint my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
 
-    uint num_steps = (uint) log2(size);
-    for(size_t step = 0; step < num_steps; step++){
-        int peer = 0;
-        if(rank % 2 == 0){
-            peer = mod(rank + rhos[step], size);
+    // We only operate locally on recvbuf // TODO: tempbuf not needed
+    memcpy(recvbuf, sendbuf, count*dtsize*size);
+
+
+    // We always assume reduce_scatter
+    size_t min_block_s = 0;
+    size_t min_block_r = 0;
+    size_t max_block_s = this->size;
+    size_t max_block_r = this->size;
+    
+    for(size_t step = 0; step < this->num_steps; step++){
+        // Compute the range to send/recv
+        min_block_s = min_block_r;
+        max_block_s = max_block_r;
+        size_t middle = (min_block_r + max_block_r + 1) / 2; // == min + (max - min) / 2
+        if(my_remapped_rank < middle){
+            min_block_s = middle;
+            max_block_r = middle;
         }else{
-            peer = mod(rank - rhos[step], size);
+            max_block_s = middle;
+            min_block_r = middle;
         }
 
-        // Copy in temp
+        uint peer;
+        if((this->rank % 2) == 0){
+            peer = mod(this->rank + rhos[step], size);
+        }else{
+            peer = mod(this->rank - rhos[step], size);
+        }
+        size_t block_recvd_cnt = 0;
+        for(size_t i = 0; i < this->size; i++){
+            uint block = block_in_position[i];
+            // Shall I send this block? Check the negabinary thing            
+            uint remap_block = remap_rank(size, block, port, dimensions_num);            
+
+            // Send the block
+            if(remap_block >= min_block_s && remap_block < max_block_s){
+                size_t offset = i*count*dtsize;
+                DPRINTF("Rank %d sending block %d (from pos %d) to %d at offset %d at step %d\n", rank, block, i, peer, offset, step);                
+                int r = MPI_Sendrecv_replace(((char*) recvbuf) + offset, count, datatype,
+                                             peer, 0, peer, 0,
+                                             comm, MPI_STATUS_IGNORE);
+                if(r != MPI_SUCCESS){
+                    return r;
+                }
+                // I need to update block_in_position since now at this position
+                // I have the block I just received.
+                // I first mark them as empy, and then I will compute them
+                block_in_position[i] = UINT_MAX;
+            }else{
+                block_recvd[block_recvd_cnt] = block;
+                block_recvd_cnt++;
+            }
+        }
+        assert(block_recvd_cnt == size/2);
+
+        block_recvd_cnt = 0;
+        // Now I need to compute the new block_in_position
+        for(size_t i = 0; i < this->size; i++){
+            if(block_in_position[i] == UINT_MAX){
+                DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
+                block_in_position[i] = block_recvd[block_recvd_cnt];
+                block_recvd_cnt++;
+            }
+        }
+        assert(block_recvd_cnt == size/2);
     }
+
+    // Now I need to permute recvbuf
 
     if(free_tmpbuf){
         free(tmpbuf);
     }
-    free(rank_data_offset);
+    free(block_in_position);
+    free(block_recvd);
     return MPI_SUCCESS;
-    */
-   return MPI_ERR_OTHER;
 }
