@@ -170,10 +170,6 @@ class SwingBitmapCalculator {
         // @param step (IN): the step
         void compute_valid_distances(uint d, int step);
 
-        // Finds the remapped rank of a given rank, but by applying the comm pattern of the allgather rather than reduce scatter.
-
-        void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent); 
-
         // Computes the step at which each block must be sent.
         // @param coord_rank (IN): the coordinates of the rank
         // @param starting_step (IN): the starting step. 
@@ -232,10 +228,7 @@ class SwingBitmapCalculator {
         // @param coll_type (IN): the collective type
         // @param chunk_params (OUT): the chunk params
         void get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params);
-
-        // Returns the step at which a given rank will receive the data from a given root.
-        void get_step_from_root(int* coord_rank, int* coord_root, uint32_t* reached_at_step, uint32_t* parent);
-
+        
         uint* get_peers(){return peers;}
 };
 

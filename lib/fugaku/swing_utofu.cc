@@ -132,14 +132,20 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
 }
 
 void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, uint num_steps){   
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     // Receive the remote info for all the ports, from all the nodes
     uint64_t* rbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports*desc->size);
     for(size_t i = 0; i < desc->num_ports; i++){
-        rbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
-        rbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
+        rbuffer[rank*2*desc->num_ports + 2*i] = desc->port_info[i].lcl_recv_stadd;
+        rbuffer[rank*2*desc->num_ports + 2*i+1] = desc->port_info[i].lcl_temp_stadd;
     }
 
-    MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, rbuffer, 2*desc->num_ports, MPI_UINT64_T, MPI_COMM_WORLD);
+    int r = PMPI_Allgather(MPI_IN_PLACE, 0, MPI_UINT64_T, rbuffer, 2*desc->num_ports, MPI_UINT64_T, MPI_COMM_WORLD);
+    if(r != MPI_SUCCESS){
+        fprintf(stderr, "swing_utofu_exchange_buf_info_allgather: PMPI Allgather failed.\n");
+        exit(-1);
+    }
     for(size_t r = 0; r < desc->size; r++){
         size_t offset = r*2*desc->num_ports;
         for(size_t i = 0; i < desc->num_ports; i++){
