@@ -2733,7 +2733,6 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
             }            
             for(size_t i = 0; i < size; i++){      
                 DPRINTF("Moving block %d to %d\n", i, remap_blocks_ids[i]);          
-                //memcpy(tmpbuf + blocks_info[p][remap_blocks_ids[i]].offset, (char*) sendbuf + blocks_info[p][i].offset, blocks_info[p][i].count*dtsize);
                 // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
                 // E.g., with two ports and 4 ranks
                 // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
@@ -2785,13 +2784,11 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
         free(peers[p]);
 
         timer.reset("= swing_scatter (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
-
         // Consider offsets of block 0 since everything must go "in the first block"
-        DPRINTF("p=%d Copying %d bytes from %d to %d\n", p, tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].offset, blocks_info[p][0].offset); 
+        DPRINTF("p=%d Copying %d bytes from %d to %d\n", p, blocks_info[p][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].offset); 
         memcpy((char*) recvbuf + blocks_info[p][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].count*dtsize);
     }
 
-    
     if(free_tmpbuf){
         free(tmpbuf);
     }

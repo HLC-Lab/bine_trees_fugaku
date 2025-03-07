@@ -856,7 +856,7 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     read_env(comm);
     if(algo == ALGO_DEFAULT){
         return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU){
+    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
         // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
         // This is the opposite of what we do in allreduce.
         // Allocate blocks_info
@@ -869,9 +869,10 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
         size_t count_so_far = 0;
         int dtsize;
         MPI_Type_size(sendtype, &dtsize);
-        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
-            size_t partition_size = recvcount / swing_common->get_num_ports();
-            size_t remaining = recvcount % swing_common->get_num_ports();                
+        size_t partition_size = recvcount / swing_common->get_num_ports();
+        size_t remaining = recvcount % swing_common->get_num_ports();     
+        
+        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){           
             size_t block_offset = count_so_far*dtsize;
             size_t block_count_so_far = 0;
             for(size_t p = 0; p < swing_common->get_num_ports(); p++){

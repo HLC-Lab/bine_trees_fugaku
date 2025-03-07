@@ -188,8 +188,8 @@ do
                 done
             done
         elif [ ${COLLECTIVE} == "MPI_Bcast" ]; then
-            #for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
-            for n in 64 16384 8388608
+            for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+            #for n in 64 16384 8388608
             do
                 msg_size=$((n * SIZEOF_DATATYPE))
                 iterations=0
@@ -224,17 +224,22 @@ do
                 
                 for PORTS in ${PORTS_LIST//,/ }
                 do
-                    for SEGMENT_SIZE in 1024 8192 16384 65536 1048576
+                    for SEGMENT_SIZE in 0 1024 8192 16384 65536 1048576
                     do
                         if [ $SEGMENT_SIZE -lt $msg_size ]; then
                             LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="RECDOUB_L_UTOFU" LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE}  ${DATATYPE} ${n} ${iterations}
-                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_rd_utofu_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_rd_utofu_seg_${SEGMENT_SIZE}_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
                             
                             LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L_UTOFU" LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE}  ${DATATYPE} ${n} ${iterations}
-                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_utofu_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_utofu_${SEGMENT_SIZE}_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
 
                             LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L_UTOFU" LIBSWING_UTOFU_ADD_AG=1 LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE}  ${DATATYPE} ${n} ${iterations}
-                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_utofu_ag_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+                            mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_utofu_ag_${SEGMENT_SIZE}_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+
+                            if [ $msg_size -le 8388608 ]; then
+                                LIBSWING_DIMENSIONS=${DIMENSIONS} LIBSWING_ALGO="SWING_L_UTOFU"  LIBSWING_BCAST_TMP_THRESHOLD=${msg_size} LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} LIBSWING_NUM_PORTS=${PORTS} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE}  ${DATATYPE} ${n} ${iterations}
+                                mv ${OUT_PREFIX}*.0 ${OUT_FOLDER}/${p}_${n}_bcast_lat_utofu_${SEGMENT_SIZE}_thr_${PORTS}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+                            fi
                         fi
                     done
                 done
