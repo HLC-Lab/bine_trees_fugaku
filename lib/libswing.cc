@@ -850,4 +850,53 @@ int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     return MPI_ERR_OTHER;
 }
 
+int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                void *recvbuf, int recvcount, MPI_Datatype recvtype, int root,
+                MPI_Comm comm){    
+    read_env(comm);
+    if(algo == ALGO_DEFAULT){
+        return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
+    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU){
+        // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+        // This is the opposite of what we do in allreduce.
+        // Allocate blocks_info
+        DPRINTF("Creating block infos.\n");
+        assert(recvcount >= swing_common->get_num_ports());
+        BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
+        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+            blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
+        }
+        size_t count_so_far = 0;
+        int dtsize;
+        MPI_Type_size(sendtype, &dtsize);
+        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
+            size_t partition_size = recvcount / swing_common->get_num_ports();
+            size_t remaining = recvcount % swing_common->get_num_ports();                
+            size_t block_offset = count_so_far*dtsize;
+            size_t block_count_so_far = 0;
+            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                size_t offset_port = block_offset + block_count_so_far*dtsize;
+                block_count_so_far += count_port;
+                blocks_info[p][i].count = count_port;
+                blocks_info[p][i].offset = offset_port;
+                DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+            }
+            count_so_far += recvcount;
+        }
+
+        DPRINTF("Calling scatter.\n");
+        int res = swing_common->swing_scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+        DPRINTF("Scatter called.\n");
+
+        // Free blocks_info
+        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+            free(blocks_info[p]);
+        }
+        free(blocks_info);        
+        return res;
+    }
+    return MPI_ERR_OTHER;
+}
+
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)

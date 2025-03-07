@@ -142,6 +142,12 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }else{
             r = MPI_Alltoall(sendbuf, count, dt, recvbuf, count, dt, MPI_COMM_WORLD);
         }
+    }else if(!strcmp(collective, "MPI_Scatter")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Scatter(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Scatter(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
+        }
     }
 
     /*
@@ -175,6 +181,9 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Alltoall")){
         send_count = count*size;
         recv_count = count*size;
+    }else if(!strcmp(collective, "MPI_Scatter")){
+        send_count = count*size;
+        recv_count = count;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
@@ -313,7 +322,7 @@ int main(int argc, char** argv){
     //print_tnr_stats(tnr_diff, rank);
 #endif    
 
-    MPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    PMPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if(rank == 0){
         printf("#MessageSize ");
         for(size_t r = 0; r < (size_t) comm_size; r++){
@@ -337,7 +346,7 @@ int main(int argc, char** argv){
         avg_iteration /= iterations;
         printf("Average runtime: %f\n", avg_iteration);
     }
-    MPI_Barrier(MPI_COMM_WORLD);
+    PMPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     free(sendbuf);
     if(recvbuf != sendbuf){
