@@ -238,8 +238,8 @@ static inline int is_power_of_two(int x){
 }
 
 
-SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf): 
-            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf){
+SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag): 
+            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag){
     this->size = 1;
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
@@ -2124,17 +2124,22 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     }
 
     timer.reset("= swing_bcast_l (utofu buf exch)");           
-    uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-    // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
-    // TODO Probably easier/better to do allgather???
-    compute_peers(0, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
-    swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
-    int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
-    if(mp != -1){
-        compute_peers(mp, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+
+    if(utofu_add_ag){
+        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+    }else{
+        uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+        // TODO Probably easier/better to do allgather???
+        compute_peers(0, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
         swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+        int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
+        if(mp != -1){
+            compute_peers(mp, this->rank, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+        }
+        free(peers);
     }
-    free(peers);
 
     uint partition_size = count / this->num_ports;
     uint remaining = count % this->num_ports;        
@@ -2451,29 +2456,35 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
 */
 
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+    Timer timer("swing_alltoall (init)");
     int rank, size, dtsize;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
     MPI_Type_size(datatype, &dtsize);
     char* tmpbuf;
     bool free_tmpbuf = false;
-    size_t tmpbuf_size = count*dtsize*size;
+    // block_in_position[i] tells me what block is in position i of the recvbuf. The same block can be in multiple position since we are doing alltoall
+    uint* block_in_position;
+    // block_recvd contains the ids of the blocks I have received
+    uint* block_recvd;
+    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size/2;
     if(tmpbuf_size > prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);        
+        block_in_position = (uint*) malloc(sizeof(uint)*size);        
+        block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
         free_tmpbuf = true;
     }else{
         tmpbuf = prealloc_buf;
+        block_in_position = (uint*) (tmpbuf + count*dtsize*size);
+        block_recvd = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size);
     }
-    // block_in_position[i] tells me what block is in position i of the recvbuf. The same block can be in multiple position since we are doing alltoall
-    uint* block_in_position = (uint*) malloc(sizeof(uint)*size);
-    // block_recvd contains the ids of the blocks I have received
-    uint* block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
 
     // At the beginning I only have my blocks
     for(size_t i = 0; i < size; i++){
         block_in_position[i] = i;
     }
 
+    timer.reset("= swing_alltoall (remap)");
     uint port = 0; // TODO: Support multiport
     uint my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
 
@@ -2488,6 +2499,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
 
     void* srcbuf;
     for(size_t step = 0; step < this->num_steps; step++){
+        timer.reset("= swing_alltoall (bookeeping and copies)");
         if(step == 0){
             srcbuf = (void*) sendbuf;
         }else{
@@ -2542,22 +2554,17 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         assert(block_recvd_cnt == size/2);
         assert(block_send_cnt == size/2);
 
-#if 0
-        int r = MPI_Sendrecv_replace(tmpbuf, count*block_send_cnt, datatype,
-                                      peer, 0, peer, 0,
-                                      comm, MPI_STATUS_IGNORE);
-        size_t offset_src = 0;
-#else
+        timer.reset("= swing_alltoall (sendrecv)");
         size_t offset_src = count*block_send_cnt*dtsize; // Send from first half and receive in second half
         int r = MPI_Sendrecv(recvbuf, count*block_send_cnt, datatype,
                             peer, 0,
                             (char*) recvbuf + offset_src, count*block_send_cnt, datatype,
-                            peer, 0, comm, MPI_STATUS_IGNORE);        
-#endif
+                            peer, 0, comm, MPI_STATUS_IGNORE);
         if(r != MPI_SUCCESS){
             return r;
         }      
 
+        timer.reset("= swing_alltoall (memcpys)");
         block_recvd_cnt = 0;        
         // Now I need to compute the new block_in_position
         for(size_t i = 0; i < this->size; i++){
@@ -2575,6 +2582,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     }
 
     // Now I need to permute tmpbuf into recvbuf
+    timer.reset("= swing_alltoall (final permutation)");
     for(size_t i = 0; i < size; i++){
         size_t index = get_alltoall_perm_index(size, rank, i);
         size_t offset_src = i*count*dtsize;
@@ -2582,10 +2590,11 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         memcpy((char*) recvbuf + offset_dst, ((char*) tmpbuf) + offset_src, count*dtsize);
     }
 
+    timer.reset("= swing_alltoall (dealloc)");
     if(free_tmpbuf){
         free(tmpbuf);
+        free(block_in_position);
+        free(block_recvd);
     }
-    free(block_in_position);
-    free(block_recvd);
     return MPI_SUCCESS;
 }

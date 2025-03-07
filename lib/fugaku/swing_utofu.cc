@@ -10,6 +10,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num
     swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));
     memset(desc, 0, sizeof(swing_utofu_comm_descriptor));
     desc->num_ports = num_ports;
+    desc->size = size;
 
     utofu_tni_id_t* tni_ids;
     size_t num_tnis;
@@ -127,6 +128,25 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
     MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE);
 
     free(sbuffer);
+    free(rbuffer);
+}
+
+void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, uint num_steps){   
+    // Receive the remote info for all the ports, from all the nodes
+    uint64_t* rbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports*desc->size);
+    for(size_t i = 0; i < desc->num_ports; i++){
+        rbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
+        rbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
+    }
+
+    MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, rbuffer, 2*desc->num_ports, MPI_UINT64_T, MPI_COMM_WORLD);
+    for(size_t r = 0; r < desc->size; r++){
+        size_t offset = r*2*desc->num_ports;
+        for(size_t i = 0; i < desc->num_ports; i++){
+            desc->port_info[i].rmt_recv_stadd[r] = rbuffer[offset + 2*i];
+            desc->port_info[i].rmt_temp_stadd[r] = rbuffer[offset + 2*i+1];
+        }
+    }
     free(rbuffer);
 }
 
