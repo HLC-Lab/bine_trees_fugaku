@@ -228,7 +228,7 @@ class SwingBitmapCalculator {
         // @param coll_type (IN): the collective type
         // @param chunk_params (OUT): the chunk params
         void get_chunk_params(uint step, CollType coll_type, ChunkParams* chunk_params);
-        
+
         uint* get_peers(){return peers;}
 };
 
@@ -253,6 +253,7 @@ class SwingCommon {
         size_t prealloc_size;
         char* prealloc_buf;
         int utofu_add_ag;
+        size_t bcast_tmp_threshold;
 #ifdef FUGAKU
         swing_utofu_comm_descriptor* utofu_descriptor;
         utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -372,7 +373,7 @@ class SwingCommon {
         // @param segment_size (IN): in allreduce and reducescatter, each send is segmented in blocks of at most this size 
         // @param prealloc_size (IN): the size of the preallocated buffer
         // @param prealloc_buf (IN): the preallocated buffer
-        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag);
+        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold);
 
         // Destructor
         ~SwingCommon();

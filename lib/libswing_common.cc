@@ -238,8 +238,8 @@ static inline int is_power_of_two(int x){
 }
 
 
-SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag): 
-            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag){
+SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold): 
+            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold){
     this->size = 1;
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
@@ -2121,37 +2121,59 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     }else{
         max_count = floor(MAX_PUTGET_SIZE / dtsize);
     }    
+
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*dtsize;
+    char use_tmpbuf = 0;
+    // For small messages we do everything in the known temp buffer to avoid exchanging information
+    // about STADDs and to avoid registering the buffer.
+    if(count*dtsize <= bcast_tmp_threshold){
+        assert(tmpbuf_size <= prealloc_size); // I do not want to complicate the code too much so I assume the preallocated buffer is large enough
+        tmpbuf = prealloc_buf;
+        use_tmpbuf = 1;
+    }
     
     timer.reset("= swing_bcast_l (utofu buf reg)"); 
     if(this->rank == root){
         swing_utofu_reg_buf(this->utofu_descriptor, buffer, count*dtsize, NULL, 0, NULL, 0, this->num_ports); 
     }else{
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, this->num_ports); 
+        if(use_tmpbuf){
+            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, 0, NULL, NULL, 0, this->num_ports); 
+        }else{
+            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, this->num_ports); 
+        }                
     }
 
 
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
 
-    timer.reset("= swing_bcast_l (utofu buf exch)");           
-    if(utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+    if(use_tmpbuf){
+        // Store the lcl_recv_stadd and rmt_recv_buffer STADD of all the other ranks
+        for(size_t i = 0; i < num_ports; i++){
+            this->utofu_descriptor->port_info[i].rmt_recv_stadd = temp_buffers[i];
+            this->utofu_descriptor->port_info[i].lcl_recv_stadd = lcl_temp_stadd[i];
+        }
     }else{
-        // TODO: Probably need to do this for all the ports for torus with different dimensions
-        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
-        peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-        compute_peers(0, this->rank, false, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers[0]); 
-        
-        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
-        int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
-        if(mp != -1){
-            if(peers[mp] == NULL){
+        timer.reset("= swing_bcast_l (utofu buf exch)");           
+        if(utofu_add_ag){
+            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        }else{
+            // TODO: Probably need to do this for all the ports for torus with different dimensions
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(0, this->rank, false, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers[0]); 
+            
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
+            if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(mp, this->rank, false, peers[mp], this->dimensions, this->dimensions_num, this->scc, algo);
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers[mp]); 
             }
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers[mp]); 
-        }
+        }        
     }
 
     uint partition_size = count / this->num_ports;
@@ -2234,6 +2256,14 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         free(parent);
         free(peers[p]);
     }
+
+    if(use_tmpbuf && root != this->rank){
+        timer.reset("= swing_bcast_l (final memcpy)");
+        memcpy(buffer, tmpbuf, count*dtsize);
+    }
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
     
     timer.reset("= swing_bcast_l (writing profile data to file)");
     return res;
@@ -2254,16 +2284,6 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     Timer timer("swing_bcast_l_mpi (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
-    
-    char* tmpbuf;
-    bool free_tmpbuf = false;
-    size_t tmpbuf_size = count*dtsize;
-    if(tmpbuf_size > prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
-        free_tmpbuf = true;
-    }else{
-        tmpbuf = prealloc_buf;
-    }
     
     uint* peers = (uint*) malloc(sizeof(uint)*this->num_steps);
     compute_peers(0, this->rank, false, peers, this->dimensions, this->dimensions_num, this->scc, algo);
@@ -2312,9 +2332,6 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Waitall(posted_send, requests_s, MPI_STATUSES_IGNORE);
     
     timer.reset("= swing_bcast_l_mpi (writing profile data to file)");
-    if(free_tmpbuf){
-        free(tmpbuf);
-    }
     free(reached_at_step);
     free(parent);
     free(peers);
@@ -2328,6 +2345,8 @@ int SwingCommon::swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatyp
 
 // Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
 int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+    Timer timer("bruck_alltoall (init)");
+
 	int rank, nprocs;
 	MPI_Comm_rank(comm, &rank);
 	MPI_Comm_size(comm, &nprocs);
@@ -2351,6 +2370,7 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
     }
 
     // 2. local rotation	
+    timer.reset("= bruck_alltoall (rotation)");
 	memset(temp_send_buffer, 0, count*nprocs*typesize);
 	int offset = 0;
 	for (int i = 0; i < nprocs; i++) {
@@ -2363,6 +2383,7 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 	long long unit_size = count * typesize;
 	for (int k = 1; k < nprocs; k <<= 1) {
 		// 1) find which data blocks to send
+        timer.reset("= bruck_alltoall (send_indexes calc)");
 		int send_indexes[(nprocs+1)/2];
 		int sendb_num = 0;
 		for (int i = k; i < nprocs; i++) {
@@ -2371,12 +2392,14 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 		}
 
 		// 2) copy blocks which need to be sent at this step
+        timer.reset("= bruck_alltoall (memcpys)");
 		for (int i = 0; i < sendb_num; i++) {
 			long long offset = send_indexes[i] * unit_size;
 			memcpy(temp_buffer+(i*unit_size), temp_send_buffer+offset, unit_size);
 		}
 
 		// 3) send and receive
+        timer.reset("= bruck_alltoall (sendrecv)");
 		int recv_proc = (rank - k + nprocs) % nprocs; // receive data from rank - 2^step process
 		int send_proc = (rank + k) % nprocs; // send data from rank + 2^k process
 
@@ -2384,6 +2407,7 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 		MPI_Sendrecv(temp_buffer, comm_size, MPI_CHAR, send_proc, 0, temp_recv_buffer, comm_size, MPI_CHAR, recv_proc, 0, comm, MPI_STATUS_IGNORE);
 
 		// 4) replace with received data
+        timer.reset("= bruck_alltoall (replace)");
 		for (int i = 0; i < sendb_num; i++) {
 			long long offset = send_indexes[i] * unit_size;
 			memcpy(temp_send_buffer+offset, temp_recv_buffer+(i*unit_size), unit_size);
@@ -2391,6 +2415,7 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 	}
 
 	// 4. second rotation
+    timer.reset("= bruck_alltoall (final rotation)");
 	offset = 0;
 	for (int i = 0; i < nprocs; i++) {
 		int index = (rank - i + nprocs) % nprocs;
@@ -2437,6 +2462,8 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
 }
 */
 
+#define SKIP_FIRST_COPY 0
+
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
     Timer timer("swing_alltoall (init)");
     int rank, size, dtsize;
@@ -2449,44 +2476,58 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     uint* block_in_position;
     // block_recvd contains the ids of the blocks I have received
     uint* block_recvd;
-    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size/2;
+    // remap_blocks contains the remapped block ids
+    uint* remap_blocks;
+    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size/2 + sizeof(uint)*size;
     if(tmpbuf_size > prealloc_size){
         posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);        
         block_in_position = (uint*) malloc(sizeof(uint)*size);        
         block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
+        remap_blocks = (uint*) malloc(sizeof(uint)*size);
         free_tmpbuf = true;
     }else{
         tmpbuf = prealloc_buf;
         block_in_position = (uint*) (tmpbuf + count*dtsize*size);
         block_recvd = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size);
+        remap_blocks = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size/2);
     }
 
     // At the beginning I only have my blocks
+    uint port = 0; // TODO: Support multiport
     for(size_t i = 0; i < size; i++){
         block_in_position[i] = i;
+        remap_blocks[i] = remap_rank(size, i, port, dimensions_num);
     }
 
-    timer.reset("= swing_alltoall (remap)");
-    uint port = 0; // TODO: Support multiport
-    uint my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
+    timer.reset("= swing_alltoall (remap)");    
+    uint my_remapped_rank = remap_blocks[rank];
+
+#if SKIP_FIRST_COPY
+    ;
+#else
+    memcpy(tmpbuf, sendbuf, count*dtsize*size);
+#endif
 
     // We always assume reduce_scatter
     size_t min_block_s = 0;
     size_t min_block_r = 0;
     size_t max_block_s = this->size;
     size_t max_block_r = this->size;
-    
+
     // We use recvbuf to receive/send the data, and tmpbuf to organize the data to send at the next step
     // By doing so, we avoid a copy form tmpbuf to recvbuf at the end
-
     void* srcbuf;
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall (bookeeping and copies)");
+#if SKIP_FIRST_COPY
         if(step == 0){
             srcbuf = (void*) sendbuf;
         }else{
             srcbuf = tmpbuf;
         }
+#else
+        srcbuf = tmpbuf;
+#endif
         // Compute the range to send/recv
         min_block_s = min_block_r;
         max_block_s = max_block_r;
@@ -2510,7 +2551,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         for(size_t i = 0; i < this->size; i++){
             uint block = block_in_position[i];
             // Shall I send this block? Check the negabinary thing            
-            uint remap_block = remap_rank(size, block, port, dimensions_num);            
+            uint remap_block = remap_blocks[block];
 
             // Send the block. Copy in the first half of tmpbuf (to send), receive in the other half, then copy back the received data from tmpbuf to recvbuf for the next round
             if(remap_block >= min_block_s && remap_block < max_block_s){
@@ -2524,11 +2565,13 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
                 block_in_position[i] = UINT_MAX;
                 block_send_cnt++;
             }else{
+#if SKIP_FIRST_COPY
                 if(step == 0){
                     // We need to copy it from sendbuf to tempbuf since we never copied it
                     size_t offset = i*count*dtsize;
                     memcpy((char*) tmpbuf + offset, (char*) sendbuf + offset, count*dtsize);
                 }
+#endif
                 block_recvd[block_recvd_cnt] = block;
                 block_recvd_cnt++;
             }
@@ -2577,6 +2620,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         free(tmpbuf);
         free(block_in_position);
         free(block_recvd);
+        free(remap_blocks);
     }
     return MPI_SUCCESS;
 }

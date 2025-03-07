@@ -45,7 +45,7 @@ static inline void read_env(MPI_Comm comm){
     if(!env_read || force_env_reload){
         env_read = 1;
 
-        unsigned int dimensions_num = 1, segment_size = 0, utofu_add_ag = 0; 
+        unsigned int dimensions_num = 1, segment_size = 0, utofu_add_ag = 0, bcast_tmp_threshold = 0; 
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int num_ports = 1;
         size_t prealloc_size = 0;
@@ -69,6 +69,11 @@ static inline void read_env(MPI_Comm comm){
         env_str = getenv("LIBSWING_UTOFU_ADD_AG");
         if(env_str){
             utofu_add_ag = atoi(env_str);
+        }
+
+        env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
+        if(env_str){
+            bcast_tmp_threshold = atoi(env_str);
         }
 
         env_str = getenv("LIBSWING_DIMENSIONS");
@@ -135,7 +140,7 @@ static inline void read_env(MPI_Comm comm){
             posix_memalign((void**) &prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, prealloc_size);
         }
 
-        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf, utofu_add_ag);
+        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf, utofu_add_ag, bcast_tmp_threshold);
 
 #ifdef DEBUG
         int rank;
