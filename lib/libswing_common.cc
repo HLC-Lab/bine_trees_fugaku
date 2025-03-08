@@ -2876,9 +2876,10 @@ static void build_tree(int* coord_root, size_t step, uint port, Algo algo, swing
  * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
  * @param scc (IN) The SwingCoordConverter object
  * @param next_rank (IN) The next rank to assign
+ * @param parent (IN) An array of size scc->size to store the parent of a node
  * @param remapped_ranks (OUT) An array of size scc->size to store the remapped ranks
  */
-static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, uint* remapped_ranks){
+static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, uint32_t* parent, uint* remapped_ranks){
     for(size_t i = step; i < scc->num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
@@ -2888,7 +2889,12 @@ static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swin
             real_step = i;
         }
         get_peer_c(coord_root, real_step, peer_rank, port, scc->dimensions_num, scc->dimensions, algo);
-        remap_ranks(peer_rank, i + 1, port, algo, dist_type, scc, next_rank, remapped_ranks);
+        // I need to check if I am actually the parent of that peer.
+        // When we have a number of nodes that is not a power of 2, we may have peers which are reached by
+        // more than one node, so we must do this check.
+        if(parent[scc->getIdFromCoord(peer_rank)] == scc->getIdFromCoord(coord_root)){
+            remap_ranks(peer_rank, i + 1, port, algo, dist_type, scc, next_rank, parent, remapped_ranks);
+        }
     }
     remapped_ranks[scc->getIdFromCoord(coord_root)] = (*next_rank);
     (*next_rank)--;
@@ -2923,7 +2929,7 @@ static swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_typ
 
     // Now that we have a loopless tree, do a DFS to compute the remapped rank
     uint next_rank = scc->size - 1;
-    remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.remapped_ranks);
+    remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks);
     assert(next_rank == UINT32_MAX);
     return tree;
 }
