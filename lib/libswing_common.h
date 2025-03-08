@@ -94,14 +94,12 @@ private:
 int is_odd(int x);
 
 class SwingCoordConverter {
-    private:
+    public:
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        uint dimensions_virtual[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // Used when we shrink torus with non-power of 2 size // TODO: Rename as dimensions_lower_p2
         uint dimensions_num; 
         int* coordinates;
-        int* coordinates_virtual;
         uint size;
-    public:
+    
         SwingCoordConverter(uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num);
         
         ~SwingCoordConverter();
@@ -110,22 +108,19 @@ class SwingCoordConverter {
         // Row-major order, i.e., row coordinates change the slowest 
         // (i.e., we first increase depth, than cols, then rows -- https://eli.thegreenplace.net/2015/memory-layout-of-multi-dimensional-arrays) 
         // @param id (IN): the rank id
-        // @param virt (IN): if true, the virtual coordinates are returned, otherwise the real ones
         // @param coord (OUT): the array where the coordinates are stored
-        void getCoordFromId(int id, bool virt, int* coord);
+        void getCoordFromId(int id, int* coord);
 
         // Convert d-dimensional coordinates into a rank id).
         // Dimensions are (rows, cols, depth).
         // @param coords (IN): the array with the coordinates
-        // @param virt (IN): if true, the virtual coordinates are considered, otherwise the real ones
         // @return the rank id
-        int getIdFromCoord(int* coords, bool virt);
+        int getIdFromCoord(int* coords);
 
         // Gets the real or virtual (for non-p2) coordinates associated to a rank.
         // @param rank (IN): the rank
-        // @param virt (IN): if true, the virtual coordinates are stored, otherwise the real ones
         // @param coord (OUT): the array where the coordinates are stored
-        void retrieve_coord_mapping(uint rank, bool virt, int* coord);
+        void retrieve_coord_mapping(uint rank, int* coord);
 };
 
 
@@ -247,10 +242,10 @@ class SwingCommon {
         bool all_p2_dimensions; // True if all the dimensions are power of 2
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
-        SwingCoordConverter scc;
+        SwingCoordConverter* scc_real;
+        SwingCoordConverter* scc_virtual;
         SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
         uint* virtual_peers[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
-        size_t size_virtual;
         size_t num_steps_virtual;
         size_t prealloc_size;
         char* prealloc_buf;

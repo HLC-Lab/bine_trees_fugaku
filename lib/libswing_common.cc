@@ -239,7 +239,7 @@ static inline int is_power_of_two(int x){
 
 
 SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold): 
-            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), scc(dimensions, dimensions_num), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold){
+            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold){
     this->size = 1;
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
@@ -266,20 +266,21 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     }
 
     // Compute the number of steps on the virtual shrunk topology (for latency-optimal)
-    size_virtual = 1;
     num_steps_virtual = 0;
     if(all_p2_dimensions){
         this->num_steps_virtual = this->num_steps;
-        this->size_virtual = this->size;
     }else{
         for(size_t i = 0; i < this->dimensions_num; i++){
-            this->size_virtual *= this->dimensions_virtual[i];
             this->num_steps_virtual += ceil(log2(this->dimensions_virtual[i]));
         }
     }
     for(size_t i = 0; i < this->num_ports; i++){
         virtual_peers[i] = NULL;
     }
+
+    this->scc_real = new SwingCoordConverter(this->dimensions, this->dimensions_num);
+    this->scc_virtual = new SwingCoordConverter(this->dimensions_virtual, this->dimensions_num);
+
 #ifdef FUGAKU    
     utofu_vcq_id_t* vcq_ids_pp = (utofu_vcq_id_t*) malloc(sizeof(utofu_vcq_id_t)*this->num_ports);
     this->utofu_descriptor = swing_utofu_setup(vcq_ids_pp, this->num_ports, this->size);
@@ -322,12 +323,13 @@ SwingCommon::~SwingCommon(){
             free(virtual_peers[i]);
         }
     }
+    delete this->scc_real;
+    delete this->scc_virtual;
 }
 
 // Adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c
-void SwingCoordConverter::getCoordFromId(int id, bool virt, int* coord){
+void SwingCoordConverter::getCoordFromId(int id, int* coord){
     int nnodes = 1;
-    uint* dimensions = virt ? this->dimensions_virtual : this->dimensions;
     for(size_t i = 0; i < dimensions_num; i++){
         nnodes *= dimensions[i];
     }
@@ -339,11 +341,10 @@ void SwingCoordConverter::getCoordFromId(int id, bool virt, int* coord){
 }
 
 // Adapted from MPICH code -- https://github.com/pmodels/mpich/blob/94b1cd6f060cafbf68d6d83ea551a8bcc8fcecd4/src/mpi/topo/topo_impl.c)
-int SwingCoordConverter::getIdFromCoord(int* coords, bool virt){
+int SwingCoordConverter::getIdFromCoord(int* coords){
     int rank = 0;
     int multiplier = 1;
     int coord;
-    uint* dimensions = virt ? this->dimensions_virtual : this->dimensions;
     for (int i = dimensions_num - 1; i >= 0; i--) {
         coord = coords[i];
         if (/*cart_ptr->topo.cart.periodic[i]*/ 1) {
@@ -362,10 +363,9 @@ int SwingCoordConverter::getIdFromCoord(int* coords, bool virt){
 }
 
 // Cache coordinates
-void SwingCoordConverter::retrieve_coord_mapping(uint rank, bool virt, int* coord){
-    int* coordinates = virt ? this->coordinates_virtual : this->coordinates;
+void SwingCoordConverter::retrieve_coord_mapping(uint rank, int* coord){
     if(coordinates[rank*dimensions_num] == -1){
-        getCoordFromId(rank, virt, &(coordinates[rank*dimensions_num]));
+        getCoordFromId(rank, &(coordinates[rank*dimensions_num]));
     }
     memcpy(coord, &(coordinates[rank*dimensions_num]), sizeof(uint)*dimensions_num);
 }
@@ -375,20 +375,12 @@ SwingCoordConverter::SwingCoordConverter(uint dimensions[LIBSWING_MAX_SUPPORTED_
     this->size = 1;
     for(size_t d = 0; d < dimensions_num; d++){
         this->size *= dimensions[d];
-        if(!is_power_of_two(dimensions[d])){
-            this->dimensions_virtual[d] = pow(2, (int) ceil(log2(dimensions[d])) - 1);
-        }else{
-            this->dimensions_virtual[d] = this->dimensions[d];
-        }
     }
     this->coordinates = (int*) malloc(sizeof(int)*this->size*this->dimensions_num);
-    this->coordinates_virtual = (int*) malloc(sizeof(int)*this->size*this->dimensions_num);
     memset(this->coordinates        , -1, sizeof(int)*this->size*dimensions_num);
-    memset(this->coordinates_virtual, -1, sizeof(int)*this->size*dimensions_num);
 }
 
 SwingCoordConverter::~SwingCoordConverter(){
-    free(this->coordinates_virtual);
     free(this->coordinates);
 }
 
@@ -436,7 +428,7 @@ static int get_mirroring_port(int num_ports, uint dimensions_num){
 // @param rank (IN): the rank
 // @param virt (IN): if true, the virtual coordinates are considered, otherwise the real ones
 // @param peers (OUT): the array where the peers are stored (one per step)
-static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter& scc){
+static void compute_peers_swing(int port, uint rank, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter* scc){
     bool terminated_dimensions_bitmap[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     int num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint8_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -450,7 +442,7 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
 
     // Compute default directions
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    scc.retrieve_coord_mapping(rank, virt, coord);
+    scc->retrieve_coord_mapping(rank, coord);
     for(size_t i = 0; i < dimensions_num; i++){
         terminated_dimensions_bitmap[i] = false;            
     }
@@ -461,7 +453,7 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
     // Generate peers
     for(size_t i = 0; i < (uint) num_steps; ){            
         if(dimensions_num > 1){
-            scc.retrieve_coord_mapping(rank, virt, coord); // Regenerate rank coord
+            scc->retrieve_coord_mapping(rank, coord); // Regenerate rank coord
             o = 0;
             do{
                 target_dim = (last_dim + 1 + o) % (dimensions_num);            
@@ -485,7 +477,7 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
         if(relative_step < num_steps_per_dim[target_dim]){
             coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
             if(dimensions_num > 1){
-                peers[i] = scc.getIdFromCoord(coord, virt);
+                peers[i] = scc->getIdFromCoord(coord);
             }else{
                 peers[i] = coord[0];
             }
@@ -503,7 +495,7 @@ static void compute_peers_swing(int port, uint rank, bool virt, uint* peers, uin
 // @param rank (IN): the rank
 // @param virt (IN): if true, the virtual coordinates are considered, otherwise the real ones
 // @param peers (OUT): the array where the peers are stored (one per step)
-static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter& scc){
+static void compute_peers_recdoub(int port, uint rank, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter* scc){
     bool terminated_dimensions_bitmap[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     int num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint8_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -517,7 +509,7 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
 
     // Compute default directions
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    scc.retrieve_coord_mapping(rank, virt, coord);
+    scc->retrieve_coord_mapping(rank, coord);
     for(size_t i = 0; i < dimensions_num; i++){
         terminated_dimensions_bitmap[i] = false;            
     }
@@ -528,7 +520,7 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
     // Generate peers
     for(size_t i = 0; i < (uint) num_steps; ){            
         if(dimensions_num > 1){
-            scc.retrieve_coord_mapping(rank, virt, coord); // Regenerate rank coord
+            scc->retrieve_coord_mapping(rank, coord); // Regenerate rank coord
             o = 0;
             do{
                 target_dim = (last_dim + 1 + o) % (dimensions_num);            
@@ -550,7 +542,7 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
         if(relative_step < num_steps_per_dim[target_dim]){
             coord[target_dim] = mod((coord[target_dim] + distance), dimensions[target_dim]); // We need to use mod to avoid negative coordinates
             if(dimensions_num > 1){
-                peers[i] = scc.getIdFromCoord(coord, virt);
+                peers[i] = scc->getIdFromCoord(coord);
             }else{
                 peers[i] = coord[0];
             }
@@ -563,11 +555,11 @@ static void compute_peers_recdoub(int port, uint rank, bool virt, uint* peers, u
     }        
 }
 
-static void compute_peers(int port, uint rank, bool virt, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter& scc, Algo algo){
+static void compute_peers(int port, uint rank, uint* peers, uint* dimensions, uint dimensions_num, SwingCoordConverter* scc, Algo algo){
     if(algo == ALGO_RECDOUB_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU){
-        return compute_peers_recdoub(port, rank, virt, peers, dimensions, dimensions_num, scc);
+        return compute_peers_recdoub(port, rank, peers, dimensions, dimensions_num, scc);
     }else{
-        return compute_peers_swing(port, rank, virt, peers, dimensions, dimensions_num, scc);
+        return compute_peers_swing(port, rank, peers, dimensions, dimensions_num, scc);
     }
 }
 
@@ -585,7 +577,7 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void* recvbuf, voi
     MPI_Type_size(datatype, &dtsize);    
     MPI_Comm_rank(comm, &rank);    
     
-    this->scc.retrieve_coord_mapping(rank, false, coord);
+    this->scc_real->retrieve_coord_mapping(rank, coord);
 
     const void* real_sendbuf;
     void* real_recvbuf;
@@ -595,7 +587,7 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void* recvbuf, voi
         // This dimensions is not a power of two, shrink it
         if(!is_power_of_two(dimensions[i])){
             memcpy(coord_peer, coord, sizeof(uint)*this->dimensions_num);
-            int extra = dimensions[i] - this->dimensions_virtual[i];
+            int extra = dimensions[i] - this->scc_virtual->dimensions[i];
             if(!*first_copy_done){
                 real_sendbuf = sendbuf;
                 real_recvbuf = recvbuf;
@@ -605,16 +597,16 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void* recvbuf, voi
                 real_recvbuf = tempbuf;
                 real_aggbuf = tempbuf;
             }
-            if(coord[i] >= this->dimensions_virtual[i]){            
+            if(coord[i] >= this->scc_virtual->dimensions[i]){            
                 coord_peer[i] = coord[i] - extra;
-                int peer = this->scc.getIdFromCoord(coord_peer, false);
+                int peer = this->scc_real->getIdFromCoord(coord_peer);
                 int res = MPI_Send(real_sendbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
                 if(res != MPI_SUCCESS){return res;}
                 *idle = 1;
                 break;
-            }else if(coord[i] + extra >= this->dimensions_virtual[i]){
+            }else if(coord[i] + extra >= this->scc_virtual->dimensions[i]){
                 coord_peer[i] = coord[i] + extra;
-                int peer = this->scc.getIdFromCoord(coord_peer, false);
+                int peer = this->scc_real->getIdFromCoord(coord_peer);
                 int res = MPI_Recv(real_recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);                
                 if(res != MPI_SUCCESS){return res;}
                 MPI_Reduce_local(real_aggbuf, recvbuf, count, datatype, op);
@@ -622,7 +614,7 @@ int SwingCommon::shrink_non_power_of_two(const void *sendbuf, void* recvbuf, voi
             }
         }
     }
-    *rank_virtual = this->scc.getIdFromCoord(coord, true);
+    *rank_virtual = this->scc_virtual->getIdFromCoord(coord);
     return MPI_SUCCESS;
 }
 
@@ -633,24 +625,24 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
     MPI_Type_size(datatype, &dtsize);    
     MPI_Comm_rank(comm, &rank);    
     
-    this->scc.retrieve_coord_mapping(rank, false, coord);    
+    this->scc_real->retrieve_coord_mapping(rank, coord);    
     //for(size_t d = 0; d < dimensions_num; d++){
     for(int d = dimensions_num - 1; d >= 0; d--){
         // This dimensions was a non-power of two, enlarge it
         if(!is_power_of_two(dimensions[d])){
             memcpy(coord_peer, coord, sizeof(uint)*this->dimensions_num);
-            int extra = dimensions[d] - this->dimensions_virtual[d];
-            if(coord[d] >= (uint) this->dimensions_virtual[d]){                
+            int extra = dimensions[d] - this->scc_virtual->dimensions[d];
+            if(coord[d] >= (uint) this->scc_virtual->dimensions[d]){                
                 coord_peer[d] = coord[d] - extra;
-                int peer = this->scc.getIdFromCoord(coord_peer, false);
+                int peer = this->scc_real->getIdFromCoord(coord_peer);
                 DPRINTF("[%d] (Enl) Receiving from %d\n", rank, peer);
                 // I can overwrite the recvbuf and don't need to aggregate, since 
                 // I was an extra node and did not participate to the actual allreduce
                 int r = MPI_Recv(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm, NULL);
                 if(r != MPI_SUCCESS){return r;}
-            }else if(coord[d] + extra >= (uint) this->dimensions_virtual[d]){
+            }else if(coord[d] + extra >= (uint) this->scc_virtual->dimensions[d]){
                 coord_peer[d] = coord[d] + extra;
-                int peer = this->scc.getIdFromCoord(coord_peer, false);
+                int peer = this->scc_real->getIdFromCoord(coord_peer);
                 DPRINTF("[%d] (Enl) Sending to %d\n", rank, peer);
                 int r = MPI_Send(recvbuf, count, datatype, peer, TAG_SWING_ALLREDUCE, comm);                
                 if(r != MPI_SUCCESS){return r;}
@@ -696,7 +688,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
     // By doing so we can avoid doing a memcpy at the beginning of the execution.
 
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+    this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
     int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
     int first_copy_done = 0;
@@ -706,7 +698,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
         if(res != MPI_SUCCESS){return res;}
     }    
 
-    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
+    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->scc_virtual->dimensions[0], this->scc_virtual->dimensions[1], this->scc_virtual->dimensions[2]);
 
     if(!idle){
         if(tmpbuf_size > prealloc_size){
@@ -716,11 +708,11 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             // TODO Probably easier/better to do allgather???
-            compute_peers(0, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+            compute_peers(0, rank_virtual, peers, this->scc_virtual->dimensions, this->dimensions_num, this->scc_virtual, algo);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
             int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
             if(mp != -1){
-                compute_peers(mp, rank_virtual, true, peers, this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+                compute_peers(mp, rank_virtual, peers, this->scc_virtual->dimensions, this->dimensions_num, this->scc_virtual, algo);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
             }
             free(peers);
@@ -742,15 +734,15 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             // Get the peer
             if(virtual_peers[p] == NULL){
                 virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-                compute_peers(p, rank_virtual, true, virtual_peers[p], this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+                compute_peers(p, rank_virtual, virtual_peers[p], this->scc_virtual->dimensions, this->dimensions_num, this->scc_virtual, algo);
             }
             for(size_t step = 0; step < (uint) num_steps_virtual; step++){                 
                 // Schedule all the send and recv
                 //timer.reset("= swing_coll_l_utofu (sendrecv for step " + std::to_string(step) + ")");
                 int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
                 int virtual_peer = virtual_peers[p][step];                 
-                this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer); // Get the virtual coordinates of the peer
-                int peer = this->scc.getIdFromCoord(coord_peer, false); // Convert the virtual coordinates to the real rank
+                this->scc_virtual->retrieve_coord_mapping(virtual_peer, coord_peer); // Get the virtual coordinates of the peer
+                int peer = this->scc_real->getIdFromCoord(coord_peer); // Convert the virtual coordinates to the real rank
                 DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
 
                 // Compute the count and the offset of the piece of buffer that is aggregated on this port
@@ -835,7 +827,7 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
 
 
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+    this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
     // The non-idle ranks (i.e., those that lie within a power of two and
     // execute most of the collective):
@@ -853,7 +845,7 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
         if(res != MPI_SUCCESS){return res;}
     }    
 
-    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->dimensions_virtual[0], this->dimensions_virtual[1], this->dimensions_virtual[2]);
+    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->scc_virtual->dimensions[0], this->scc_virtual->dimensions[1], this->scc_virtual->dimensions[2]);
 
     if(!idle){                
         // Do the step-by-step communication on the shrunk topology.         
@@ -887,12 +879,12 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
                 // Get the peer
                 if(virtual_peers[p] == NULL){
                     virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-                    compute_peers(p, rank_virtual, true, virtual_peers[p], this->dimensions_virtual, this->dimensions_num, this->scc, algo);
+                    compute_peers(p, rank_virtual, virtual_peers[p], this->scc_virtual->dimensions, this->dimensions_num, this->scc_virtual, algo);
                 }
                 int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
                 int virtual_peer = virtual_peers[p][step];                 
-                this->scc.retrieve_coord_mapping(virtual_peer, true, coord_peer); // Get the virtual coordinates of the peer
-                int peer = this->scc.getIdFromCoord(coord_peer, false); // Convert the virtual coordinates to the real rank
+                this->scc_virtual->retrieve_coord_mapping(virtual_peer, coord_peer); // Get the virtual coordinates of the peer
+                int peer = this->scc_real->getIdFromCoord(coord_peer); // Convert the virtual coordinates to the real rank
                 DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
 
                 size_t count_port = partition_size + (p < remaining ? 1 : 0);
@@ -1613,7 +1605,7 @@ void SwingBitmapCalculator::compute_block_step(int* coord_rank, size_t starting_
             get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
             compute_block_step(peer_rank, starting_step, i, num_steps, block_step);
         }
-        uint rank = scc.getIdFromCoord(coord_rank, false);
+        uint rank = scc.getIdFromCoord(coord_rank);
         if(block_step[rank] == num_steps ||   // If I have not reached this node yet
            starting_step > block_step[rank]){ // Or if I can reach it with a starting step higher than what previously found
             if(block_step[rank] == num_steps - 2){
@@ -1681,7 +1673,7 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
         }
         uint peer = get_peer(this->next_step, SWING_REDUCE_SCATTER);
         int peer_coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        scc.getCoordFromId(peer, false, peer_coord);
+        scc.getCoordFromId(peer, peer_coord);
 
         for(size_t j = this->next_step; j < this->num_steps; j++){
             int peer_peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -2027,9 +2019,9 @@ static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t 
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
         
-        uint32_t rank = scc.getIdFromCoord(peer_rank, false);
+        uint32_t rank = scc.getIdFromCoord(peer_rank);
         if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
-            parent[rank] = scc.getIdFromCoord(coord_rank, false);
+            parent[rank] = scc.getIdFromCoord(coord_rank);
             reached_at_step[rank] = i;
         }
         dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
@@ -2056,8 +2048,8 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
     bitmap_recv_merged = (char**) malloc(sizeof(char*)*this->num_steps);  
     memset(bitmap_send_merged, 0, sizeof(char*)*this->num_steps);
     memset(bitmap_recv_merged, 0, sizeof(char*)*this->num_steps);
-    compute_peers(this->port, rank, false, this->peers, this->dimensions, this->dimensions_num, this->scc, algo);
-    this->scc.getCoordFromId(rank, false, coord_mine);
+    compute_peers(this->port, rank, this->peers, this->dimensions, this->dimensions_num, &(this->scc), algo);
+    this->scc.getCoordFromId(rank, coord_mine);
 
     chunk_params_per_step = (ChunkParams*) malloc(sizeof(ChunkParams)*this->num_steps);
 
@@ -2066,9 +2058,9 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         // Compute the remapped rank
         this->remapped_rank = this->size - 1;
         int coord_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.getCoordFromId(0, false, coord_rank);
+        this->scc.getCoordFromId(0, coord_rank);
         int my_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.getCoordFromId(rank, false, my_rank);
+        this->scc.getCoordFromId(rank, my_rank);
         bool found = false;
         dfs(coord_rank, 0, this->num_steps, my_rank, &(this->remapped_rank), &found, port, dimensions_num, dimensions, algo);
         assert(found);
@@ -2110,8 +2102,8 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
 static void get_step_from_root(int* coord_rank, int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, Algo algo, bool allgather_schedule){
     SwingCoordConverter scc(dimensions, dimensions_num);
     dfs_reversed(coord_root, coord_root, 0, num_steps, coord_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
-    parent[scc.getIdFromCoord(coord_root, false)] = UINT32_MAX;
-    reached_at_step[scc.getIdFromCoord(coord_root, false)] = 0; // To avoid sending the step for myself at a wrong value
+    parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
+    reached_at_step[scc.getIdFromCoord(coord_root)] = 0; // To avoid sending the step for myself at a wrong value
 }
 
 int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
@@ -2168,14 +2160,14 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             // TODO: Probably need to do this for all the ports for torus with different dimensions
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(0, this->rank, false, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
+            compute_peers(0, this->rank, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(mp, this->rank, false, peers[mp], this->dimensions, this->dimensions_num, this->scc, algo);
+                compute_peers(mp, this->rank, peers[mp], this->dimensions, this->dimensions_num, this->scc, algo);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }        
@@ -2190,14 +2182,14 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(p, this->rank, false, peers[p], this->dimensions, this->dimensions_num, this->scc, algo);
+            compute_peers(p, this->rank, peers[p], this->dimensions, this->dimensions_num, this->scc, algo);
         }        
         timer.reset("= swing_bcast_l (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.retrieve_coord_mapping(this->rank, false, coord);
+        this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
         int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.getCoordFromId(root, false, coord_root);
+        this->scc_real->getCoordFromId(root, coord_root);
 
         uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
         uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
@@ -2291,15 +2283,15 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Type_size(datatype, &dtsize);    
     
     uint* peers = (uint*) malloc(sizeof(uint)*this->num_steps);
-    compute_peers(0, this->rank, false, peers, this->dimensions, this->dimensions_num, this->scc, algo);
+    compute_peers(0, this->rank, peers, this->dimensions, this->dimensions_num, this->scc_real, algo);
 
     // Not actually needed, is just to use the get_peer, should be refactored
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+    this->scc_real->retrieve_coord_mapping(this->rank, coord);
     int res = MPI_SUCCESS; 
 
     int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.getCoordFromId(root, false, coord_root);
+    this->scc_real->getCoordFromId(root, coord_root);
 
     timer.reset("= swing_bcast_l_mpi (actual sendrecvs)");
     uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
@@ -2459,7 +2451,7 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
     size_t real_step = num_steps - 1 - step;
     int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     get_peer_c(coord_rank, step, peer_rank, port, dimensions_num, dimensions, ALGO_SWING_B);
-    history[*next_index] = scc.getIdFromCoord(peer_rank, false);
+    history[*next_index] = scc.getIdFromCoord(peer_rank);
     (*next_index)++;
     for(int s = step - 1; s >= 0; s--){
         get_data_history_bitmap(peer_rank, s, num_steps, port, dimensions_num, dimensions, scc, next_index, history);
@@ -2660,14 +2652,14 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(0, this->rank, false, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
+            compute_peers(0, this->rank, peers[0], this->dimensions, this->dimensions_num, this->scc, algo);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(this->num_ports, this->dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(mp, this->rank, false, peers[mp], this->dimensions, this->dimensions_num, this->scc, algo);
+                compute_peers(mp, this->rank, peers[mp], this->dimensions, this->dimensions_num, this->scc, algo);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
@@ -2688,14 +2680,14 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(p, this->rank, false, peers[p], this->dimensions, this->dimensions_num, this->scc, algo);
+            compute_peers(p, this->rank, peers[p], this->dimensions, this->dimensions_num, this->scc, algo);
         }        
         timer.reset("= swing_scatter_utofu (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.retrieve_coord_mapping(this->rank, false, coord);
+        this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
         int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc.getCoordFromId(root, false, coord_root);
+        this->scc_real->getCoordFromId(root, coord_root);
 
         uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
         uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
@@ -2801,6 +2793,105 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
 #endif
 }
 
+/**
+ * @brief Enum to specify whether a binomial tree is built with distance between
+ * nodes increasing or decreasing at each step.
+ */
+typedef enum {
+    SWING_DISTANCE_INCREASING = 0,
+    SWING_DISTANCE_DECREASING = 1
+} swing_distance_type_t;
+
+typedef struct {
+    uint* parent; // For each node in the tree, its parent.
+    uint* reached_at; // For each node in the tree, the step at which it is reached.
+} swing_tree_t;
+
+static int ceil_log2(unsigned long long x){
+  static const unsigned long long t[6] = {
+    0xFFFFFFFF00000000ull,
+    0x00000000FFFF0000ull,
+    0x000000000000FF00ull,
+    0x00000000000000F0ull,
+    0x000000000000000Cull,
+    0x0000000000000002ull
+  };
+
+  int y = (((x & (x - 1)) == 0) ? 0 : 1);
+  int j = 32;
+  int i;
+
+  for (i = 0; i < 6; i++) {
+    int k = (((x & t[i]) == 0) ? 0 : j);
+    y += k;
+    x >>= k;
+    j >>= 1;
+  }
+
+  return y;
+}
+
+#if 0
+static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, Algo algo){
+    for(size_t i = step; i < num_steps; i++){
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
+        dfs(peer_rank, i + 1, num_steps, target_rank, remap_rank, found, port, dimensions_num, dimensions, algo);
+    }
+    if(*found){
+        (*remap_rank)--;
+    }
+    if(memcmp(coord_rank, target_rank, sizeof(int)*dimensions_num) == 0){
+        *found = true;
+    }
+}
+
+static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent, uint port, uint dimensions_num, uint* dimensions, Algo algo, SwingCoordConverter& scc, bool allgather_schedule){
+    for(size_t i = step; i < num_steps; i++){
+        int real_step;
+        if(allgather_schedule){
+            real_step = num_steps - 1 - i; // We consider allgather schedule
+        }else{
+            real_step = i;
+        }
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
+        
+        uint32_t rank = scc.getIdFromCoord(peer_rank);
+        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
+            parent[rank] = scc.getIdFromCoord(coord_rank);
+            reached_at_step[rank] = i;
+        }
+        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
+    }
+}
+
+static void get_tree_int(uint root, SwingCoordConverter& scc, swing_distance_type_t dist_type, Algo algo){
+    for(size_t i = step; i < num_steps; i++){
+        int real_step;
+        if(dist_type == SWING_DISTANCE_DECREASING){
+            real_step = num_steps - 1 - i;
+        }else{
+            real_step = i;
+        }
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
+        
+        uint32_t rank = scc.getIdFromCoord(peer_rank);
+        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
+            parent[rank] = scc.getIdFromCoord(coord_rank);
+            reached_at_step[rank] = i;
+        }
+        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
+    }    
+}
+
+static void get_tree(uint root, SwingCoordConverter& scc, swing_distance_type_t dist_type, Algo algo){
+    int root_coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    scc_real->getCoordFromId(root, root_coord);
+}
+#endif
+
 int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
@@ -2835,14 +2926,14 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     // Compute the peers of this port if I did not do it yet
     if(peers[port] == NULL){
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-        compute_peers(port, this->rank, false, peers[port], this->dimensions, this->dimensions_num, this->scc, algo);
+        compute_peers(port, this->rank, peers[port], this->dimensions, this->dimensions_num, this->scc_real, algo);
     }        
     timer.reset("= swing_scatter_mpi (computing trees)");
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+    this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
     int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc.getCoordFromId(root, false, coord_root);
+    this->scc_real->getCoordFromId(root, coord_root);
 
     uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
     uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
@@ -2911,7 +3002,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
         if(root != this->rank && step == receiving_step){        
             // Receive the data from the root   
             size_t num_blocks = (max_block_r - min_block_r); 
-            MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, root, TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
+            MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, parent[this->rank], TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
         }
 
         if(step >= receiving_step + 1){
@@ -2924,16 +3015,16 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
         }
         // Wait all the sends for this segment before moving to the next one
         timer.reset("= swing_scatter_mpi (waiting all sends)");
-    
-        free(reached_at_step);
-        free(parent);
-        free(peers[port]);
-
-        timer.reset("= swing_scatter_mpi (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
-        // Consider offsets of block 0 since everything must go "in the first block"
-        DPRINTF("p=%d Copying %d bytes from %d to %d\n", port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
-        memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].count*dtsize);
     }
+    
+    free(reached_at_step);
+    free(parent);
+    free(peers[port]);
+
+    timer.reset("= swing_scatter_mpi (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
+    // Consider offsets of block 0 since everything must go "in the first block"
+    DPRINTF("p=%d Copying %d bytes from %d to %d\n", port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
+    memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].count*dtsize);
 
     if(free_tmpbuf){
         free(tmpbuf);
