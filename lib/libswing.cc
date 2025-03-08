@@ -856,7 +856,7 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     read_env(comm);
     if(algo == ALGO_DEFAULT){
         return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
         // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
         // This is the opposite of what we do in allreduce.
         // Allocate blocks_info
@@ -887,7 +887,12 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
         }
 
         DPRINTF("Calling scatter.\n");
-        int res = swing_common->swing_scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+        int res = MPI_SUCCESS;
+        if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+            res = swing_common->swing_scatter_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+        }else{
+            res = swing_common->swing_scatter_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+        }
         DPRINTF("Scatter called.\n");
 
         // Free blocks_info

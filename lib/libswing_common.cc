@@ -2587,9 +2587,9 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         timer.reset("= swing_alltoall (sendrecv)");
         size_t offset_src = count*block_send_cnt*dtsize; // Send from first half and receive in second half
         int r = MPI_Sendrecv(recvbuf, count*block_send_cnt, datatype,
-                            peer, 0,
+                            peer, TAG_SWING_ALLTOALL,
                             (char*) recvbuf + offset_src, count*block_send_cnt, datatype,
-                            peer, 0, comm, MPI_STATUS_IGNORE);
+                            peer, TAG_SWING_ALLTOALL, comm, MPI_STATUS_IGNORE);
         if(r != MPI_SUCCESS){
             return r;
         }      
@@ -2630,12 +2630,12 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
     return MPI_SUCCESS;
 }
 
-int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
 #ifdef FUGAKU
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_scatter (init)");
-    Timer timer("swing_scatter (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_scatter_utofu (init)");
+    Timer timer("swing_scatter_utofu (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
@@ -2646,14 +2646,14 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
     memset(peers, 0, sizeof(uint*)*this->num_ports);
     size_t tmpbuf_size = ceil(sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
     
-    timer.reset("= swing_scatter (utofu buf reg)"); 
+    timer.reset("= swing_scatter_utofu (utofu buf reg)"); 
 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
     if(tmpbuf_size > prealloc_size){
         posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, this->num_ports); 
-        timer.reset("= swing_scatter (utofu buf exch)");           
+        timer.reset("= swing_scatter_utofu (utofu buf exch)");           
         if(utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
@@ -2690,7 +2690,7 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(p, this->rank, false, peers[p], this->dimensions, this->dimensions_num, this->scc, algo);
         }        
-        timer.reset("= swing_scatter (computing trees)");
+        timer.reset("= swing_scatter_utofu (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         this->scc.retrieve_coord_mapping(this->rank, false, coord);
 
@@ -2709,7 +2709,7 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
 
         DPRINTF("Step from root: %d\n", receiving_step);
         size_t issued_sends = 0, issued_recvs = 0;
-        timer.reset("= swing_scatter (waiting recv)");
+        timer.reset("= swing_scatter_utofu (waiting recv)");
         if(root != this->rank){        
             // Receive the data from the root    
             swing_utofu_wait_recv(utofu_descriptor, p, 0, issued_recvs);
@@ -2726,10 +2726,10 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
         uint my_remapped_rank;
         // Blocks remapping. The root permutes the array so that it can send contiguous blocks
         if(this->rank == root){
-            timer.reset("= swing_scatter (remap)");    
+            timer.reset("= swing_scatter_utofu (remap)");    
             uint* remap_blocks_ids = (uint*) malloc(sizeof(uint)*size);
             for(size_t i = 0; i < size; i++){
-                remap_blocks_ids[i] = remap_rank(size, i, p, dimensions_num);
+                remap_blocks_ids[i] = remap_rank(size, i, p, dimensions_num); // TODO: Remap rank also for recursive doubling
             }            
             for(size_t i = 0; i < size; i++){      
                 DPRINTF("Moving block %d to %d\n", i, remap_blocks_ids[i]);          
@@ -2777,13 +2777,13 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
             }
         }
         // Wait all the sends for this segment before moving to the next one
-        timer.reset("= swing_scatter (waiting all sends)");
+        timer.reset("= swing_scatter_utofu (waiting all sends)");
     
         free(reached_at_step);
         free(parent);
         free(peers[p]);
 
-        timer.reset("= swing_scatter (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
+        timer.reset("= swing_scatter_utofu (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
         // Consider offsets of block 0 since everything must go "in the first block"
         DPRINTF("p=%d Copying %d bytes from %d to %d\n", p, blocks_info[p][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].offset); 
         memcpy((char*) recvbuf + blocks_info[p][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].count*dtsize);
@@ -2793,10 +2793,152 @@ int SwingCommon::swing_scatter(const void *sendbuf, int sendcount, MPI_Datatype 
         free(tmpbuf);
     }
     
-    timer.reset("= swing_scatter (writing profile data to file)");
+    timer.reset("= swing_scatter_utofu (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
     return -1;
 #endif
+}
+
+int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
+    assert(this->num_ports == 1);
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_scatter_mpi (init)");
+    Timer timer("swing_scatter_mpi (init)");
+    int dtsize;
+    MPI_Type_size(sendtype, &dtsize);    
+
+    // We always need a tempbuf since recvbuf is only large enough to accomodate the final block
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*this->num_ports);
+    size_t tmpbuf_size = ceil(sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
+    
+    timer.reset("= swing_scatter_mpi (utofu buf reg)"); 
+
+    // Also the root sends from tmbuf because it needs to permute the sendbuf
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;           
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+    DPRINTF("tmpbuf allocated\n");
+
+    int res = MPI_SUCCESS; 
+
+    size_t port = 0;
+    DPRINTF("Computing peers\n");
+    // Compute the peers of this port if I did not do it yet
+    if(peers[port] == NULL){
+        peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
+        compute_peers(port, this->rank, false, peers[port], this->dimensions, this->dimensions_num, this->scc, algo);
+    }        
+    timer.reset("= swing_scatter_mpi (computing trees)");
+    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc.retrieve_coord_mapping(this->rank, false, coord);
+
+    int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc.getCoordFromId(root, false, coord_root);
+
+    uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+    uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
+    for(size_t i = 0; i < this->size; i++){
+        reached_at_step[i] = this->num_steps;
+        parent[i] = UINT32_MAX;
+    }
+    get_step_from_root(coord, coord_root, reached_at_step, parent, this->num_steps, port, this->dimensions_num, this->dimensions, this->algo, false);        
+    int receiving_step;
+    if(root == this->rank){
+        receiving_step = -1;
+    }else{
+        receiving_step = reached_at_step[this->rank];
+    }
+    int peer;        
+
+    DPRINTF("Step from root: %d\n", receiving_step);
+    size_t issued_sends = 0;
+    timer.reset("= swing_scatter_mpi (waiting recv)");
+
+    size_t min_block_s = 0;
+    size_t min_block_r = 0;
+    size_t max_block_s = this->size;
+    size_t max_block_r = this->size;
+    size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
+    uint my_remapped_rank;
+    // Blocks remapping. The root permutes the array so that it can send contiguous blocks
+    if(this->rank == root){
+        timer.reset("= swing_scatter_mpi (remap)");    
+        uint* remap_blocks_ids = (uint*) malloc(sizeof(uint)*size);
+        for(size_t i = 0; i < size; i++){
+            remap_blocks_ids[i] = remap_rank(size, i, port, dimensions_num); // TODO: Remap rank also for recursive doubling
+        }            
+        for(size_t i = 0; i < size; i++){      
+            DPRINTF("Moving block %d to %d\n", i, remap_blocks_ids[i]);          
+            // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
+            // E.g., with two ports and 4 ranks
+            // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
+            // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 2 3 8 9 10 11, and port 1 on 4 5 6 7 12 13 14 15
+            // For a given port, all the sub-blocks have the same size, so we can just consider the count of any block (e.g., 0)
+            memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*remap_blocks_ids[i]*dtsize, (char*) sendbuf + blocks_info[port][i].offset, blocks_info[port][i].count*dtsize);
+        }
+        my_remapped_rank = remap_blocks_ids[rank];
+        free(remap_blocks_ids);
+    }else{
+        my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
+    }
+
+    DPRINTF("My remapped rank is %d\n", my_remapped_rank);
+
+    // Now perform all the subsequent steps            
+    issued_sends = 0;
+    for(size_t step = 0; step < (uint) this->num_steps; step++){
+        // Compute the range to send/recv
+        min_block_s = min_block_r;
+        max_block_s = max_block_r;
+        size_t middle = (min_block_r + max_block_r + 1) / 2; // == min + (max - min) / 2
+        if(my_remapped_rank < middle){
+            min_block_s = middle;
+            max_block_r = middle;
+        }else{
+            max_block_s = middle;
+            min_block_r = middle;
+        }
+
+        if(root != this->rank && step == receiving_step){        
+            // Receive the data from the root   
+            size_t num_blocks = (max_block_r - min_block_r); 
+            MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, root, TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
+        }
+
+        if(step >= receiving_step + 1){
+            //peer = peers[p][(this->num_steps - step - 1)]; // Consider the allgather peers since they start from the distant ones and then get closer.
+            peer = peers[port][step];
+            if(parent[peer] == this->rank){
+                MPI_Send(tmpbuf + min_block_s*recvcount*dtsize, (max_block_s - min_block_s)*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm);
+                ++issued_sends;
+            }
+        }
+        // Wait all the sends for this segment before moving to the next one
+        timer.reset("= swing_scatter_mpi (waiting all sends)");
+    
+        free(reached_at_step);
+        free(parent);
+        free(peers[port]);
+
+        timer.reset("= swing_scatter_mpi (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
+        // Consider offsets of block 0 since everything must go "in the first block"
+        DPRINTF("p=%d Copying %d bytes from %d to %d\n", port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
+        memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].count*dtsize);
+    }
+
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
+    
+    timer.reset("= swing_scatter_mpi (writing profile data to file)");
+    return res;
 }
