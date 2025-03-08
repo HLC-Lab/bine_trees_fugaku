@@ -46,6 +46,7 @@ static inline void read_env(MPI_Comm comm){
         env_read = 1;
 
         unsigned int dimensions_num = 1, segment_size = 0, utofu_add_ag = 0, bcast_tmp_threshold = 0; 
+        swing_distance_type_t distance_type = SWING_DISTANCE_INCREASING;
         uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int num_ports = 1;
         size_t prealloc_size = 0;
@@ -98,6 +99,15 @@ static inline void read_env(MPI_Comm comm){
         }
         assert(dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
 
+        env_str = getenv("LIBSWING_BIN_TREE_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
         env_str = getenv("LIBSWING_ALGO");
         if(env_str){
             if(strcmp(env_str, "DEFAULT") == 0){
@@ -140,7 +150,7 @@ static inline void read_env(MPI_Comm comm){
             posix_memalign((void**) &prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, prealloc_size);
         }
 
-        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf, utofu_add_ag, bcast_tmp_threshold);
+        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf, utofu_add_ag, bcast_tmp_threshold, distance_type);
 
 #ifdef DEBUG
         int rank;

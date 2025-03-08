@@ -56,6 +56,15 @@ typedef enum{
     ALGO_BRUCK,
 }Algo;
 
+/**
+ * @brief Enum to specify whether a binomial tree is built with distance between
+ * nodes increasing or decreasing at each step.
+ */
+typedef enum {
+    SWING_DISTANCE_INCREASING = 0,
+    SWING_DISTANCE_DECREASING = 1
+} swing_distance_type_t;
+
 typedef struct{
     size_t offset;
     size_t count;
@@ -253,6 +262,7 @@ class SwingCommon {
         char* prealloc_buf;
         int utofu_add_ag;
         size_t bcast_tmp_threshold;
+        swing_distance_type_t distance_type;
 #ifdef FUGAKU
         swing_utofu_comm_descriptor* utofu_descriptor;
         utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -372,7 +382,7 @@ class SwingCommon {
         // @param segment_size (IN): in allreduce and reducescatter, each send is segmented in blocks of at most this size 
         // @param prealloc_size (IN): the size of the preallocated buffer
         // @param prealloc_buf (IN): the preallocated buffer
-        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold);
+        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold, swing_distance_type_t distance_type);
 
         // Destructor
         ~SwingCommon();

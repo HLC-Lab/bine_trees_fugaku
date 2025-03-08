@@ -263,8 +263,8 @@ static inline int is_power_of_two(int x){
 }
 
 
-SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold): 
-            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold){
+SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold, swing_distance_type_t distance_type): 
+            algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold), distance_type(distance_type){
     this->size = 1;
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
@@ -2741,19 +2741,13 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
 #endif
 }
 
-/**
- * @brief Enum to specify whether a binomial tree is built with distance between
- * nodes increasing or decreasing at each step.
- */
-typedef enum {
-    SWING_DISTANCE_INCREASING = 0,
-    SWING_DISTANCE_DECREASING = 1
-} swing_distance_type_t;
-
 typedef struct {
     uint* parent; // For each node in the tree, its parent.
     uint* reached_at_step; // For each node in the tree, the step at which it is reached.
-    uint* remapped_ranks; // The remapped rank so that each subtree contains contiguous remapped ranks
+    uint* remapped_ranks; // The remapped rank so that each subtree contains contiguous remapped ranks    
+    uint* remapped_ranks_max; // remapped_ranks_max[i] is the maximum remapped rank in the subtree rooted at i
+    // We do not need to store the min because it is the remapped rank itself (the node is the last in the subtree to be numbered)
+    //uint* remapped_ranks_min; // remapped_ranks_min[i] is the minimum remapped rank in the subtree rooted at i
 } swing_tree_t;
 
 /**
@@ -2798,8 +2792,10 @@ static void build_tree(int* coord_root, size_t step, uint port, Algo algo, swing
  * @param next_rank (IN) The next rank to assign
  * @param parent (IN) An array of size scc->size to store the parent of a node
  * @param remapped_ranks (OUT) An array of size scc->size to store the remapped ranks
+ * @param remapped_ranks_max (OUT) An array of size scc->size to store the maximum remapped rank in the subtree rooted at i
  */
-static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, uint32_t* parent, uint* remapped_ranks){
+static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, const uint* parent, uint* remapped_ranks, uint* remapped_ranks_max){
+    remapped_ranks_max[scc->getIdFromCoord(coord_root)] = *next_rank;
     for(size_t i = step; i < scc->num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
@@ -2813,10 +2809,11 @@ static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swin
         // When we have a number of nodes that is not a power of 2, we may have peers which are reached by
         // more than one node, so we must do this check.
         if(parent[scc->getIdFromCoord(peer_rank)] == scc->getIdFromCoord(coord_root)){
-            remap_ranks(peer_rank, i + 1, port, algo, dist_type, scc, next_rank, parent, remapped_ranks);
+            remap_ranks(peer_rank, i + 1, port, algo, dist_type, scc, next_rank, parent, remapped_ranks, remapped_ranks_max);
         }
     }
     remapped_ranks[scc->getIdFromCoord(coord_root)] = (*next_rank);
+    DPRINTF("Remapped rank %d to %d\n", scc->getIdFromCoord(coord_root), *next_rank);
     (*next_rank)--;
 }
 
@@ -2833,10 +2830,11 @@ static swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_typ
     int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     scc->getCoordFromId(root, coord_root);
     swing_tree_t tree;
-    uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*3); // Do one single malloc rather than 3
+    uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*4); // Do one single malloc rather than 4
     tree.parent = buffer;
     tree.reached_at_step = buffer + scc->size;
     tree.remapped_ranks = buffer + scc->size*2;
+    tree.remapped_ranks_max = buffer + scc->size*3;
     for(size_t i = 0; i < scc->size; i++){
         tree.parent[i] = UINT32_MAX;
         tree.reached_at_step[i] = scc->num_steps;
@@ -2849,7 +2847,7 @@ static swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_typ
 
     // Now that we have a loopless tree, do a DFS to compute the remapped rank
     uint next_rank = scc->size - 1;
-    remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks);
+    remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks, tree.remapped_ranks_max);
     assert(next_rank == UINT32_MAX);
     return tree;
 }
@@ -2883,119 +2881,97 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     }else{
         tmpbuf = prealloc_buf;
     }
-    DPRINTF("tmpbuf allocated\n");
 
     int res = MPI_SUCCESS; 
 
     size_t port = 0;
-    DPRINTF("Computing peers\n");
     // Compute the peers of this port if I did not do it yet
     if(peers[port] == NULL){
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, port, algo, this->scc_real, peers[port]);
     }        
     timer.reset("= swing_scatter_mpi (computing trees)");
-    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc_real->retrieve_coord_mapping(this->rank, coord);
+    swing_tree_t tree = get_tree(root, port, algo, distance_type, this->scc_real);
 
-    int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc_real->getCoordFromId(root, coord_root);
-
-    uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-    uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-    for(size_t i = 0; i < this->size; i++){
-        reached_at_step[i] = this->num_steps;
-        parent[i] = UINT32_MAX;
-    }
-    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, port, this->dimensions_num, this->dimensions, this->algo, false);        
     int receiving_step;
     if(root == this->rank){
         receiving_step = -1;
     }else{
-        receiving_step = reached_at_step[this->rank];
+        receiving_step = tree.reached_at_step[this->rank];
     }
-    int peer;        
 
-    DPRINTF("Step from root: %d\n", receiving_step);
+    DPRINTF("[%d] Step from root: %d\n", this->rank, receiving_step);
     size_t issued_sends = 0;
     timer.reset("= swing_scatter_mpi (waiting recv)");
+#ifdef DEBUG
+    printf("[%d] Parents: ", this->rank);
+    for(size_t i = 0; i < this->size; i++){
+        printf("%d ", tree.parent[i]);
+    }
+    printf("\n");
+    fflush(stdout);
+#endif
 
-    size_t min_block_s = 0;
-    size_t min_block_r = 0;
-    size_t max_block_s = this->size;
-    size_t max_block_r = this->size;
     size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
     uint my_remapped_rank;
     // Blocks remapping. The root permutes the array so that it can send contiguous blocks
     if(this->rank == root){
-        timer.reset("= swing_scatter_mpi (remap)");    
-        uint* remap_blocks_ids = (uint*) malloc(sizeof(uint)*size);
-        for(size_t i = 0; i < size; i++){
-            remap_blocks_ids[i] = remap_rank(size, i, port, dimensions_num); // TODO: Remap rank also for recursive doubling
-        }            
+        timer.reset("= swing_scatter_mpi (permute)");    
         for(size_t i = 0; i < size; i++){      
-            DPRINTF("Moving block %d to %d\n", i, remap_blocks_ids[i]);          
+            DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
             // E.g., with two ports and 4 ranks
             // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
             // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 2 3 8 9 10 11, and port 1 on 4 5 6 7 12 13 14 15
             // For a given port, all the sub-blocks have the same size, so we can just consider the count of any block (e.g., 0)
-            memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*remap_blocks_ids[i]*dtsize, (char*) sendbuf + blocks_info[port][i].offset, blocks_info[port][i].count*dtsize);
-        }
-        my_remapped_rank = remap_blocks_ids[rank];
-        free(remap_blocks_ids);
-    }else{
-        my_remapped_rank = remap_rank(size, rank, port, dimensions_num);
+            memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize, (char*) sendbuf + blocks_info[port][i].offset, blocks_info[port][i].count*dtsize);
+        }        
     }
+    my_remapped_rank = tree.remapped_ranks[rank];
 
-    DPRINTF("My remapped rank is %d\n", my_remapped_rank);
+    DPRINTF("[%d] My remapped rank is %d\n", this->rank, my_remapped_rank);
 
     // Now perform all the subsequent steps            
-    issued_sends = 0;
     for(size_t step = 0; step < (uint) this->num_steps; step++){
-        // Compute the range to send/recv
-        min_block_s = min_block_r;
-        max_block_s = max_block_r;
-        size_t middle = (min_block_r + max_block_r + 1) / 2; // == min + (max - min) / 2
-        if(my_remapped_rank < middle){
-            min_block_s = middle;
-            max_block_r = middle;
-        }else{
-            max_block_s = middle;
-            min_block_r = middle;
-        }
-
-        if(root != this->rank && step == receiving_step){        
-            // Receive the data from the root   
-            size_t num_blocks = (max_block_r - min_block_r); 
-            MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, parent[this->rank], TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
+        if(root != this->rank && step == receiving_step){       
+            uint peer = tree.parent[this->rank];
+            size_t min_block_r = tree.remapped_ranks[peer];
+            size_t max_block_r = tree.remapped_ranks_max[peer];            
+            size_t num_blocks = (max_block_r - min_block_r) + 1; 
+            DPRINTF("Rank %d receiving %d elems from %d at step %d\n", this->rank, num_blocks*recvcount, peer, step);
+            MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
         }
 
         if(step >= receiving_step + 1){
-            //peer = peers[p][(this->num_steps - step - 1)]; // Consider the allgather peers since they start from the distant ones and then get closer.
-            peer = peers[port][step];
-            if(parent[peer] == this->rank){
-                MPI_Send(tmpbuf + min_block_s*recvcount*dtsize, (max_block_s - min_block_s)*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm);
-                ++issued_sends;
+            uint peer;
+            if(distance_type == SWING_DISTANCE_DECREASING){
+                peer = peers[port][this->num_steps - step - 1];
+            }else{  
+                peer = peers[port][step];
+            }
+            if(tree.parent[peer] == this->rank){
+                size_t min_block_s = tree.remapped_ranks[this->rank];
+                size_t max_block_s = tree.remapped_ranks_max[this->rank];            
+                size_t num_blocks = (max_block_s - min_block_s) + 1; 
+                DPRINTF("Rank %d sending %d elems to %d at step %d\n", this->rank, num_blocks*recvcount, peer, step);
+                MPI_Send(tmpbuf + min_block_s*recvcount*dtsize, num_blocks*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm);
             }
         }
         // Wait all the sends for this segment before moving to the next one
         timer.reset("= swing_scatter_mpi (waiting all sends)");
     }
     
-    free(reached_at_step);
-    free(parent);
     free(peers[port]);
 
     timer.reset("= swing_scatter_mpi (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
     // Consider offsets of block 0 since everything must go "in the first block"
-    DPRINTF("p=%d Copying %d bytes from %d to %d\n", port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
+    DPRINTF("[%d] p=%d Copying %d bytes from %d to %d\n", this->rank, port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
     memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].count*dtsize);
 
     if(free_tmpbuf){
         free(tmpbuf);
     }
-    
+    destroy_tree(&tree);
     timer.reset("= swing_scatter_mpi (writing profile data to file)");
     return res;
 }
