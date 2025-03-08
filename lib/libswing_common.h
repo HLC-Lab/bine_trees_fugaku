@@ -99,6 +99,8 @@ class SwingCoordConverter {
         uint dimensions_num; 
         int* coordinates;
         uint size;
+        uint num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        uint num_steps;
     
         SwingCoordConverter(uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num);
         

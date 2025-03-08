@@ -198,6 +198,31 @@ static std::string vectostr(const std::vector<int>& v){
 }
 #endif
 
+
+static int ceil_log2(unsigned long long x){
+    static const unsigned long long t[6] = {
+      0xFFFFFFFF00000000ull,
+      0x00000000FFFF0000ull,
+      0x000000000000FF00ull,
+      0x00000000000000F0ull,
+      0x000000000000000Cull,
+      0x0000000000000002ull
+    };
+  
+    int y = (((x & (x - 1)) == 0) ? 0 : 1);
+    int j = 32;
+    int i;
+  
+    for (i = 0; i < 6; i++) {
+      int k = (((x & t[i]) == 0) ? 0 : j);
+      y += k;
+      x >>= k;
+      j >>= 1;
+    }
+  
+    return y;
+}
+
 // https://stackoverflow.com/questions/37637781/calculating-the-negabinary-representation-of-a-given-number-without-loops
 static uint32_t binary_to_negabinary(int32_t bin) {
     if (bin > 0x55555555) throw std::overflow_error("value out of range");
@@ -244,7 +269,7 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
         this->size *= dimensions[i];        
-        this->num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
+        this->num_steps_per_dim[i] = (int) ceil_log2(dimensions[i]);
         if(!is_power_of_two(dimensions[i])){
             this->all_p2_dimensions = false;
             this->dimensions_virtual[i] = pow(2, this->num_steps_per_dim[i] - 1);
@@ -271,7 +296,7 @@ SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_D
         this->num_steps_virtual = this->num_steps;
     }else{
         for(size_t i = 0; i < this->dimensions_num; i++){
-            this->num_steps_virtual += ceil(log2(this->dimensions_virtual[i]));
+            this->num_steps_virtual += ceil_log2(this->dimensions_virtual[i]);
         }
     }
     for(size_t i = 0; i < this->num_ports; i++){
@@ -373,8 +398,11 @@ void SwingCoordConverter::retrieve_coord_mapping(uint rank, int* coord){
 SwingCoordConverter::SwingCoordConverter(uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num): dimensions_num(dimensions_num){
     memcpy(this->dimensions, dimensions, sizeof(uint)*dimensions_num);
     this->size = 1;
+    this->num_steps = 0;
     for(size_t d = 0; d < dimensions_num; d++){
         this->size *= dimensions[d];
+        this->num_steps_per_dim[d] = ceil_log2(dimensions[d]);
+        this->num_steps += this->num_steps_per_dim[d];
     }
     this->coordinates = (int*) malloc(sizeof(int)*this->size*this->dimensions_num);
     memset(this->coordinates        , -1, sizeof(int)*this->size*dimensions_num);
@@ -436,7 +464,7 @@ static void compute_peers_swing(int port, uint rank, uint* peers, uint* dimensio
     
     int num_steps = 0;
     for(size_t i = 0; i < dimensions_num; i++){
-        num_steps_per_dim[i] = ceil(log2(dimensions[i]));
+        num_steps_per_dim[i] = ceil_log2(dimensions[i]);
         num_steps += num_steps_per_dim[i];
     }
 
@@ -503,7 +531,7 @@ static void compute_peers_recdoub(int port, uint rank, uint* peers, uint* dimens
     
     int num_steps = 0;
     for(size_t i = 0; i < dimensions_num; i++){
-        num_steps_per_dim[i] = ceil(log2(dimensions[i]));
+        num_steps_per_dim[i] = ceil_log2(dimensions[i]);
         num_steps += num_steps_per_dim[i];
     }
 
@@ -1013,7 +1041,7 @@ static void get_peer_swing(int* coord_rank, size_t step, int* coord_peer, uint p
         // Move to the next dimension for the next step
         size_t d = current_d;              
         // Increase the next step, unless we are done with this dimension
-        if(next_step_per_dim[d] < ceil(log2(dimensions[d]))){ 
+        if(next_step_per_dim[d] < ceil_log2(dimensions[d])){ 
             next_step_per_dim[d] += 1;
         }
         
@@ -1021,7 +1049,7 @@ static void get_peer_swing(int* coord_rank, size_t step, int* coord_peer, uint p
         do{ 
             current_d = (current_d + 1) % dimensions_num;
             d = current_d;
-        }while(next_step_per_dim[d] >= ceil(log2(dimensions[d]))); // If we exhausted this dimension, move to the next one
+        }while(next_step_per_dim[d] >= ceil_log2(dimensions[d])); // If we exhausted this dimension, move to the next one
     }
     int distance = rhos[next_step_per_dim[current_d]];
     distance *= get_distance_sign(coord_rank[current_d], port, dimensions_num);
@@ -1037,7 +1065,7 @@ static void get_peer_recdoub(int* coord_rank, size_t step, int* coord_peer, uint
         // Move to the next dimension for the next step
         size_t d = current_d;              
         // Increase the next step, unless we are done with this dimension
-        if(next_step_per_dim[d] < ceil(log2(dimensions[d]))){ 
+        if(next_step_per_dim[d] < ceil_log2(dimensions[d])){ 
             next_step_per_dim[d] += 1;
         }
         
@@ -1045,7 +1073,7 @@ static void get_peer_recdoub(int* coord_rank, size_t step, int* coord_peer, uint
         do{ 
             current_d = (current_d + 1) % dimensions_num;
             d = current_d;
-        }while(next_step_per_dim[d] >= ceil(log2(dimensions[d]))); // If we exhausted this dimension, move to the next one
+        }while(next_step_per_dim[d] >= ceil_log2(dimensions[d])); // If we exhausted this dimension, move to the next one
     }
     int distance = (coord_peer[current_d] ^ (1 << (next_step_per_dim[current_d]))) - coord_peer[current_d];
     if(is_mirroring_port(port, dimensions_num)){ // Invert sign if mirrored collective
@@ -1947,7 +1975,7 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
     }
     binary_to_negabinary(rank);
     uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
-    size_t num_bits = ceil(log2(num_ranks));
+    size_t num_bits = ceil_log2(num_ranks);
     if(rank % 2){
         if(in_range(rank, num_bits)){
             nba = binary_to_negabinary(rank);
@@ -1982,7 +2010,7 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t num_ranks, ui
 static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, uint dimensions_num){
     uint32_t remap_rank = get_rank_negabinary_representation(num_ranks, rank, port, dimensions_num);    
     remap_rank = remap_rank ^ (remap_rank >> 1);
-    size_t num_bits = ceil(log2(num_ranks));
+    size_t num_bits = ceil_log2(num_ranks);
     remap_rank = reverse(remap_rank) >> (32 - num_bits);
     return remap_rank;
 }
@@ -2008,7 +2036,7 @@ static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank
     }
 }
 
-static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent, uint port, uint dimensions_num, uint* dimensions, Algo algo, SwingCoordConverter& scc, bool allgather_schedule){
+static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, Algo algo, SwingCoordConverter* scc, bool allgather_schedule){
     for(size_t i = step; i < num_steps; i++){
         int real_step;
         if(allgather_schedule){
@@ -2017,14 +2045,14 @@ static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t 
             real_step = i;
         }
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
+        get_peer_c(coord_rank, real_step, peer_rank, port, scc->dimensions_num, scc->dimensions, algo);
         
-        uint32_t rank = scc.getIdFromCoord(peer_rank);
+        uint32_t rank = scc->getIdFromCoord(peer_rank);
         if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
-            parent[rank] = scc.getIdFromCoord(coord_rank);
+            parent[rank] = scc->getIdFromCoord(coord_rank);
             reached_at_step[rank] = i;
         }
-        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
+        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule);
     }
 }
 
@@ -2035,7 +2063,7 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
     for (uint i = 0; i < dimensions_num; i++) {
         this->dimensions[i] = dimensions[i];
         this->size *= dimensions[i];        
-        this->num_steps_per_dim[i] = (int) ceil(log2(dimensions[i]));
+        this->num_steps_per_dim[i] = (int) ceil_log2(dimensions[i]);
         this->num_steps += this->num_steps_per_dim[i];
     }
     if(this->num_steps > LIBSWING_MAX_STEPS){
@@ -2099,9 +2127,9 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     free(chunk_params_per_step);
 }
 
-static void get_step_from_root(int* coord_rank, int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, Algo algo, bool allgather_schedule){
+static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, Algo algo, bool allgather_schedule){
     SwingCoordConverter scc(dimensions, dimensions_num);
-    dfs_reversed(coord_root, coord_root, 0, num_steps, coord_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
+    dfs_reversed(coord_root, coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule);
     parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
     reached_at_step[scc.getIdFromCoord(coord_root)] = 0; // To avoid sending the step for myself at a wrong value
 }
@@ -2197,7 +2225,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
         }
-        get_step_from_root(coord, coord_root, reached_at_step, parent, this->num_steps, p, this->dimensions_num, this->dimensions, this->algo, true);
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, this->dimensions_num, this->dimensions, this->algo, true);
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 
@@ -2300,7 +2328,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
         reached_at_step[i] = this->num_steps;
         parent[i] = UINT32_MAX;
     }
-    get_step_from_root(coord, coord_root, reached_at_step, parent, this->num_steps, 0, this->dimensions_num, this->dimensions, this->algo, true);
+    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, this->dimensions_num, this->dimensions, this->algo, true);
     int receiving_step = reached_at_step[this->rank];
     int peer;
     if(root != this->rank){        
@@ -2695,7 +2723,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
        }
-        get_step_from_root(coord, coord_root, reached_at_step, parent, this->num_steps, p, this->dimensions_num, this->dimensions, this->algo, false);        
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, this->dimensions_num, this->dimensions, this->algo, false);        
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 
@@ -2804,93 +2832,30 @@ typedef enum {
 
 typedef struct {
     uint* parent; // For each node in the tree, its parent.
-    uint* reached_at; // For each node in the tree, the step at which it is reached.
+    uint* reached_at_step; // For each node in the tree, the step at which it is reached.
 } swing_tree_t;
 
-static int ceil_log2(unsigned long long x){
-  static const unsigned long long t[6] = {
-    0xFFFFFFFF00000000ull,
-    0x00000000FFFF0000ull,
-    0x000000000000FF00ull,
-    0x00000000000000F0ull,
-    0x000000000000000Cull,
-    0x0000000000000002ull
-  };
-
-  int y = (((x & (x - 1)) == 0) ? 0 : 1);
-  int j = 32;
-  int i;
-
-  for (i = 0; i < 6; i++) {
-    int k = (((x & t[i]) == 0) ? 0 : j);
-    y += k;
-    x >>= k;
-    j >>= 1;
-  }
-
-  return y;
-}
-
-#if 0
-static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, Algo algo){
-    for(size_t i = step; i < num_steps; i++){
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
-        dfs(peer_rank, i + 1, num_steps, target_rank, remap_rank, found, port, dimensions_num, dimensions, algo);
+static swing_tree_t get_tree(uint root, uint port, SwingCoordConverter* scc, swing_distance_type_t dist_type, Algo algo){
+    int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    scc->getCoordFromId(root, coord_root);
+    swing_tree_t tree;
+    tree.parent = (uint*) malloc(sizeof(uint)*scc->size);
+    tree.reached_at_step = (uint*) malloc(sizeof(uint)*scc->size);
+    for(size_t i = 0; i < scc->size; i++){
+        tree.parent[i] = UINT32_MAX;
+        tree.reached_at_step[i] = scc->num_steps;
     }
-    if(*found){
-        (*remap_rank)--;
-    }
-    if(memcmp(coord_rank, target_rank, sizeof(int)*dimensions_num) == 0){
-        *found = true;
-    }
+    
+    dfs_reversed(coord_root, coord_root, 0, scc->num_steps, tree.reached_at_step, tree.parent, port, algo, scc, dist_type == SWING_DISTANCE_DECREASING);
+    tree.parent[root] = UINT32_MAX;
+    tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
+    return tree;
 }
 
-static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* reached_at_step, uint32_t* parent, uint port, uint dimensions_num, uint* dimensions, Algo algo, SwingCoordConverter& scc, bool allgather_schedule){
-    for(size_t i = step; i < num_steps; i++){
-        int real_step;
-        if(allgather_schedule){
-            real_step = num_steps - 1 - i; // We consider allgather schedule
-        }else{
-            real_step = i;
-        }
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
-        
-        uint32_t rank = scc.getIdFromCoord(peer_rank);
-        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
-            parent[rank] = scc.getIdFromCoord(coord_rank);
-            reached_at_step[rank] = i;
-        }
-        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
-    }
+static void destroy_tree(swing_tree_t* tree){
+    free(tree->parent);
+    free(tree->reached_at_step);
 }
-
-static void get_tree_int(uint root, SwingCoordConverter& scc, swing_distance_type_t dist_type, Algo algo){
-    for(size_t i = step; i < num_steps; i++){
-        int real_step;
-        if(dist_type == SWING_DISTANCE_DECREASING){
-            real_step = num_steps - 1 - i;
-        }else{
-            real_step = i;
-        }
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, real_step, peer_rank, port, dimensions_num, dimensions, algo);
-        
-        uint32_t rank = scc.getIdFromCoord(peer_rank);
-        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
-            parent[rank] = scc.getIdFromCoord(coord_rank);
-            reached_at_step[rank] = i;
-        }
-        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, target_rank, reached_at_step, parent, port, dimensions_num, dimensions, algo, scc, allgather_schedule);
-    }    
-}
-
-static void get_tree(uint root, SwingCoordConverter& scc, swing_distance_type_t dist_type, Algo algo){
-    int root_coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    scc_real->getCoordFromId(root, root_coord);
-}
-#endif
 
 int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
@@ -2941,7 +2906,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
         reached_at_step[i] = this->num_steps;
         parent[i] = UINT32_MAX;
     }
-    get_step_from_root(coord, coord_root, reached_at_step, parent, this->num_steps, port, this->dimensions_num, this->dimensions, this->algo, false);        
+    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, port, this->dimensions_num, this->dimensions, this->algo, false);        
     int receiving_step;
     if(root == this->rank){
         receiving_step = -1;
