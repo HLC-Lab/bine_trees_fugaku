@@ -2036,7 +2036,7 @@ static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank
     }
 }
 
-static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, Algo algo, SwingCoordConverter* scc, bool allgather_schedule){
+static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, Algo algo, SwingCoordConverter* scc, bool allgather_schedule){
     for(size_t i = step; i < num_steps; i++){
         int real_step;
         if(allgather_schedule){
@@ -2052,7 +2052,7 @@ static void dfs_reversed(int* source_rank, int* coord_rank, size_t step, size_t 
             parent[rank] = scc->getIdFromCoord(coord_rank);
             reached_at_step[rank] = i;
         }
-        dfs_reversed(source_rank, peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule);
+        dfs_reversed(peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule);
     }
 }
 
@@ -2129,7 +2129,7 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
 
 static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, Algo algo, bool allgather_schedule){
     SwingCoordConverter scc(dimensions, dimensions_num);
-    dfs_reversed(coord_root, coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule);
+    dfs_reversed(coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule);
     parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
     reached_at_step[scc.getIdFromCoord(coord_root)] = 0; // To avoid sending the step for myself at a wrong value
 }
@@ -2833,28 +2833,103 @@ typedef enum {
 typedef struct {
     uint* parent; // For each node in the tree, its parent.
     uint* reached_at_step; // For each node in the tree, the step at which it is reached.
+    uint* remapped_ranks; // The remapped rank so that each subtree contains contiguous remapped ranks
 } swing_tree_t;
 
-static swing_tree_t get_tree(uint root, uint port, SwingCoordConverter* scc, swing_distance_type_t dist_type, Algo algo){
+/**
+ * Computes a Swing binomial tree. 
+ * @param coord_root (IN) The root of the tree
+ * @param step (IN) The current step
+ * @param port (IN) The port on which we are working on
+ * @param algo (IN) The algorithm to use (SWING or RECDOUB)
+ * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
+ * @param scc (IN) The SwingCoordConverter object
+ * @param reached_at_step (OUT) An array of size scc->size to store the step at which a node is reached
+ * @param parent (OUT) An array of size scc->size to store the parent of a node
+ */
+static void build_tree(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t* parent){
+    for(size_t i = step; i < scc->num_steps; i++){
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int real_step;
+        if(dist_type == SWING_DISTANCE_DECREASING){
+            real_step = scc->num_steps - 1 - i;
+        }else{
+            real_step = i;
+        }
+        get_peer_c(coord_root, real_step, peer_rank, port, scc->dimensions_num, scc->dimensions, algo);
+        
+        uint32_t rank = scc->getIdFromCoord(peer_rank);
+        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
+            parent[rank] = scc->getIdFromCoord(coord_root);
+            reached_at_step[rank] = i;
+        }
+        build_tree(peer_rank, i + 1, port, algo, dist_type, scc, reached_at_step, parent);
+    }
+}
+
+/**
+ * Remaps the ranks of a Swing binomial tree so to have subtrees with contiguous ranks.
+ * @param coord_root (IN) The root of the tree
+ * @param step (IN) The current step
+ * @param port (IN) The port on which we are working on
+ * @param algo (IN) The algorithm to use (SWING or RECDOUB)
+ * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
+ * @param scc (IN) The SwingCoordConverter object
+ * @param next_rank (IN) The next rank to assign
+ * @param remapped_ranks (OUT) An array of size scc->size to store the remapped ranks
+ */
+static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, uint* remapped_ranks){
+    for(size_t i = step; i < scc->num_steps; i++){
+        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int real_step;
+        if(dist_type == SWING_DISTANCE_DECREASING){
+            real_step = scc->num_steps - 1 - i;
+        }else{
+            real_step = i;
+        }
+        get_peer_c(coord_root, real_step, peer_rank, port, scc->dimensions_num, scc->dimensions, algo);
+        remap_ranks(peer_rank, i + 1, port, algo, dist_type, scc, next_rank, remapped_ranks);
+    }
+    remapped_ranks[scc->getIdFromCoord(coord_root)] = (*next_rank);
+    (*next_rank)--;
+}
+
+/**
+ * @brief Get a Swing binomial tree.
+ * @param root (IN) The root of the tree
+ * @param port (IN) The port on which we are working on
+ * @param algo (IN) The algorithm to use (SWING or RECDOUB)
+ * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
+ * @param scc (IN) The SwingCoordConverter object
+ * @return A swing_tree_t object
+ */
+static swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
     int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     scc->getCoordFromId(root, coord_root);
     swing_tree_t tree;
-    tree.parent = (uint*) malloc(sizeof(uint)*scc->size);
-    tree.reached_at_step = (uint*) malloc(sizeof(uint)*scc->size);
+    uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*3); // Do one single malloc rather than 3
+    tree.parent = buffer;
+    tree.reached_at_step = buffer + scc->size;
+    tree.remapped_ranks = buffer + scc->size*2;
     for(size_t i = 0; i < scc->size; i++){
         tree.parent[i] = UINT32_MAX;
         tree.reached_at_step[i] = scc->num_steps;
     }
     
-    dfs_reversed(coord_root, coord_root, 0, scc->num_steps, tree.reached_at_step, tree.parent, port, algo, scc, dist_type == SWING_DISTANCE_DECREASING);
+    // Compute the basic tree informations (parent and reached_at_step)
+    build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, tree.parent);
     tree.parent[root] = UINT32_MAX;
     tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
+
+    // Now that we have a loopless tree, do a DFS to compute the remapped rank
+    uint next_rank = scc->size - 1;
+    remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.remapped_ranks);
+    assert(next_rank == UINT32_MAX);
     return tree;
 }
 
 static void destroy_tree(swing_tree_t* tree){
     free(tree->parent);
-    free(tree->reached_at_step);
 }
 
 int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
