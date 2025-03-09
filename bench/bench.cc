@@ -154,6 +154,12 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }else{
             r = MPI_Gather(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
         }
+    }else if(!strcmp(collective, "MPI_Reduce")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Reduce(sendbuf, recvbuf, count, dt, op, 0, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Reduce(sendbuf, recvbuf, count, dt, op, 0, MPI_COMM_WORLD);
+        }
     }
 
     /*
@@ -193,6 +199,9 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Gather")){
         send_count = count;
         recv_count = count*size;
+    }else if(!strcmp(collective, "MPI_Reduce")){
+        send_count = count;
+        recv_count = count;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
@@ -300,8 +309,8 @@ int main(int argc, char** argv){
 
     // Check correctness of results
     
-    if(!strcmp(collective, "MPI_Gather") && rank != 0){
-        // On MPI_Gather only rank 0 receives the result
+    if((!strcmp(collective, "MPI_Gather") || !strcmp(collective, "MPI_Reduce")) && rank != 0){
+        // On MPI_Gather and MPI_Reduce only rank 0 receives the result
     }else{
         for(i = 0; i < dtsize*final_buffer_count; i++){
             if(recvbuf[i] != recvbuf_validation[i]){

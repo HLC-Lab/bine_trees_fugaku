@@ -970,4 +970,17 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     return MPI_ERR_OTHER;
 }
 
+int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
+               MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+    read_env(comm);
+    if(algo == ALGO_DEFAULT){
+        return PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm);
+    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+        return swing_common->swing_reduce_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
+    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+        return swing_common->swing_reduce_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
+    }
+    return MPI_ERR_OTHER;
+}
+
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)

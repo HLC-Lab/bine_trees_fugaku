@@ -61,7 +61,6 @@ void Timer::reset(std::string name){
 #endif        
 }
 
-#ifdef FUGAKU
 static inline void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
     if(datatype == MPI_INT32_T){
         const int32_t *in = (const int32_t *)inbuf;
@@ -175,7 +174,6 @@ static inline void reduce_local(const void* inbuf_a, const void* inbuf_b, void* 
         exit(EXIT_FAILURE);
     }
 }
-#endif
 
 static inline int mod(int a, int b){
     int r = a % b;
@@ -2927,6 +2925,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
 }
 
 int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_gather_utofu (init)");
@@ -3069,6 +3068,10 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
     }    
     timer.reset("= swing_gather_utofu (writing profile data to file)");
     return res;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif
 }
 
 int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
@@ -3181,5 +3184,127 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
         free(tmpbuf);
     }    
     timer.reset("= swing_gather_mpi (writing profile data to file)");
+    return res;
+}
+
+
+int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+#ifdef FUGAKU
+    return MPI_ERR_OTHER;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif    
+}
+
+int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
+    Timer timer("swing_reduce_mpi (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+
+    // We always need a tempbuf since non root ranks might not specify a recvbuf
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*this->num_ports);
+    size_t tmpbuf_size = count*dtsize*this->num_steps; // A bit overkill, needed for uTofu to avoid overwriting the same buffer in different steps // TODO: Fix
+    
+    timer.reset("= swing_reduce_mpi (utofu buf reg)"); 
+
+    // Also the root sends from tmbuf because it needs to permute the sendbuf
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;           
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+
+    int res = MPI_SUCCESS; 
+
+    uint partition_size = count / this->num_ports;
+    uint remaining = count % this->num_ports;  
+
+    for(size_t port = 0; port < this->num_ports; port++){
+        // Compute the count and the offset of the piece of buffer that is aggregated on this port
+        size_t count_port = partition_size + (port < remaining ? 1 : 0);
+        size_t offset_port = 0;
+        for(size_t j = 0; j < port; j++){
+            offset_port += partition_size + (j < remaining ? 1 : 0);
+        }
+        offset_port *= dtsize;
+
+        // Compute the peers of this port if I did not do it yet
+        if(peers[port] == NULL){
+            peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(this->rank, port, algo, this->scc_real, peers[port]);
+        }        
+        timer.reset("= swing_reduce_mpi (computing trees)");
+        swing_tree_t tree = get_tree(root, port, algo, distance_type, this->scc_real);
+
+        // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
+        // To understand at which step I must send the data, I need to check at which step I am 
+        // reached by the root.
+        // If this is step s, then I start sending at (num_steps - 1 - s)
+        // To check if I am a leaf, I can just check if I am reached by the root in the last step
+        int sending_step;
+        if(root == this->rank){
+            sending_step = this->num_steps;
+        }else{
+            sending_step = this->num_steps - 1 - tree.reached_at_step[this->rank];
+        }
+
+        DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
+        timer.reset("= swing_reduce_mpi (waiting recv)");
+        char copied = 0;
+        for(size_t step = 0; step < (uint) this->num_steps; step++){        
+            if(step < sending_step){
+                // Receive from peer
+                uint peer;
+                if(distance_type == SWING_DISTANCE_DECREASING){
+                    peer = peers[port][step];                               
+                }else{  
+                    peer = peers[port][this->num_steps - step - 1];
+                }
+
+                if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
+                    size_t min_block_r = tree.remapped_ranks[peer];
+                    DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
+                    MPI_Recv(tmpbuf + offset_port + step*count_port*dtsize, count_port, datatype, peer, TAG_SWING_REDUCE, comm, MPI_STATUS_IGNORE);
+                    
+                    if(!copied){
+                        // This instead of MPI_Reduce_local to avoid doing a memcpy form sendbuf to recvbuf at the beginning.
+                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port + step*count_port*dtsize, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                        copied = 1;
+                    }else{
+                        MPI_Reduce_local(tmpbuf + offset_port + step*count_port*dtsize, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                    }
+                }
+            }else if(step == sending_step){
+                // Send to parent
+                uint peer = tree.parent[this->rank];            
+                size_t min_block_s = tree.remapped_ranks[this->rank];
+                size_t max_block_s = tree.remapped_ranks_max[this->rank];            
+                size_t num_blocks = (max_block_s - min_block_s) + 1; 
+                DPRINTF("[%d] Sending to %d at step %d\n", this->rank, peer, step);
+                if(!copied){
+                    MPI_Send(((char*) sendbuf) + offset_port, count_port, datatype, peer, TAG_SWING_REDUCE, comm);
+                    copied = 1;
+                }else{
+                    MPI_Send(((char*) recvbuf) + offset_port, count_port, datatype, peer, TAG_SWING_REDUCE, comm);
+                }
+            }
+            // Wait all the sends for this segment before moving to the next one
+            timer.reset("= swing_reduce_mpi (waiting all sends)");
+        }
+        
+        free(peers[port]);
+        destroy_tree(&tree);
+    }
+
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }    
+    timer.reset("= swing_reduce_mpi (writing profile data to file)");
     return res;
 }

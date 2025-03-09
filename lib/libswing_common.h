@@ -34,6 +34,7 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 #define TAG_SWING_ALLTOALL      (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*5)
 #define TAG_SWING_SCATTER       (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*6)
 #define TAG_SWING_GATHER        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*7)
+#define TAG_SWING_REDUCE        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*8)
 
 typedef enum{
     SWING_REDUCE_SCATTER = 0,
@@ -415,6 +416,8 @@ class SwingCommon {
         int swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
         int swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
         int swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
+        int swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
 };
 
 
