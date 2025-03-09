@@ -4,8 +4,6 @@
 #include <sched.h>
 #include <omp.h>
 
-#include "libswing_alltoall_perm_bitmaps.h"
-
 #include "libswing_common.h"
 #include <climits>
 #ifdef FUGAKU
@@ -2525,161 +2523,6 @@ static void destroy_tree(swing_tree_t* tree){
     free(tree->parent);
 }
 
-#define SKIP_FIRST_COPY 0
-
-int SwingCommon::swing_alltoall_old(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
-    assert(this->dimensions_num == 1);  // TODO: To let it work for multiple dimensions we should have a get_alltoall_perm_index that takes the dimensions
-    assert(this->num_ports == 1); // TODO: Support multiport
-    Timer timer("swing_alltoall (init)");
-    int rank, size, dtsize;
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-    MPI_Type_size(datatype, &dtsize);
-    char* tmpbuf;
-    bool free_tmpbuf = false;
-    // block_in_position[i] tells me what block is in position i of the recvbuf. The same block can be in multiple position since we are doing alltoall
-    uint* block_in_position;
-    // block_recvd contains the ids of the blocks I have received
-    uint* block_recvd;
-    // remap_blocks contains the remapped block ids
-    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size/2 + sizeof(uint)*size;
-    if(tmpbuf_size > prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);        
-        block_in_position = (uint*) malloc(sizeof(uint)*size);        
-        block_recvd = (uint*) malloc(sizeof(uint)*(size/2));
-        free_tmpbuf = true;
-    }else{
-        tmpbuf = prealloc_buf;
-        block_in_position = (uint*) (tmpbuf + count*dtsize*size);
-        block_recvd = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size);
-    }
-
-    // At the beginning I only have my blocks
-    uint port = 0; // TODO: Support multiport
-    for(size_t i = 0; i < size; i++){
-        block_in_position[i] = i;
-    }
-
-    // Compute the tree
-    swing_tree_t tree = get_tree(rank, port, algo, distance_type, this->scc_real);
-    uint* peers = (uint*) malloc(sizeof(uint)*this->size);
-    compute_peers(rank, port, algo, this->scc_real, peers);
-
-    timer.reset("= swing_alltoall (remap)");    
-    uint my_remapped_rank = tree.remapped_ranks[rank];
-
-#if SKIP_FIRST_COPY
-    ;
-#else
-    memcpy(tmpbuf, sendbuf, count*dtsize*size);
-#endif
-    size_t min_block_s, min_block_r, max_block_s, max_block_r;
-
-    // We use recvbuf to receive/send the data, and tmpbuf to organize the data to send at the next step
-    // By doing so, we avoid a copy form tmpbuf to recvbuf at the end
-    void* srcbuf;
-    for(size_t step = 0; step < this->num_steps; step++){
-        timer.reset("= swing_alltoall (bookeeping and copies)");
-#if SKIP_FIRST_COPY
-        if(step == 0){
-            srcbuf = (void*) sendbuf;
-        }else{
-            srcbuf = tmpbuf;
-        }
-#else
-        srcbuf = tmpbuf;
-#endif       
-        uint peer;
-        if(distance_type == SWING_DISTANCE_DECREASING){
-            peer = peers[this->num_steps - step - 1];
-        }else{          
-            peer = peers[step];
-        }
-        min_block_s = tree.remapped_ranks[peer];
-        max_block_s = tree.remapped_ranks_max[peer];
-        min_block_r = tree.remapped_ranks[rank];
-        max_block_r = tree.remapped_ranks_max[rank];
-
-        size_t block_recvd_cnt = 0, block_send_cnt = 0;
-        size_t offset_send = 0;        
-        for(size_t i = 0; i < this->size; i++){
-            uint block = block_in_position[i];
-            // Shall I send this block? Check the negabinary thing            
-            uint remap_block = tree.remapped_ranks[block];
-
-            // Send the block. Copy in the first half of tmpbuf (to send), receive in the other half, then copy back the received data from tmpbuf to recvbuf for the next round
-            if(remap_block >= min_block_s && remap_block <= max_block_s){
-                size_t offset = i*count*dtsize;
-                DPRINTF("Rank %d sending block %d (from pos %d) to %d at offset %d at step %d\n", rank, block, i, peer, offset, step);                
-                memcpy((char*) recvbuf + offset_send, ((char*) srcbuf) + offset, count*dtsize);
-                offset_send += count*dtsize;
-                // I need to update block_in_position since now at this position
-                // I have the block I just received.
-                // I first mark them as empy, and then I will compute them
-                block_in_position[i] = UINT_MAX;
-                block_send_cnt++;
-            }else{
-#if SKIP_FIRST_COPY
-                if(step == 0){
-                    // We need to copy it from sendbuf to tempbuf since we never copied it
-                    size_t offset = i*count*dtsize;
-                    memcpy((char*) tmpbuf + offset, (char*) sendbuf + offset, count*dtsize);
-                }
-#endif
-                block_recvd[block_recvd_cnt] = block;
-                block_recvd_cnt++;
-            }
-        }
-        assert(block_recvd_cnt == size/2);
-        assert(block_send_cnt == size/2);
-
-        timer.reset("= swing_alltoall (sendrecv)");
-        size_t offset_src = count*block_send_cnt*dtsize; // Send from first half and receive in second half
-        int r = MPI_Sendrecv(recvbuf, count*block_send_cnt, datatype,
-                            peer, TAG_SWING_ALLTOALL,
-                            (char*) recvbuf + offset_src, count*block_send_cnt, datatype,
-                            peer, TAG_SWING_ALLTOALL, comm, MPI_STATUS_IGNORE);
-        if(r != MPI_SUCCESS){
-            return r;
-        }      
-
-        timer.reset("= swing_alltoall (memcpys)");
-        block_recvd_cnt = 0;        
-        // Now I need to compute the new block_in_position
-        for(size_t i = 0; i < this->size; i++){
-            if(block_in_position[i] == UINT_MAX){
-                // Copy back data from recvbuf to tmpbuf
-                size_t offset_dst = i*count*dtsize;
-                memcpy(((char*) tmpbuf) + offset_dst, (char*) recvbuf + offset_src, count*dtsize);
-                offset_src += count*dtsize;
-                DPRINTF("Rank %d Setting block %d to position %d\n", rank, block_recvd[block_recvd_cnt], i);
-                block_in_position[i] = block_recvd[block_recvd_cnt];
-                block_recvd_cnt++;        
-            }
-        }
-        assert(block_recvd_cnt == size/2);
-    }
-
-    // Now I need to permute tmpbuf into recvbuf
-    timer.reset("= swing_alltoall (final permutation)");
-    for(size_t i = 0; i < size; i++){
-        size_t index = get_alltoall_perm_index(size, rank, i);
-        size_t offset_src = i*count*dtsize;
-        size_t offset_dst = index*count*dtsize;
-        memcpy((char*) recvbuf + offset_dst, ((char*) tmpbuf) + offset_src, count*dtsize);
-    }
-
-    timer.reset("= swing_alltoall (dealloc)");
-    if(free_tmpbuf){
-        free(tmpbuf);
-        free(block_in_position);
-        free(block_recvd);
-    }
-    free(peers);
-    destroy_tree(&tree);
-    return MPI_SUCCESS;
-}
-
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
     assert(this->num_ports == 1); // TODO: Support multiport
     Timer timer("swing_alltoall (init)");
@@ -2740,7 +2583,7 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         max_block_r = tree.remapped_ranks_max[rank];
 
         size_t block_recvd_cnt = 0, block_send_cnt = 0;
-        size_t offset_send = (size / 2)*count*dtsize, offset_keep = 0;
+        size_t offset_send = 0, offset_keep = 0;
         size_t current_send_idx = 0, current_recv_idx = this->size / 2;
         num_resident_blocks_next = 0;
         for(size_t i = 0; i < this->size; i++){
@@ -2749,17 +2592,19 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
             uint remap_block = tree.remapped_ranks[block];
             size_t offset = i*count*dtsize;
             
-            // I keep in the first half of recvbuf the blocks I want to keep,
-            // and in the second half the blocks I need to send.
+            // I move to the beginning of tmpbuf the blocks I want to keep,
+            // and I move to recvbuf the blocks I want to send.
             if(remap_block >= min_block_s && remap_block <= max_block_s){                
                 DPRINTF("[%d] Step %d (send) copying from offset %d to %d [%u]\n", rank, step, offset, offset_send, ((char*) tmpbuf)[offset]);
-                memcpy((char*) recvbuf + offset_send, ((char*) tmpbuf) + offset, count*dtsize);
+                memcpy((char*) recvbuf + offset_send, tmpbuf + offset, count*dtsize);
                 offset_send += count*dtsize;                
                 block_send_cnt++;
             }else{
                 // Copy the blocks we are not sending to the second half of recvbuf
                 DPRINTF("[%d] Step %d (keep) copying from offset %d to %d [%u]\n", rank, step, offset, offset_keep, ((char*) tmpbuf)[offset]);
-                memcpy((char*) recvbuf + offset_keep, ((char*) tmpbuf) + offset, count*dtsize);
+                if(offset != offset_keep){
+                    memcpy(tmpbuf + offset_keep, tmpbuf + offset, count*dtsize);
+                }
                 offset_keep += count*dtsize;                
                 block_recvd_cnt++;
 
@@ -2773,13 +2618,14 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         num_resident_blocks /= 2;
 
         timer.reset("= swing_alltoall (sendrecv)");
-        int r = MPI_Sendrecv((char*) recvbuf + (size / 2)*count*dtsize, count*block_send_cnt, datatype,
+        // I receive data in the second half of tmpbuf (the first half contains the blocks I am keeping from previous iteration)
+        int r = MPI_Sendrecv((char*) recvbuf, count*block_send_cnt, datatype,
                              peer, TAG_SWING_ALLTOALL,
                              tmpbuf + (size / 2)*count*dtsize, count*block_send_cnt, datatype,
                              peer, TAG_SWING_ALLTOALL, 
                              comm, MPI_STATUS_IGNORE);
         
-        memcpy(tmpbuf, recvbuf, block_send_cnt*dtsize*count);// TODO: I can avoid this memcpy with double buffering
+        //memcpy(tmpbuf, recvbuf, block_send_cnt*dtsize*count);// TODO: I can avoid this memcpy with double buffering
         if(r != MPI_SUCCESS){
             return r;
         }      
