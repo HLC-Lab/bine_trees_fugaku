@@ -2700,7 +2700,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = ceil(sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
+    size_t tmpbuf_size = ceil((float) sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
     
     timer.reset("= swing_scatter_utofu (utofu buf reg)"); 
 
@@ -2763,6 +2763,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         }
 
         size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * p;
+        DPRINTF("Port %d tmpbuf_offset_port %d tmpbuf size %d ceil %f (%d/%d)\n", p, tmpbuf_offset_port, tmpbuf_size, ceil((float) sendcount / this->num_ports), sendcount, this->num_ports);
         uint my_remapped_rank;
         // Blocks remapping. The root permutes the array so that it can send contiguous blocks
         if(this->rank == root){
@@ -2772,7 +2773,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
                 // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
                 // E.g., with two ports and 4 ranks
                 // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
-                // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 2 3 8 9 10 11, and port 1 on 4 5 6 7 12 13 14 15
+                // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 4 5 8 9 12 13 and port 1 will work on 2 3 6 7 10 11 14 15
                 // For a given port, all the sub-blocks have the same size, so we can just consider the count of any block (e.g., 0)
                 memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*tree.remapped_ranks[i]*dtsize, (char*) sendbuf + blocks_info[p][i].offset, blocks_info[p][i].count*dtsize);
             }
@@ -2809,8 +2810,15 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
 
         timer.reset("= swing_scatter_utofu (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
         // Consider offsets of block 0 since everything must go "in the first block"
-        DPRINTF("p=%d Copying %d bytes from %d to %d\n", p, blocks_info[p][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].offset); 
-        memcpy((char*) recvbuf + blocks_info[p][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, blocks_info[p][my_remapped_rank].count*dtsize);
+        // Last ports have one element less.
+        size_t extra_cnt = 0;
+        if(p >= (recvcount % this->num_ports)){
+            extra_cnt = p;
+        }
+        DPRINTF("p=%d Copying %d bytes from %d to %d\n", p, blocks_info[p][my_remapped_rank].count*dtsize, tmpbuf_offset_port + (blocks_info[p][0].count + extra_cnt)*my_remapped_rank*dtsize, blocks_info[p][0].offset); 
+        memcpy((char*) recvbuf + blocks_info[p][0].offset, 
+               tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, 
+               blocks_info[p][my_remapped_rank].count*dtsize);
     }
 
     if(free_tmpbuf){
@@ -2839,7 +2847,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = ceil(sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
+    size_t tmpbuf_size = ceil((float) sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
     
     timer.reset("= swing_scatter_mpi (utofu buf reg)"); 
 
