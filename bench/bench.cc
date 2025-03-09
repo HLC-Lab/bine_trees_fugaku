@@ -299,32 +299,36 @@ int main(int argc, char** argv){
     }
 
     // Check correctness of results
-    for(i = 0; i < dtsize*final_buffer_count; i++){
-        if(recvbuf[i] != recvbuf_validation[i]){
-            fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
-            return 1;
-        }
-    }
     
-    /*
-    printf("Rank %d Sendbuf: ", rank);
-    for(i = 0; i < dtsize*final_buffer_count; i++){
-        printf("%d ", sendbuf[i]);
-    }
-    printf("\n");
+    if(!strcmp(collective, "MPI_Gather") && rank != 0){
+        // On MPI_Gather only rank 0 receives the result
+    }else{
+        for(i = 0; i < dtsize*final_buffer_count; i++){
+            if(recvbuf[i] != recvbuf_validation[i]){
+                fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
+                return 1;
+            }
+        }
+        /**
+        printf("Rank %d Sendbuf: ", rank);
+        for(i = 0; i < dtsize*final_buffer_count; i++){
+            printf("%d ", sendbuf[i]);
+        }
+        printf("\n");
 
-    printf("Rank %d Recvbuf: ", rank);
-    for(i = 0; i < dtsize*final_buffer_count; i++){
-        printf("%d ", recvbuf[i]);
-    }
-    printf("\n");
+        printf("Rank %d Recvbuf: ", rank);
+        for(i = 0; i < dtsize*final_buffer_count; i++){
+            printf("%d ", recvbuf[i]);
+        }
+        printf("\n");
 
-    printf("Rank %d  Valbuf: ", rank);
-    for(i = 0; i < dtsize*final_buffer_count; i++){
-        printf("%d ", recvbuf_validation[i]);
+        printf("Rank %d  Valbuf: ", rank);
+        for(i = 0; i < dtsize*final_buffer_count; i++){
+            printf("%d ", recvbuf_validation[i]);
+        }
+        printf("\n");
+        **/
     }
-    printf("\n");
-    */
 #ifdef FUGAKU
     //assert(read_tnr_stats(tnr_stop)==0);
     //diff_tnr_stats(tnr_start, tnr_stop, tnr_diff);
@@ -344,10 +348,10 @@ int main(int argc, char** argv){
             double max_ranks = 0.0;
             for(size_t r = 0; r < (size_t) comm_size; r++){
                 double sample = samples_all[r*iterations + i];
-               printf("%f ", sample);
-               if(sample > max_ranks){
-                max_ranks = sample;
-               }
+                printf("%f ", sample);
+                if(sample > max_ranks){
+                    max_ranks = sample;
+                }
             }
             avg_iteration += max_ranks;
             printf("\n");
