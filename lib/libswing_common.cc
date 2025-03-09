@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <sched.h>
 #include <omp.h>
+#include <unistd.h>
 
 #include "libswing_common.h"
 #include <climits>
@@ -259,7 +260,6 @@ static inline int in_range(int x, uint32_t nbits){
 static inline int is_power_of_two(int x){
     return (x != 0) && ((x & (x - 1)) == 0);
 }
-
 
 SwingCommon::SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold, swing_distance_type_t distance_type): 
             algo(algo), num_ports(num_ports), segment_size(segment_size), all_p2_dimensions(true), num_steps(0), prealloc_size(prealloc_size), prealloc_buf(prealloc_buf), utofu_add_ag(utofu_add_ag), bcast_tmp_threshold(bcast_tmp_threshold), distance_type(distance_type){
@@ -2704,6 +2704,8 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             }
         }            
     }else{
+        // Everything to 0/NULL just to initialize the internal status.
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, this->num_ports); 
         tmpbuf = prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < num_ports; i++){
@@ -2965,6 +2967,8 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             }
         }            
     }else{
+        // Everything to 0/NULL just to initialize the internal status.
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, this->num_ports); 
         tmpbuf = prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < num_ports; i++){
@@ -2997,20 +3001,20 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             sending_step = this->num_steps - 1 - tree.reached_at_step[this->rank];
         }
 
-        DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
-        size_t issued_sends = 0;
+        DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);        
         timer.reset("= swing_gather_utofu (waiting recv)");
 
         size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
 
         // Put sendbuf in the correct positions (at index of remapped rank) in tempbuf
         DPRINTF("[%d] Copying sendbuf from offset 0 to %d\n", this->rank, tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize);
-        memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize, ((char*) sendbuf) + blocks_info[port][0].offset, sendcount*dtsize);       
-        
-        size_t issued_recvs = 0;
-        for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);       
+               
+        for(size_t step = 0; step < (uint) this->num_steps; step++){ 
+            size_t issued_sends = 0;
+            size_t issued_recvs = 0;       
             if(step < sending_step){
-                // Receive from peer
+                // Receive from peer                
                 uint peer;
                 if(distance_type == SWING_DISTANCE_DECREASING){
                     peer = peers[port][step];                               
@@ -3019,7 +3023,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 }
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
-                    swing_utofu_wait_recv(utofu_descriptor, port, 0, issued_recvs);
+                    swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
                     issued_recvs++;
                 }
             }else if(step == sending_step){
@@ -3032,7 +3036,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd       + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 size_t tmpcnt = num_blocks*blocks_info[port][0].count; // All blocks for this port have the same size
-                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, 0);                                                             
+                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, step);                                                             
                 ++issued_sends;
                 swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             }
@@ -3121,7 +3125,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
         size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
         // Put sendbuf in the correct positions (at index of remapped rank) in tempbuf
         DPRINTF("[%d] Copying sendbuf from offset 0 to %d\n", this->rank, tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize);
-        memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize, ((char*) sendbuf) + blocks_info[port][0].offset, sendcount*dtsize);
+        memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[this->rank]*dtsize, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);
                 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             if(step < sending_step){
