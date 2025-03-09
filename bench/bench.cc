@@ -148,6 +148,12 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         }else{
             r = MPI_Scatter(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
         }
+    }else if(!strcmp(collective, "MPI_Gather")){
+        if(rt == RUN_TYPE_VALIDATION){
+            r = PMPI_Gather(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
+        }else{
+            r = MPI_Gather(sendbuf, count, dt, recvbuf, count, dt, 0, MPI_COMM_WORLD);
+        }
     }
 
     /*
@@ -184,6 +190,9 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Scatter")){
         send_count = count*size;
         recv_count = count;
+    }else if(!strcmp(collective, "MPI_Gather")){
+        send_count = count;
+        recv_count = count*size;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
@@ -285,7 +294,7 @@ int main(int argc, char** argv){
     }
 
     size_t final_buffer_count = count;
-    if(!strcmp(collective, "MPI_Alltoall")){
+    if(!strcmp(collective, "MPI_Alltoall") || !strcmp(collective, "MPI_Gather")){
         final_buffer_count *= comm_size;
     }
 

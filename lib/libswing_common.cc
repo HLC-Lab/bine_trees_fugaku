@@ -2681,7 +2681,6 @@ int SwingCommon::swing_alltoall_old(const void *sendbuf, void *recvbuf, int coun
 }
 
 int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
-    assert(this->dimensions_num == 1);  // TODO: To let it work for multiple dimensions we should have a get_alltoall_perm_index that takes the dimensions
     assert(this->num_ports == 1); // TODO: Support multiport
     Timer timer("swing_alltoall (init)");
     int rank, size, dtsize;
@@ -2741,18 +2740,18 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         max_block_r = tree.remapped_ranks_max[rank];
 
         size_t block_recvd_cnt = 0, block_send_cnt = 0;
-        size_t offset_send = 0, offset_keep = (size / 2)*count*dtsize;
+        size_t offset_send = (size / 2)*count*dtsize, offset_keep = 0;
         size_t current_send_idx = 0, current_recv_idx = this->size / 2;
         num_resident_blocks_next = 0;
         for(size_t i = 0; i < this->size; i++){
             uint block = resident_block[i % num_resident_blocks];
             // Shall I send this block? Check the negabinary thing    
-            printf("Rank %d i %d step %d block %d num_res %d\n", rank, i, step, block, num_resident_blocks);        
             uint remap_block = tree.remapped_ranks[block];
             size_t offset = i*count*dtsize;
-            // Send the block. Copy in the first half of tmpbuf (to send) to recvbuf, receive in the other half, then copy back the received data from tmpbuf to recvbuf for the next round
+            
+            // I keep in the first half of recvbuf the blocks I want to keep,
+            // and in the second half the blocks I need to send.
             if(remap_block >= min_block_s && remap_block <= max_block_s){                
-                //DPRINTF("Rank %d sending block %d (from pos %d) to %d at offset %d at step %d (copying from offset %d to %d)\n", rank, block, i, peer, offset, step, offset, offset_send);                
                 DPRINTF("[%d] Step %d (send) copying from offset %d to %d [%u]\n", rank, step, offset, offset_send, ((char*) tmpbuf)[offset]);
                 memcpy((char*) recvbuf + offset_send, ((char*) tmpbuf) + offset, count*dtsize);
                 offset_send += count*dtsize;                
@@ -2774,12 +2773,13 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         num_resident_blocks /= 2;
 
         timer.reset("= swing_alltoall (sendrecv)");
-        int r = MPI_Sendrecv(recvbuf, count*block_send_cnt, datatype,
+        int r = MPI_Sendrecv((char*) recvbuf + (size / 2)*count*dtsize, count*block_send_cnt, datatype,
                              peer, TAG_SWING_ALLTOALL,
-                             tmpbuf, count*block_send_cnt, datatype,
+                             tmpbuf + (size / 2)*count*dtsize, count*block_send_cnt, datatype,
                              peer, TAG_SWING_ALLTOALL, 
                              comm, MPI_STATUS_IGNORE);
-        memcpy(tmpbuf + block_send_cnt*dtsize*count, recvbuf + block_send_cnt*dtsize*count, block_send_cnt*dtsize*count);// TODO: I can avoid this memcpy with double buffering
+        
+        memcpy(tmpbuf, recvbuf, block_send_cnt*dtsize*count);// TODO: I can avoid this memcpy with double buffering
         if(r != MPI_SUCCESS){
             return r;
         }      
@@ -2790,24 +2790,25 @@ int SwingCommon::swing_alltoall(const void *sendbuf, void *recvbuf, int count, M
         }
     }
 
-    printf("[%d] Final permutation: ", rank);
-    for(size_t i = 0; i < 8; i++){
-        printf("%u ", ((char*) tmpbuf)[i]);
-    }
-    printf("\n");
-
-    // Now I need to permute tmpbuf into recvbuf
-    /*
     timer.reset("= swing_alltoall (final permutation)");
+    // Now I need to permute tmpbuf into recvbuf
+    // Since I always received the new block on the right, and moved the blocks
+    // I wanted to keep to the left, they are now sorted in the same order they reached this
+    // rank from their corresponding source ranks. 
+    // I.e., I should consider the "reverse tree" (with this rank at the bottom and all the other ranks on top),
+    // which represent how the data arrived here.
+    // This tree is basically the opposite that I used to send the data (i.e., if LIBSWING_BIN_TREE_DISTANCE=INCREASING)
+    // I should consider the decreasing tree, and viceversa.
+    // The DFS order (i.e., the remapping) of that tree gives me the permutation.
+    swing_tree_t perm_tree = get_tree(rank, port, algo, distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
     for(size_t i = 0; i < size; i++){
-        size_t index = get_alltoall_perm_index(size, rank, i);
-        size_t offset_src = i*count*dtsize;
-        size_t offset_dst = index*count*dtsize;
+        size_t index = perm_tree.remapped_ranks[i];
+        size_t offset_src = index*count*dtsize;
+        size_t offset_dst = i*count*dtsize;
         memcpy((char*) recvbuf + offset_dst, ((char*) tmpbuf) + offset_src, count*dtsize);
     }
-    */
-    memcpy(recvbuf, tmpbuf, count*dtsize*size);
-
+    destroy_tree(&perm_tree);
+    
     timer.reset("= swing_alltoall (dealloc)");
     if(free_tmpbuf){
         free(tmpbuf);
