@@ -737,8 +737,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             
             int res;
             if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
-                //res = swing_common->swing_reduce_scatter_utofu(sendbuf, tmpbuf, count, datatype, op, blocks_info, comm);
-                assert(0);
+                res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, count, my_offset, recvcounts[swing_common->get_rank()], datatype, op, blocks_info, comm);
             }else{
                 res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, count, my_offset, recvcounts[swing_common->get_rank()], datatype, op, blocks_info, comm);
             }        
@@ -826,7 +825,6 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
             // Copy my data in the right place in the recvbuf
             memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
             size_t count = swing_common->get_size()*recvcount*dtsize;
-            MPI_Op op = MPI_SUM; // Any op would work, it is not used in allgather anyway
 
             int res;
             //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);            
