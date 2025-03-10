@@ -3702,7 +3702,7 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = ceil((float) count / this->num_ports)*this->num_ports*dtsize;
+    size_t tmpbuf_size = count*dtsize;
     
     timer.reset("= swing_reduce_scatter_mpi_contiguous (utofu buf reg)"); 
 
@@ -3725,18 +3725,18 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
         swing_tree_t tree = get_tree(this->rank, port, algo, distance_type, this->scc_real);
 
-        size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
+        size_t offset_port = blocks_info[port][0].offset;
         uint my_remapped_rank;
 
         timer.reset("= swing_reduce_scatter_mpi_contiguous (permute)");    
         for(size_t i = 0; i < size; i++){      
-            DPRINTF("[%d] Moving %d bytes from %d to %d\n", this->rank, blocks_info[port][i].count*dtsize, blocks_info[port][i].offset, tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize);          
+            DPRINTF("[%d] Moving %d bytes from %d to %d\n", this->rank, blocks_info[port][i].count*dtsize, blocks_info[port][i].offset, offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
             // E.g., with two ports and 4 ranks
             // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
             // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 2 3 8 9 10 11, and port 1 on 4 5 6 7 12 13 14 15
             // For a given port, all the sub-blocks have the same size, so we can just consider the count of any block (e.g., 0)
-            memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize, (char*) sendbuf + blocks_info[port][i].offset, blocks_info[port][i].count*dtsize);
+            memcpy(tmpbuf + offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize, (char*) sendbuf + blocks_info[port][i].offset, blocks_info[port][i].count*dtsize);
         }        
 
         my_remapped_rank = tree.remapped_ranks[rank];
@@ -3757,27 +3757,22 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
             timer.reset("= swing_allgather_mpi_contiguous (sendrecv)");
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
-            //MPI_Sendrecv(tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
-            //             tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
+            //MPI_Sendrecv(tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
+            //             tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
             //             comm, MPI_STATUS_IGNORE); 
 
-            MPI_Sendrecv_replace(tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, 
+            MPI_Sendrecv_replace(tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, 
                                  peer, TAG_SWING_REDUCESCATTER, 
                                  peer, TAG_SWING_REDUCESCATTER, comm, MPI_STATUS_IGNORE); 
 
-            MPI_Reduce_local(tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, tmpbuf + tmpbuf_offset_port, count_to_sendrecv, datatype, op);
-        }
-        
+            if(step == this->num_steps - 1){
+                // To avoid doing a memcpy at the end
+                reduce_local(tmpbuf + offset_port + count_to_sendrecv*dtsize, tmpbuf + offset_port, recvbuf + offset_port, count_to_sendrecv, datatype, op);
+            }else{
+                MPI_Reduce_local(tmpbuf + offset_port + count_to_sendrecv*dtsize, tmpbuf + offset_port, count_to_sendrecv, datatype, op);
+            }
+        }        
         free(peers[port]);
-
-
-        timer.reset("= swing_reduce_scatter_mpi_contiguous (final memcpy)"); // TODO: Can be avoided if the last put is done in recvbuf rather than tmpbuf
-        DPRINTF("Copyting %d bytes from %d to %d\n", blocks_info[port][0].count*dtsize, tmpbuf_offset_port, blocks_info[port][my_remapped_rank].offset);
-        memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port, blocks_info[port][0].count*dtsize);
-        
-        //// Consider offsets of block 0 since everything must go "in the first block"
-        //DPRINTF("[%d] p=%d Copying %d bytes from %d to %d\n", this->rank, port, blocks_info[port][my_remapped_rank].count*dtsize, tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].offset); 
-        //memcpy((char*) recvbuf + blocks_info[port][0].offset, tmpbuf + tmpbuf_offset_port + blocks_info[port][0].count*my_remapped_rank*dtsize, blocks_info[port][my_remapped_rank].count*dtsize);
 
         destroy_tree(&tree);
     }
