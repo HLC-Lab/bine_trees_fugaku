@@ -3188,6 +3188,8 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
 }
 
 
+#define SWING_REDUCE_NOSYNC_THRESHOLD 1024
+
 int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
@@ -3200,7 +3202,12 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = count*dtsize;
+    size_t tmpbuf_size;
+    if(count*dtsize < SWING_REDUCE_NOSYNC_THRESHOLD){
+        tmpbuf_size = count*dtsize;
+    }else{
+        tmpbuf_size = count*dtsize*this->num_steps; // In this way each rank writes in a different part of tmpbuf, avoid the need to synchronize
+    }
     
     timer.reset("= swing_reduce_utofu (utofu buf reg)"); 
 
@@ -3274,7 +3281,13 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
         DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
         timer.reset("= swing_reduce_utofu (waiting recv)");
         char copied = 0;
-        for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        for(size_t step = 0; step < (uint) this->num_steps; step++){      
+            size_t offset_port_tmpbuf;
+            if(count*dtsize < SWING_REDUCE_NOSYNC_THRESHOLD){
+                offset_port_tmpbuf = offset_port*this->num_steps + step*count_port*dtsize;
+            }else{
+                offset_port_tmpbuf = offset_port;
+            }  
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
@@ -3288,19 +3301,23 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                     size_t issued_recvs = 0;
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
 
-                    // Do a 0-byte put to notify I am ready to recv
-                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);                    
+                    if(count*dtsize >= SWING_REDUCE_NOSYNC_THRESHOLD){
+                        // Do a 0-byte put to notify I am ready to recv
+                        swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);                    
+                    }
 
                     swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
                     issued_recvs++;                    
                     if(!copied){
-                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port_tmpbuf, ((char*) recvbuf) + offset_port, count_port, datatype, op);
                         copied = 1;
                     }else{
-                        reduce_local(tmpbuf + offset_port, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                        reduce_local(tmpbuf + offset_port_tmpbuf, ((char*) recvbuf) + offset_port, count_port, datatype, op);
                     }
-
-                    swing_utofu_wait_sends(utofu_descriptor, port, issued_recvs);
+                    
+                    if(count*dtsize >= SWING_REDUCE_NOSYNC_THRESHOLD){
+                        swing_utofu_wait_sends(utofu_descriptor, port, issued_recvs);
+                    }
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -3314,10 +3331,12 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                 }else{
                     lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + offset_port;                    
                 }
-                rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port;
+                rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port_tmpbuf;
 
-                // Do a 0-byte recv to check if the peer is ready to recv
-                swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends);
+                if(count*dtsize >= SWING_REDUCE_NOSYNC_THRESHOLD){
+                    // Do a 0-byte recv to check if the peer is ready to recv
+                    swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends);
+                }
 
                 swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_port*dtsize, rmt_addr, step);                                                             
                 ++issued_sends;
