@@ -749,7 +749,9 @@ static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Dataty
     if(sendcount != recvcount){ // Right now not supported if counts are different
         return 0;
     }
-    if(algo == ALGO_SWING_B){
+
+    if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
+       algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
         return 1;
     }
     return 0;
@@ -813,7 +815,15 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
             memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
             size_t count = swing_common->get_size()*recvcount*dtsize;
             MPI_Op op = MPI_SUM; // Any op would work, it is not used in allgather anyway
-            int res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);            
+
+            int res;
+            //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);            
+            
+            if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+                res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+            }else{
+                res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+            }        
 
             // Free blocks_info
             for(size_t p = 0; p < swing_common->get_num_ports(); p++){

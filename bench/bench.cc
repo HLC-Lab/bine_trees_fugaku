@@ -217,7 +217,7 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }
     // Initialize sendbuf with random values
     for(size_t i = 0; i < dtsize*send_count; i++){
-        (*sendbuf)[i] = (char) rand() % 1024;
+        (*sendbuf)[i] = rand() % 1024;
     }
 }
 
@@ -303,7 +303,7 @@ int main(int argc, char** argv){
     }
 
     size_t final_buffer_count = count;
-    if(!strcmp(collective, "MPI_Alltoall") || !strcmp(collective, "MPI_Gather")){
+    if(!strcmp(collective, "MPI_Alltoall") || !strcmp(collective, "MPI_Gather")  || !strcmp(collective, "MPI_Allgather")){
         final_buffer_count *= comm_size;
     }
 
@@ -312,6 +312,7 @@ int main(int argc, char** argv){
     if((!strcmp(collective, "MPI_Gather") || !strcmp(collective, "MPI_Reduce")) && rank != 0){
         // On MPI_Gather and MPI_Reduce only rank 0 receives the result
     }else{
+        
         for(i = 0; i < dtsize*final_buffer_count; i++){
             if(recvbuf[i] != recvbuf_validation[i]){
                 fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);

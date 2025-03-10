@@ -3494,3 +3494,93 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
     timer.reset("= swing_reduce_mpi (writing profile data to file)");
     return res;
 }
+
+int SwingCommon::swing_allgather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef FUGAKU
+    return MPI_ERR_OTHER;
+#else
+    assert("uTofu not supported");
+    return MPI_ERR_OTHER;
+#endif   
+}
+
+int SwingCommon::swing_allgather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_allgather_mpi (init)");
+    Timer timer("swing_allgather_mpi (init)");
+    int dtsize;
+    MPI_Type_size(sendtype, &dtsize);    
+
+    // We always need a tempbuf since non root ranks might not specify a recvbuf
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*this->num_ports);
+    size_t tmpbuf_size = ceil((float) sendcount / this->num_ports)*this->num_ports*dtsize*this->size;
+    
+    timer.reset("= swing_allgather_mpi (utofu buf reg)"); 
+
+    if(tmpbuf_size > prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;           
+    }else{
+        tmpbuf = prealloc_buf;
+    }
+
+    int res = MPI_SUCCESS; 
+
+    for(size_t port = 0; port < this->num_ports; port++){
+        // Compute the peers of this port if I did not do it yet
+        if(peers[port] == NULL){
+            peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(this->rank, port, algo, this->scc_real, peers[port]);
+        }        
+        timer.reset("= swing_allgather_mpi (computing trees)");
+        swing_tree_t tree = get_tree(this->rank, port, algo, distance_type, this->scc_real);
+
+        size_t tmpbuf_offset_port = (tmpbuf_size / this->num_ports) * port;
+        memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
+
+        for(size_t step = 0; step < (uint) this->num_steps; step++){        
+            uint peer;
+            if(distance_type == SWING_DISTANCE_DECREASING){
+                peer = peers[port][this->num_steps - step - 1];                               
+            }else{  
+                peer = peers[port][step];
+            }
+
+            timer.reset("= swing_allgather_mpi (sendrecv)");
+            size_t num_blocks = pow(2, step);
+            size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
+            MPI_Sendrecv(tmpbuf + tmpbuf_offset_port                           , count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+                         tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+                         comm, MPI_STATUS_IGNORE);                                   
+        }
+
+        // For each port we need to permute back the data in the correct position
+        timer.reset("= swing_allgather_mpi (permute)");    
+        swing_tree_t perm_tree = get_tree(rank, port, algo, distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        for(size_t i = 0; i < size; i++){      
+            DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
+            // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
+            // E.g., with two ports and 4 ranks
+            // | 0 1 2 3 | 4 5 6 7 | 8 9 10 11 | 12 13 14 15 |
+            // If we have 2 ports, each block is split in two parts, thus port 0 will work on 0 1 2 3 8 9 10 11, and port 1 on 4 5 6 7 12 13 14 15
+            size_t pos_in_tmpbuf_port = perm_tree.remapped_ranks[i]*blocks_info[port][0].count*dtsize;
+            size_t pos_in_recvbuf = blocks_info[port][i].offset;
+            
+            memcpy(((char*) recvbuf) + pos_in_recvbuf, (char*) tmpbuf + tmpbuf_offset_port + pos_in_tmpbuf_port, blocks_info[port][i].count*dtsize);
+        }    
+        destroy_tree(&perm_tree);   
+        
+        free(peers[port]);
+        destroy_tree(&tree);
+    }
+
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }    
+    timer.reset("= swing_allgather_mpi (writing profile data to file)");
+    return res;
+}
