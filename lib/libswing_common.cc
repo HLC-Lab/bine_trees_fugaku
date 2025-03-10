@@ -3200,7 +3200,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = count*dtsize*this->num_steps; // A bit overkill, needed for uTofu to avoid overwriting the same buffer in different steps // TODO: Fix
+    size_t tmpbuf_size = count*dtsize;
     
     timer.reset("= swing_reduce_utofu (utofu buf reg)"); 
 
@@ -3245,12 +3245,11 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     for(size_t port = 0; port < this->num_ports; port++){
         // Compute the count and the offset of the piece of buffer that is aggregated on this port
         size_t count_port = partition_size + (port < remaining ? 1 : 0);
-        size_t offset_port = 0, offset_port_tmpbuf = 0;
+        size_t offset_port = 0;
         for(size_t j = 0; j < port; j++){
             offset_port += partition_size + (j < remaining ? 1 : 0);
         }
         offset_port *= dtsize;
-        offset_port_tmpbuf = offset_port * this->num_steps; // TODO: Ugly related to the overkill thing above for tmpbuf
 
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
@@ -3288,14 +3287,20 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
                     size_t issued_recvs = 0;
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
+
+                    // Do a 0-byte put to notify I am ready to recv
+                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);                    
+
                     swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
                     issued_recvs++;                    
                     if(!copied){
-                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port_tmpbuf + step*count_port*dtsize, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port, ((char*) recvbuf) + offset_port, count_port, datatype, op);
                         copied = 1;
                     }else{
-                        reduce_local(tmpbuf + offset_port_tmpbuf + step*count_port*dtsize, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                        reduce_local(tmpbuf + offset_port, ((char*) recvbuf) + offset_port, count_port, datatype, op);
                     }
+
+                    swing_utofu_wait_sends(utofu_descriptor, port, issued_recvs);
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -3309,7 +3314,11 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                 }else{
                     lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd + offset_port;                    
                 }
-                rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port_tmpbuf + step*count_port*dtsize;
+                rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port;
+
+                // Do a 0-byte recv to check if the peer is ready to recv
+                swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends);
+
                 swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_port*dtsize, rmt_addr, step);                                                             
                 ++issued_sends;
                 swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
