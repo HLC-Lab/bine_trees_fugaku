@@ -674,8 +674,9 @@ static int reducescatter_algo_supported(Algo algo, size_t count){
         }else{
             return 0;
         }
-    }else if((algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_UTOFU) && swing_common->get_num_ports() == 1){
-        return 0; // TODO: To let it work, we should simply remap the block id
+    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
+        algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+         return 1;
     }
     return 0;
 }
@@ -726,11 +727,22 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             }
             assert(count == count_so_far);
             // Call the actual collective
-            char* tmpbuf = (char*) malloc(count*dtsize);
-            int res = swing_common->swing_coll_b(sendbuf, tmpbuf, count, datatype, op, comm, blocks_info, SWING_REDUCE_SCATTER);            
-            DPRINTF("[%d] Copying %d bytes from offset %d into recvbuf\n", swing_common->get_rank(), recvcounts[swing_common->get_rank()]*dtsize, my_offset);
-            memcpy(recvbuf, tmpbuf + my_offset, recvcounts[swing_common->get_rank()]*dtsize);
-            free(tmpbuf);
+            
+            // OLD way of doing it
+            //char* tmpbuf = (char*) malloc(count*dtsize);
+            //int res = swing_common->swing_coll_b(sendbuf, tmpbuf, count, datatype, op, comm, blocks_info, SWING_REDUCE_SCATTER);            
+            //DPRINTF("[%d] Copying %d bytes from offset %d into recvbuf\n", swing_common->get_rank(), recvcounts[swing_common->get_rank()]*dtsize, my_offset);
+            //memcpy(recvbuf, tmpbuf + my_offset, recvcounts[swing_common->get_rank()]*dtsize);
+            //free(tmpbuf);
+            
+            int res;
+            if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+                //res = swing_common->swing_reduce_scatter_utofu(sendbuf, tmpbuf, count, datatype, op, blocks_info, comm);
+                assert(0);
+            }else{
+                res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, count, my_offset, recvcounts[swing_common->get_rank()], datatype, op, blocks_info, comm);
+            }        
+
             // Free blocks_info
             for(size_t p = 0; p < swing_common->get_num_ports(); p++){
                 free(blocks_info[p]);
