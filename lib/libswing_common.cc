@@ -3924,6 +3924,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         }        
 
         // Now perform all the subsequent steps            
+        size_t offset_step_recv = 0; // This is used so that each step writes at a different location in tmpbuf_recv
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
             if(distance_type == SWING_DISTANCE_DECREASING){
@@ -3938,22 +3939,12 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             size_t issued_sends = 0, issued_recvs = 0;
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
-
-            utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd                          + offset_port + count_to_sendrecv*dtsize;
-            utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_send_size + offset_port_recv; // Always recv at the end
+            
+            utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd                          + offset_port      + count_to_sendrecv*dtsize;
+            utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_send_size + offset_port_recv + offset_step_recv; 
 
             DPRINTF("Port %d sending from %d to %d\n", port, lcl_addr - utofu_descriptor->port_info[port].lcl_temp_stadd, rmt_addr - utofu_descriptor->port_info[port].rmt_temp_stadd[peer]);
             DPRINTF("tmpbuf[0] (port %d) at step %d before send: %d \n", port, step, ((char*) tmpbuf_send_port)[0]);
-
-            if(/** count*dtsize >= SWING_REDUCE_NOSYNC_THRESHOLD**/ 1){ // TODO: Fix to use threshold and larger buffer
-                // Do a 0-byte put to notify I am ready to recv
-                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);                    
-                issued_sends++;
-                
-                // Do a 0-byte recv to check if the peer is ready to recv
-                swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
-                issued_recvs++;
-            }
 
             swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
             issued_sends++;
@@ -3967,12 +3958,14 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 
             if(step == this->num_steps - 1){
                 // To avoid doing a memcpy at the end
-                reduce_local(tmpbuf_recv_port, tmpbuf_send_port, (char*) recvbuf + blocks_info[port][0].offset, count_to_sendrecv, datatype, op);
+                reduce_local(tmpbuf_recv_port + offset_step_recv, tmpbuf_send_port, (char*) recvbuf + blocks_info[port][0].offset, count_to_sendrecv, datatype, op);
                 DPRINTF("tmpbuf_send[0] (port %d) at step %d after aggr:  %d \n", port, step, ((char*) recvbuf + blocks_info[port][0].offset)[0]);
             }else{
-                reduce_local(tmpbuf_recv_port, tmpbuf_send_port, count_to_sendrecv, datatype, op);
+                reduce_local(tmpbuf_recv_port + offset_step_recv, tmpbuf_send_port, count_to_sendrecv, datatype, op);
                 DPRINTF("tmpbuf_send[0] (port %d) at step %d after aggr:  %d \n", port, step, ((char*) tmpbuf_send_port)[0]);
             }
+
+            offset_step_recv += count_to_sendrecv*dtsize;
         }        
         free(peers[port]);
 
@@ -4010,7 +4003,13 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = count*dtsize;
+
+    
+    // How big should the buffer be? I should consider the largest count possible
+    // In case count not divisible by num ports, the first port will for sure have the largest blocks.
+    // Thus, it is enough to check the count of the first block of the first port to know the largest block.
+    // TODO: This work for reduce_scatter_block, generalize it to reduce_scatter
+    size_t tmpbuf_size = blocks_info[0][0].count * dtsize * this->num_ports * this->size;
     
     timer.reset("= swing_reduce_scatter_mpi_contiguous (utofu buf reg)"); 
 
@@ -4022,8 +4021,9 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         tmpbuf = prealloc_buf;
     }
 
-    int res = MPI_SUCCESS; 
+    char* tmpbuf_send = tmpbuf;
 
+    int res = MPI_SUCCESS; 
     for(size_t port = 0; port < this->num_ports; port++){
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
@@ -4033,7 +4033,13 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
         swing_tree_t tree = get_tree(this->rank, port, algo, distance_type, this->scc_real);
 
-        size_t offset_port = ceil((float) count / this->num_ports) * port * dtsize;
+        size_t offset_port = tmpbuf_send_size / this->num_ports * port;
+        size_t offset_port_recv = tmpbuf_recv_size / this->num_ports * port;
+
+        DPRINTF("Offset_port_recv %d: %d\n", port, offset_port_recv);
+        DPRINTF("Offset_port %d: %d\n", port, offset_port);
+
+        char* tmpbuf_send_port = tmpbuf_send + offset_port;
 
         timer.reset("= swing_reduce_scatter_mpi_contiguous (permute)");    
         for(size_t i = 0; i < size; i++){      
@@ -4060,19 +4066,16 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
             timer.reset("= swing_reduce_scatter_mpi_contiguous (sendrecv)");
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
-            //MPI_Sendrecv(tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
-            //             tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_REDUCESCATTER, 
-            //             comm, MPI_STATUS_IGNORE); 
 
-            MPI_Sendrecv_replace(tmpbuf + offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, 
+            MPI_Sendrecv_replace(tmpbuf_send_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, 
                                  peer, TAG_SWING_REDUCESCATTER, 
                                  peer, TAG_SWING_REDUCESCATTER, comm, MPI_STATUS_IGNORE); 
 
             if(step == this->num_steps - 1){
                 // To avoid doing a memcpy at the end
-                reduce_local(tmpbuf + offset_port + count_to_sendrecv*dtsize, tmpbuf + offset_port, (char*) recvbuf + offset_port, count_to_sendrecv, datatype, op);
+                reduce_local(tmpbuf_send_port + count_to_sendrecv*dtsize, tmpbuf_send_port, (char*) recvbuf + offset_port, count_to_sendrecv, datatype, op);
             }else{
-                MPI_Reduce_local(tmpbuf + offset_port + count_to_sendrecv*dtsize, tmpbuf + offset_port, count_to_sendrecv, datatype, op);
+                MPI_Reduce_local(tmpbuf_send_port + count_to_sendrecv*dtsize, tmpbuf_send_port, count_to_sendrecv, datatype, op);
             }
         }        
         free(peers[port]);
