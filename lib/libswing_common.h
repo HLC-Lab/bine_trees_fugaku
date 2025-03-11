@@ -82,7 +82,14 @@ typedef struct {
     char* prealloc_buf;
     int utofu_add_ag;
     size_t bcast_tmp_threshold;
-    swing_distance_type_t distance_type;
+    swing_distance_type_t distance_type_allreduce;
+    swing_distance_type_t distance_type_allgather;
+    swing_distance_type_t distance_type_reduce_scatter;
+    swing_distance_type_t distance_type_bcast;
+    swing_distance_type_t distance_type_alltoall;
+    swing_distance_type_t distance_type_scatter;
+    swing_distance_type_t distance_type_gather;
+    swing_distance_type_t distance_type_reduce;
 } swing_env_t;
 
 

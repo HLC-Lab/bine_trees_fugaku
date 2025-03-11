@@ -2624,7 +2624,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     }
 
     // Compute the tree
-    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type, this->scc_real);
+    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type_alltoall, this->scc_real);
     if(peers[port] == NULL){
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(rank, port, env.algo, this->scc_real, peers[port]);
@@ -2727,7 +2727,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     // I should consider the decreasing tree, and viceversa.
     // The DFS order (i.e., the remapping) of that tree gives me the permutation.
     // TODO: For multiport I should start from the last port I received from.
-    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_alltoall == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
     for(size_t i = 0; i < size; i++){
         size_t index = perm_tree.remapped_ranks[i];
         size_t offset_src = index*count*dtsize;
@@ -2782,7 +2782,7 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     }
 
     // Compute the tree
-    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type, this->scc_real);
+    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type_alltoall, this->scc_real);
     uint* peers = (uint*) malloc(sizeof(uint)*this->size);
     compute_peers(rank, port, env.algo, this->scc_real, peers);
 
@@ -2795,7 +2795,7 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall_mpi (bookeeping and copies)");
         uint peer;
-        if(env.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.distance_type_alltoall == SWING_DISTANCE_DECREASING){
             peer = peers[this->num_steps - step - 1];
         }else{          
             peer = peers[step];
@@ -2867,7 +2867,7 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     // I should consider the decreasing tree, and viceversa.
     // The DFS order (i.e., the remapping) of that tree gives me the permutation.
     // TODO: For multiport I should start from the last port I received from.
-    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_alltoall == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
     for(size_t i = 0; i < size; i++){
         size_t index = perm_tree.remapped_ranks[i];
         size_t offset_src = index*count*dtsize;
@@ -2949,7 +2949,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             compute_peers(this->rank, p, env.algo, this->scc_real, peers[p]);
         }        
         timer.reset("= swing_scatter_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, p, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, p, env.algo, env.distance_type_scatter, this->scc_real);
 
         int receiving_step = tree.reached_at_step[this->rank];
 
@@ -2989,7 +2989,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             // Compute the range to send/recv
             if(step >= receiving_step + 1){
                 uint peer;
-                if(env.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.distance_type_scatter == SWING_DISTANCE_DECREASING){
                     peer = peers[p][this->num_steps - step - 1];
                 }else{
                     peer = peers[p][step];
@@ -3066,7 +3066,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
         compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
     }        
     timer.reset("= swing_scatter_mpi (computing trees)");
-    swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type, this->scc_real);
+    swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type_scatter, this->scc_real);
 
     int receiving_step;
     if(root == this->rank){
@@ -3118,7 +3118,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
 
         if(step >= receiving_step + 1){
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_scatter == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{  
                 peer = peers[port][step];
@@ -3212,7 +3212,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_gather_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type_gather, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -3241,7 +3241,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             if(step < sending_step){
                 // Receive from peer                
                 uint peer;
-                if(env.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.distance_type_gather == SWING_DISTANCE_DECREASING){
                     peer = peers[port][step];                               
                 }else{  
                     peer = peers[port][this->num_steps - step - 1];
@@ -3334,7 +3334,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_gather_mpi (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type_gather, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -3360,7 +3360,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.distance_type_gather == SWING_DISTANCE_DECREASING){
                     peer = peers[port][step];                               
                 }else{  
                     peer = peers[port][this->num_steps - step - 1];
@@ -3487,7 +3487,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type_reduce, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -3514,7 +3514,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.distance_type_reduce == SWING_DISTANCE_DECREASING){
                     peer = peers[port][step];                               
                 }else{  
                     peer = peers[port][this->num_steps - step - 1];
@@ -3628,7 +3628,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_mpi (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, port, env.algo, env.distance_type_reduce, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -3649,7 +3649,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.distance_type_reduce == SWING_DISTANCE_DECREASING){
                     peer = peers[port][step];                               
                 }else{  
                     peer = peers[port][this->num_steps - step - 1];
@@ -3758,14 +3758,14 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_allgather_utofu_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_allgather, this->scc_real);
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_allgather == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
@@ -3790,7 +3790,7 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
 
         // For each port we need to permute back the data in the correct position
         timer.reset("= swing_allgather_utofu_contiguous (permute)");    
-        swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_allgather == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -3863,14 +3863,14 @@ int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcou
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_allgather_mpi_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_allgather, this->scc_real);
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_allgather == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
@@ -3888,7 +3888,7 @@ int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcou
 
         // For each port we need to permute back the data in the correct position
         timer.reset("= swing_allgather_mpi_contiguous (permute)");    
-        swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_allgather == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -3944,9 +3944,9 @@ int SwingCommon::swing_allgather_mpi_blocks(const void *sendbuf, int sendcount, 
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_allgather_mpi_blocks (computing trees)");
-        swing_distance_type_t inverse_distance = env.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING;
-        swing_tree_t tree    = get_tree(this->rank, port, env.algo, env.distance_type   , this->scc_real);
-        swing_tree_t tree_rs = get_tree(this->rank, port, env.algo, inverse_distance, this->scc_real); // Since we are doing an allgather, we consider the tree of the corresponding reduce-scatter
+        swing_distance_type_t inverse_distance = env.distance_type_allgather == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING;
+        swing_tree_t tree    = get_tree(this->rank, port, env.algo, env.distance_type_allgather, this->scc_real);
+        swing_tree_t tree_rs = get_tree(this->rank, port, env.algo, inverse_distance           , this->scc_real); // Since we are doing an allgather, we consider the tree of the corresponding reduce-scatter
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port + blocks_info[port][rank].offset, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
@@ -3954,7 +3954,7 @@ int SwingCommon::swing_allgather_mpi_blocks(const void *sendbuf, int sendcount, 
         MPI_Request* reqs_send = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size);
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_allgather == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
@@ -3962,8 +3962,8 @@ int SwingCommon::swing_allgather_mpi_blocks(const void *sendbuf, int sendcount, 
 
             size_t issued_sends = 0;
             
-            swing_tree_t tree_peer_rs = get_tree(peer, port, env.algo, inverse_distance, this->scc_real);
-            swing_tree_t tree_peer    = get_tree(peer, port, env.algo, env.distance_type   , this->scc_real);
+            swing_tree_t tree_peer_rs = get_tree(peer, port, env.algo, inverse_distance           , this->scc_real);
+            swing_tree_t tree_peer    = get_tree(peer, port, env.algo, env.distance_type_allgather, this->scc_real);
             if(tree_peer_rs.parent[rank] == peer || 1){ // Needed to avoid trees which are actually graphs in non-p2 cases.
                 // Loop over all the blocks to determine what to send
                 // At step s, I send what I received in the reduce-scatter at step num_steps - 1 - s
@@ -4099,7 +4099,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_scatter_utofu_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_reduce_scatter, this->scc_real);
 
         size_t offset_port = tmpbuf_send_size / env.num_ports * port;
         size_t offset_port_recv = tmpbuf_recv_size / env.num_ports * port;
@@ -4125,7 +4125,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         size_t offset_step_recv = 0; // This is used so that each step writes at a different location in tmpbuf_recv
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_reduce_scatter == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -4229,7 +4229,7 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
             compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_reduce_scatter, this->scc_real);
 
         size_t offset_port = tmpbuf_size / env.num_ports * port;
         DPRINTF("Offset_port %d: %d\n", port, offset_port);
@@ -4249,7 +4249,7 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         // Now perform all the subsequent steps            
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.distance_type_reduce_scatter == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];

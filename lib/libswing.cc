@@ -23,6 +23,26 @@ static int force_env_reload = 1, env_read = 0;
 static SwingCommon* swing_common = NULL;
 static swing_env_t env;
 
+static void init_env(swing_env_t* env, MPI_Comm comm){
+    MPI_Comm_size(comm, (int*) &(env->dimensions[0]));
+    env->dimensions_num = 1;
+    env->algo = ALGO_DEFAULT;
+    env->num_ports = 1;
+    env->segment_size = 0;
+    env->prealloc_size = 0;
+    env->prealloc_buf = NULL;
+    env->utofu_add_ag = 0;
+    env->bcast_tmp_threshold = 0;
+    env->distance_type_allreduce = SWING_DISTANCE_INCREASING;
+    env->distance_type_allgather = SWING_DISTANCE_DECREASING;
+    env->distance_type_reduce_scatter = SWING_DISTANCE_INCREASING;
+    env->distance_type_bcast = SWING_DISTANCE_DECREASING;
+    env->distance_type_alltoall = SWING_DISTANCE_INCREASING;
+    env->distance_type_scatter = SWING_DISTANCE_DECREASING;
+    env->distance_type_gather = SWING_DISTANCE_DECREASING;
+    env->distance_type_reduce = SWING_DISTANCE_INCREASING;
+}
+
 static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
     if(env_str){
@@ -34,40 +54,32 @@ static inline void read_env(MPI_Comm comm){
     if(!env_read || force_env_reload){
         env_read = 1;
 
+        init_env(&env, comm);
+
         env_str = getenv("LIBSWING_SEGMENT_SIZE");
         if(env_str){
             env.segment_size = atoi(env_str);
-        }else{
-            env.segment_size = 0;
         }
 
         env_str = getenv("LIBSWING_NUM_PORTS");
         if(env_str){
             env.num_ports = atoi(env_str);
-        }else{
-            env.num_ports = 1;
         }
         assert(env.num_ports <= LIBSWING_MAX_SUPPORTED_PORTS);
 
         env_str = getenv("LIBSWING_PREALLOC_SIZE");
         if(env_str){
             env.prealloc_size = atoi(env_str);
-        }else{
-            env.prealloc_size = 0;
         }
 
         env_str = getenv("LIBSWING_UTOFU_ADD_AG");
         if(env_str){
             env.utofu_add_ag = atoi(env_str);
-        }else{
-            env.utofu_add_ag = 0;
         }
 
         env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
         if(env_str){
             env.bcast_tmp_threshold = atoi(env_str);
-        }else{
-            env.bcast_tmp_threshold = 0;
         }
 
         env_str = getenv("LIBSWING_DIMENSIONS");
@@ -85,23 +97,79 @@ static inline void read_env(MPI_Comm comm){
             } 
             free(copy);
             env.dimensions_num = i;       
-        }else{
-            int size;
-            MPI_Comm_size(comm, &size);
-            env.dimensions[0] = size;
-            env.dimensions_num = 1;
         }
         assert(env.dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
 
-        env_str = getenv("LIBSWING_BIN_TREE_DISTANCE");
+        env_str = getenv("LIBSWING_DISTANCE_ALLREDUCE");
         if(env_str){
             if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type = SWING_DISTANCE_INCREASING;
+                env.distance_type_allreduce = SWING_DISTANCE_INCREASING;
             }else{
-                env.distance_type = SWING_DISTANCE_DECREASING;
+                env.distance_type_allreduce = SWING_DISTANCE_DECREASING;
             }
-        }else{
-            env.distance_type = SWING_DISTANCE_INCREASING;
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_ALLGATHER");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_allgather = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_allgather = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_REDUCE_SCATTER");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_reduce_scatter = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_reduce_scatter = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_BCAST");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_bcast = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_bcast = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_ALLTOALL");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_alltoall = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_alltoall = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_SCATTER");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_scatter = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_scatter = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_GATHER");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_gather = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_gather = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_DISTANCE_REDUCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.distance_type_reduce = SWING_DISTANCE_INCREASING;
+            }else{
+                env.distance_type_reduce = SWING_DISTANCE_DECREASING;
+            }
         }
 
         env_str = getenv("LIBSWING_ALGO");
