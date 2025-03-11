@@ -3824,7 +3824,7 @@ int SwingCommon::swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *re
     ;
 }
 
-int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, int counttt, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_reduce_scatter_utofu_contiguous (init)");
     Timer timer("swing_reduce_scatter_utofu_contiguous (init)");
@@ -3836,9 +3836,24 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
-    size_t tmpbuf_size = ceil((float) count / this->num_ports) * this->num_ports * dtsize;
-    tmpbuf_size += ceil((count / 1.0) / this->num_ports) * this->num_ports * dtsize; // We add another count/2 since in the first step we: keep untouched count/2, and then send count/2 and recv count/2 (at the same time).
     
+    // sendbuf is read-only, and recvbuf has space only for one (final) block.
+    // Thus, I need two larger temporary buffers: one for receiving the new data, and the other one to aggregate the data in (and to send the data from).
+    // To avoid registering two different pointers, I will allocate a single buffer and then I will use two pointers to point to the two different parts of the buffer.
+    // I call these two buffers tmpbuf_send and tmpbuf_recv.
+    // How big should they be? I should consider the largest count possible
+    // In case count not divisible by num ports, the first port will for sure have the largest blocks.
+    // Thus, it is enough to check the count of the first block of the first port to know the largest block.
+    // TODO: This work for reduce_scatter_block, generalize it to reduce_scatter
+    size_t tmpbuf_send_size = blocks_info[0][0].count * dtsize * this->num_ports * this->size;
+    // For tmpbuf_recv_size I have two options:
+    // 1. I can either make it as large as the tmpbuf_send. In this case, at each step each rank can write in a different part of the buffer.
+    // 2. I can make it half of that, but this would require explicit synchronization between rank before doing the PUTs
+    //
+    // I chose the first option. // TODO: Switch between the two to save some memory
+    size_t tmpbuf_recv_size = tmpbuf_send_size;
+    
+    size_t tmpbuf_size = tmpbuf_send_size + tmpbuf_recv_size;    
     timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf reg)"); 
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
     if(tmpbuf_size > prealloc_size){
@@ -3875,7 +3890,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     }
 
     char* tmpbuf_send = tmpbuf;
-    char* tmpbuf_recv = tmpbuf + (int) ceil((float) count / this->num_ports) * this->num_ports * dtsize;
+    char* tmpbuf_recv = tmpbuf + tmpbuf_send_size;
 
     int res = MPI_SUCCESS; 
 #pragma omp parallel for num_threads(this->num_ports) schedule(static, 1) collapse(1)
@@ -3888,8 +3903,8 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         timer.reset("= swing_reduce_scatter_utofu_contiguous (computing trees)");
         swing_tree_t tree = get_tree(this->rank, port, algo, distance_type, this->scc_real);
 
-        size_t offset_port = ceil((float) count / this->num_ports) * port * dtsize;
-        size_t offset_port_recv = ceil((count / 1.0) / this->num_ports) * port * dtsize;
+        size_t offset_port = tmpbuf_send_size / this->num_ports * port;
+        size_t offset_port_recv = tmpbuf_recv_size / this->num_ports * port;
 
         DPRINTF("Offset_port_recv %d: %d\n", port, offset_port_recv);
         DPRINTF("Offset_port %d: %d\n", port, offset_port);
@@ -3924,8 +3939,8 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
 
-            utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd       + offset_port + count_to_sendrecv*dtsize;
-            utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + (int) ceil((float) count / this->num_ports) * this->num_ports * dtsize + offset_port_recv; // Always recv at the end
+            utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd                          + offset_port + count_to_sendrecv*dtsize;
+            utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_send_size + offset_port_recv; // Always recv at the end
 
             DPRINTF("Port %d sending from %d to %d\n", port, lcl_addr - utofu_descriptor->port_info[port].lcl_temp_stadd, rmt_addr - utofu_descriptor->port_info[port].rmt_temp_stadd[peer]);
             DPRINTF("tmpbuf[0] (port %d) at step %d before send: %d \n", port, step, ((char*) tmpbuf_send_port)[0]);

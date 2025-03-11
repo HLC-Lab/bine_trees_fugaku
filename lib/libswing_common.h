@@ -75,7 +75,7 @@ typedef struct{
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
-//#define DEBUG
+#define DEBUG
 //#define PROFILE
 
 #ifdef DEBUG
@@ -438,6 +438,7 @@ class SwingCommon {
 
         // TODO: Add allreduce_l as reduce+bcast
         // TODO: add bcast as scatter + allgather
+        // TODO: add reduce-scatter as reduce + scatter
 
 };
 
