@@ -273,4 +273,5 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
     }    
     timer.reset("= swing_gather_mpi (writing profile data to file)");
     return res;
+
 }

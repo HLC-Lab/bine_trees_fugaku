@@ -21,6 +21,8 @@ void compute_peers(uint rank, int port, Algo algo, SwingCoordConverter* scc, uin
 
 void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, Algo algo);
 
+int get_mirroring_port(int num_ports, uint dimensions_num);
+
 /**
  * @brief Get a Swing binomial tree.
  * @param root (IN) The root of the tree

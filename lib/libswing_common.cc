@@ -348,7 +348,7 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
     return MPI_SUCCESS;
 }
 
-#define SWING_REDUCE_NOSYNC_THRESHOLD 1024 // TODO Read from env. Env should be passed to SwingCommon as a struct with all the variables.
+#define SWING_ALLREDUCE_NOSYNC_THRESHOLD 1024
 
 int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
 #ifdef FUGAKU
@@ -362,7 +362,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
     bool free_tmpbuf = false;
 
     size_t tmpbuf_size;
-    if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+    if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
         tmpbuf_size = count*dtsize;
     }else{
         // Since data might be written to a given rank in a different order 
@@ -451,7 +451,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             }
             for(size_t step = 0; step < (uint) num_steps_virtual; step++){  
                 size_t offset_port_tmpbuf;
-                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
                     offset_port_tmpbuf = offset_port;                    
                 }else{
                     offset_port_tmpbuf = offset_port*this->num_steps + step*count_port*dtsize;
@@ -478,7 +478,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
 
                 size_t issued_sends = 0, issued_recvs = 0;
 
-                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
                     // Do a 0-byte put to notify I am ready to recv
                     swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, 0, rmt_addr, step);                    
                     ++issued_sends;

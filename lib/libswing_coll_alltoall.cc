@@ -104,7 +104,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall_utofu (bookeeping and copies)");
         uint peer;
-        if(env.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.distance_type_alltoall == SWING_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - step - 1];
         }else{          
             peer = peers[port][step];

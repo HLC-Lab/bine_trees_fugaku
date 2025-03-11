@@ -41,7 +41,7 @@ static int get_distance_sign(size_t rank, size_t port, size_t dimensions_num){
     return multiplier;
 }
 
-static int get_mirroring_port(int num_ports, uint dimensions_num){
+int get_mirroring_port(int num_ports, uint dimensions_num){
     int p = -1;
     for(size_t p = 0; p < num_ports; p++){
         if(is_mirroring_port(p, dimensions_num)){
