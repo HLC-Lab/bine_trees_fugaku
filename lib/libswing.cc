@@ -682,6 +682,7 @@ static int reducescatter_algo_supported(Algo algo, size_t count){
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    // TODO: Actually there are assumption of it being a reduce_scatter_block, so we need to fix that
     read_env(comm);
     if(/*disable_reducescatter || */ algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
@@ -737,9 +738,9 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             
             int res;
             if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
-                res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, count, my_offset, recvcounts[swing_common->get_rank()], datatype, op, blocks_info, comm);
+                res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, datatype, op, blocks_info, comm);
             }else{
-                res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, count, my_offset, recvcounts[swing_common->get_rank()], datatype, op, blocks_info, comm);
+                res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, datatype, op, blocks_info, comm);
             }        
 
             // Free blocks_info

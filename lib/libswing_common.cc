@@ -3820,11 +3820,11 @@ int SwingCommon::swing_allgather_mpi(const void *sendbuf, int sendcount, MPI_Dat
     }
 }
 
-int SwingCommon::swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     ;
 }
 
-int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, int counttt, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_reduce_scatter_utofu_contiguous (init)");
     Timer timer("swing_reduce_scatter_utofu_contiguous (init)");
@@ -3983,16 +3983,16 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 #endif 
 }
 
-int SwingCommon::swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     if(is_power_of_two(this->size)){
-        return swing_reduce_scatter_utofu_contiguous(sendbuf, recvbuf, count, my_offset, my_count, datatype, op, blocks_info, comm);
+        return swing_reduce_scatter_utofu_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }else{
-        return swing_reduce_scatter_utofu_blocks(sendbuf, recvbuf, count, my_offset, my_count, datatype, op, blocks_info, comm);
+        return swing_reduce_scatter_utofu_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }
 }
 
 
-int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(this->num_ports) + "/master.profile", "= swing_reduce_scatter_mpi_contiguous (init)");
     Timer timer("swing_reduce_scatter_mpi_contiguous (init)");
     int dtsize;
@@ -4033,12 +4033,8 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
         swing_tree_t tree = get_tree(this->rank, port, algo, distance_type, this->scc_real);
 
-        size_t offset_port = tmpbuf_send_size / this->num_ports * port;
-        size_t offset_port_recv = tmpbuf_recv_size / this->num_ports * port;
-
-        DPRINTF("Offset_port_recv %d: %d\n", port, offset_port_recv);
+        size_t offset_port = tmpbuf_size / this->num_ports * port;
         DPRINTF("Offset_port %d: %d\n", port, offset_port);
-
         char* tmpbuf_send_port = tmpbuf_send + offset_port;
 
         timer.reset("= swing_reduce_scatter_mpi_contiguous (permute)");    
@@ -4090,14 +4086,14 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
     return res;
 }
 
-int SwingCommon::swing_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     ;
 }
 
-int SwingCommon::swing_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, int count, size_t my_offset, size_t my_count, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     if(is_power_of_two(this->size)){
-        return swing_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, count, my_offset, my_count, datatype, op, blocks_info, comm);
+        return swing_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }else{
-        return swing_reduce_scatter_mpi_blocks(sendbuf, recvbuf, count, my_offset, my_count, datatype, op, blocks_info, comm);
+        return swing_reduce_scatter_mpi_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }
 }
