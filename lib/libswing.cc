@@ -702,7 +702,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
                 blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
             }
             size_t count_so_far = 0;
-            size_t my_offset = 0;
+            //size_t my_offset = 0;
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
@@ -720,9 +720,9 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
                     DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
                 }
 
-                if(i == (size_t) swing_common->get_rank()){
-                    my_offset = block_offset;
-                }
+                //if(i == (size_t) swing_common->get_rank()){
+                //    my_offset = block_offset;
+                //}
 
                 count_so_far += recvcounts[i];
             }
@@ -876,7 +876,9 @@ int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     }else if(algo == ALGO_BRUCK){
         return swing_common->bruck_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);        
     }else if(algo == ALGO_SWING_L){
-        return swing_common->swing_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);        
+        return swing_common->swing_alltoall_mpi(sendbuf, recvbuf, sendcount, sendtype, comm);        
+    }else if(algo == ALGO_SWING_L_UTOFU){
+        return swing_common->swing_alltoall_utofu(sendbuf, recvbuf, sendcount, sendtype, comm);        
     }
     return MPI_ERR_OTHER;
 }
