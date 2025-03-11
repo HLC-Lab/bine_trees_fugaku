@@ -141,7 +141,6 @@ static inline void read_env(MPI_Comm comm){
             }
         }
 
-        char* prealloc_buf = NULL;
         if(env.prealloc_size){
             posix_memalign((void**) &env.prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, env.prealloc_size);
         }

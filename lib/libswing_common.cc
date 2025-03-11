@@ -670,7 +670,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             timer.reset("= swing_coll_l_utofu (utofu buf reg)");        
             swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
             timer.reset("= swing_coll_l_utofu (utofu buf reorg)");       
-            for(size_t i = 0; i < num_ports; i++){
+            for(size_t i = 0; i < env.num_ports; i++){
                 this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             }
         }
@@ -1362,8 +1362,8 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);  
     size_t max_count;
-    if(coll_type == SWING_REDUCE_SCATTER && this->segment_size){
-        max_count = floor(this->segment_size / dtsize);
+    if(coll_type == SWING_REDUCE_SCATTER && env.segment_size){
+        max_count = floor(env.segment_size / dtsize);
     }else{
         max_count = floor(MAX_PUTGET_SIZE / dtsize);
     }
@@ -1807,7 +1807,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             timer.reset("= swing_coll_b (utofu buf reg)");        
             swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
             // Tempbuf not registered, so add it manually
-            for(size_t i = 0; i < num_ports; i++){
+            for(size_t i = 0; i < env.num_ports; i++){
                 this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
             }
             timer.reset("= swing_coll_b (utofu buf exch)");           
@@ -2084,8 +2084,8 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
     size_t max_count;
-    if(this->segment_size){
-        max_count = floor(this->segment_size / dtsize);
+    if(env.segment_size){
+        max_count = floor(env.segment_size / dtsize);
     }else{
         max_count = floor(MAX_PUTGET_SIZE / dtsize);
     }    
@@ -2096,7 +2096,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     char use_tmpbuf = 0;
     // For small messages we do everything in the known temp buffer to avoid exchanging information
     // about STADDs and to avoid registering the buffer.
-    if(count*dtsize <= bcast_tmp_threshold){
+    if(count*dtsize <= env.bcast_tmp_threshold){
         assert(tmpbuf_size <= env.prealloc_size); // I do not want to complicate the code too much so I assume the preallocated buffer is large enough
         tmpbuf = env.prealloc_buf;
         use_tmpbuf = 1;
@@ -2119,13 +2119,13 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
 
     if(use_tmpbuf){
         // Store the lcl_recv_stadd and rmt_recv_buffer STADD of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_recv_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_recv_stadd = lcl_temp_stadd[i];
         }
     }else{
         timer.reset("= swing_bcast_l (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions
@@ -2168,7 +2168,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
         }
-        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, this->algo, true);
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.algo, true);
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 
@@ -2585,7 +2585,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
 
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, count*dtsize*size, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_alltoall_utofu (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -2611,7 +2611,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
         tmpbuf = env.prealloc_buf + tmpbuf_offset;
 
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
@@ -2657,7 +2657,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
             uint remap_block = tree.remapped_ranks[block];
             size_t offset = i*count*dtsize;
             
-            if(i > this->size / 2){
+            if(i >= this->size / 2){
                 offset += tmpbuf_step_offset;
             }
 
@@ -2910,7 +2910,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_scatter_utofu (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -2932,7 +2932,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
@@ -3174,7 +3174,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_gather_utofu (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -3196,7 +3196,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
@@ -3439,7 +3439,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_reduce_utofu (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -3460,7 +3460,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
         swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
@@ -3720,7 +3720,7 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_allgather_utofu_contiguous (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -3742,7 +3742,7 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
@@ -4059,7 +4059,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf exch)");           
-        if(utofu_add_ag){
+        if(env.utofu_add_ag){
             swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
@@ -4081,7 +4081,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
-        for(size_t i = 0; i < num_ports; i++){
+        for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
