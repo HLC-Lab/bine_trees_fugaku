@@ -2561,23 +2561,30 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     MPI_Comm_size(comm, &size);
     MPI_Type_size(datatype, &dtsize);
     char* tmpbuf;
-    bool free_tmpbuf = false;
+    char* scratch = NULL;
 
     uint* resident_block;  // resident_block[i] contains the id of a block that is resident in the current rank (for i < num_resident_blocks)
     uint* resident_block_next;  // resident_block_next[i] contains the id of a block that is resident in the current rank in the next step (for i < num_resident_blocks_next)
     size_t num_resident_blocks = size;
     size_t num_resident_blocks_next = 0;
-    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size;
+    size_t tmpbuf_size = count*dtsize*size;
+    if(count*dtsize <= SWING_ALLTOALL_NOSYNC_THRESHOLD){
+        tmpbuf_size += (size/2)*count*dtsize*(this->num_steps - 1);
+    }
+    size_t scratch_size = sizeof(uint)*size + sizeof(uint)*size + tmpbuf_size;
+    size_t tmpbuf_offset = 0;
+
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*this->num_ports);
 
     timer.reset("= swing_alltoall_utofu (utofu buf reg)"); 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
-    if(tmpbuf_size > prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
-        resident_block = (uint*) malloc(sizeof(uint)*size);
-        resident_block_next = (uint*) malloc(sizeof(uint)*size);
-        free_tmpbuf = true;
+    if(scratch_size > prealloc_size){
+        posix_memalign((void**) &scratch, LIBSWING_TMPBUF_ALIGNMENT, scratch_size);
+        resident_block = (uint*) (scratch);
+        resident_block_next = (uint*) (scratch + sizeof(uint)*size);
+        tmpbuf = scratch + sizeof(uint)*size + sizeof(uint)*size;
+
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, count*dtsize*size, tmpbuf, tmpbuf_size, this->num_ports); 
         timer.reset("= swing_alltoall_utofu (utofu buf exch)");           
         if(utofu_add_ag){
@@ -2600,9 +2607,11 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     }else{
         // Everything to 0/NULL just to initialize the internal status.
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, count*dtsize*size, NULL, 0, this->num_ports); 
-        tmpbuf = prealloc_buf;
-        resident_block = (uint*) (tmpbuf + count*dtsize*size);
-        resident_block_next = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size);
+        resident_block = (uint*) (prealloc_buf);
+        resident_block_next = (uint*) (prealloc_buf + sizeof(uint)*size);
+        tmpbuf_offset = sizeof(uint)*size + sizeof(uint)*size;
+        tmpbuf = prealloc_buf + tmpbuf_offset;
+
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
@@ -2629,6 +2638,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
 
     // We use recvbuf to receive/send the data, and tmpbuf to organize the data to send at the next step
     // By doing so, we avoid a copy form tmpbuf to recvbuf at the end
+    size_t tmpbuf_step_offset = 0;
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall_utofu (bookeeping and copies)");
         uint peer;
@@ -2649,16 +2659,18 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
             uint remap_block = tree.remapped_ranks[block];
             size_t offset = i*count*dtsize;
             
+            if(i > this->size / 2){
+                offset += tmpbuf_step_offset;
+            }
+
             // I move to the beginning of tmpbuf the blocks I want to keep,
             // and I move to recvbuf the blocks I want to send.
             if(remap_block >= min_block_s && remap_block <= max_block_s){                
-                DPRINTF("[%d] Step %d (send) copying from offset %d to %d [%u]\n", rank, step, offset, offset_send, ((char*) tmpbuf)[offset]);
                 memcpy((char*) recvbuf + offset_send, tmpbuf + offset, count*dtsize);
                 offset_send += count*dtsize;                
                 block_send_cnt++;
             }else{
                 // Copy the blocks we are not sending to the second half of recvbuf
-                DPRINTF("[%d] Step %d (keep) copying from offset %d to %d [%u]\n", rank, step, offset, offset_keep, ((char*) tmpbuf)[offset]);
                 if(offset != offset_keep){
                     memcpy(tmpbuf + offset_keep, tmpbuf + offset, count*dtsize);
                 }
@@ -2676,10 +2688,10 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
 
         timer.reset("= swing_alltoall_utofu (sendrecv)");
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd;
-        utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + (size / 2)*count*dtsize;
+        utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_offset + (size/2)*count*dtsize + tmpbuf_step_offset;
 
         size_t issued_sends = 0, issued_recvs = 0;
-        if(/* count*dtsize >= SWING_REDUCE_NOSYNC_THRESHOLD */ 1){ // TODO
+        if(count*dtsize > SWING_ALLTOALL_NOSYNC_THRESHOLD){ 
             // Do a 0-byte put to notify I am ready to recv
             swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);                    
             ++issued_sends;
@@ -2687,7 +2699,10 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
             // Do a 0-byte recv to check if the peer is ready to recv
             swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
             ++issued_recvs;
+        }else{
+            tmpbuf_step_offset += (size/2)*count*dtsize;            
         }
+        
 
         swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count*block_send_cnt*dtsize, rmt_addr, step); 
         ++issued_sends;
@@ -2724,10 +2739,8 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     destroy_tree(&perm_tree);
     
     timer.reset("= swing_alltoall_utofu (dealloc)");
-    if(free_tmpbuf){
-        free(tmpbuf);
-        free(resident_block);
-        free(resident_block_next);
+    if(scratch){
+        free(scratch);
     }
     free(peers[port]);
     destroy_tree(&tree);
