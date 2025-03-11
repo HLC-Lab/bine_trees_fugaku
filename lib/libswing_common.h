@@ -72,6 +72,20 @@ typedef struct{
     size_t count;
 }BlockInfo;
 
+typedef struct {
+    uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    uint dimensions_num;
+    Algo algo;
+    uint num_ports;
+    uint segment_size;
+    size_t prealloc_size;
+    char* prealloc_buf;
+    int utofu_add_ag;
+    size_t bcast_tmp_threshold;
+    swing_distance_type_t distance_type;
+} swing_env_t;
+
+
 //#define PERF_DEBUGGING 
 //#define ACTIVE_WAIT
 
@@ -244,27 +258,18 @@ class SwingBitmapCalculator {
 
 class SwingCommon {
     private:
+        swing_env_t env;
         uint size;
-        int rank;
-        uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        uint dimensions_virtual[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // Used when we shrink torus with non-power of 2 size // TODO: Rename as dimensions_lower_p2
-        uint dimensions_num;
-        Algo algo; 
-        uint num_ports; 
-        uint segment_size;
+        int rank;        
         bool all_p2_dimensions; // True if all the dimensions are power of 2
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
+        uint dimensions_virtual[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // Used when we shrink torus with non-power of 2 size // TODO: Rename as dimensions_lower_p2
+        uint* virtual_peers[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
+        size_t num_steps_virtual;
         SwingCoordConverter* scc_real;
         SwingCoordConverter* scc_virtual;
         SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
-        uint* virtual_peers[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
-        size_t num_steps_virtual;
-        size_t prealloc_size;
-        char* prealloc_buf;
-        int utofu_add_ag;
-        size_t bcast_tmp_threshold;
-        swing_distance_type_t distance_type;
 #ifdef FUGAKU
         swing_utofu_comm_descriptor* utofu_descriptor;
         utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
@@ -377,19 +382,13 @@ class SwingCommon {
     public:
         // Constructor
         // @param comm (IN): the communicator
-        // @param dimensions (IN): the dimensions of the torus
-        // @param dimensions_num (IN): the number of dimensions
-        // @param algo (IN): the algorithm to use
-        // @param num_ports (IN): the number of ports
-        // @param segment_size (IN): in allreduce and reducescatter, each send is segmented in blocks of at most this size 
-        // @param prealloc_size (IN): the size of the preallocated buffer
-        // @param prealloc_buf (IN): the preallocated buffer
-        SwingCommon(MPI_Comm comm, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, Algo algo, uint num_ports, uint segment_size, size_t prealloc_size, char* prealloc_buf, int utofu_add_ag, size_t bcast_tmp_threshold, swing_distance_type_t distance_type);
+        // @param env (IN): the environment
+        SwingCommon(MPI_Comm comm, swing_env_t env);
 
         // Destructor
         ~SwingCommon();
 
-        uint get_num_ports(){return num_ports;}
+        uint get_num_ports(){return env.num_ports;}
         uint get_size(){return size;}
         uint get_rank(){return rank;}
 

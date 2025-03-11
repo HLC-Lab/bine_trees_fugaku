@@ -19,20 +19,9 @@
 #include <omp.h>
 #include "libswing_common.h"
 
-typedef struct{
-    int rank;
-    int size;
-    int dtsize;
-    int num_steps;
-    size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    uint num_ports;
-    size_t num_chunks;
-}SwingInfo;
-
 static int force_env_reload = 1, env_read = 0;
-
 static SwingCommon* swing_common = NULL;
-static Algo algo = ALGO_DEFAULT;
+static swing_env_t env;
 
 static inline void read_env(MPI_Comm comm){
     char* env_str = getenv("LIBSWING_FORCE_ENV_RELOAD");
@@ -45,36 +34,40 @@ static inline void read_env(MPI_Comm comm){
     if(!env_read || force_env_reload){
         env_read = 1;
 
-        unsigned int dimensions_num = 1, segment_size = 0, utofu_add_ag = 0, bcast_tmp_threshold = 0; 
-        swing_distance_type_t distance_type = SWING_DISTANCE_INCREASING;
-        uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        int num_ports = 1;
-        size_t prealloc_size = 0;
-        
         env_str = getenv("LIBSWING_SEGMENT_SIZE");
         if(env_str){
-            segment_size = atoi(env_str);
+            env.segment_size = atoi(env_str);
+        }else{
+            env.segment_size = 0;
         }
 
         env_str = getenv("LIBSWING_NUM_PORTS");
         if(env_str){
-            num_ports = atoi(env_str);
+            env.num_ports = atoi(env_str);
+        }else{
+            env.num_ports = 1;
         }
-        assert(num_ports <= LIBSWING_MAX_SUPPORTED_PORTS);
+        assert(env.num_ports <= LIBSWING_MAX_SUPPORTED_PORTS);
 
         env_str = getenv("LIBSWING_PREALLOC_SIZE");
         if(env_str){
-            prealloc_size = atoi(env_str);
+            env.prealloc_size = atoi(env_str);
+        }else{
+            env.prealloc_size = 0;
         }
 
         env_str = getenv("LIBSWING_UTOFU_ADD_AG");
         if(env_str){
-            utofu_add_ag = atoi(env_str);
+            env.utofu_add_ag = atoi(env_str);
+        }else{
+            env.utofu_add_ag = 0;
         }
 
         env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
         if(env_str){
-            bcast_tmp_threshold = atoi(env_str);
+            env.bcast_tmp_threshold = atoi(env_str);
+        }else{
+            env.bcast_tmp_threshold = 0;
         }
 
         env_str = getenv("LIBSWING_DIMENSIONS");
@@ -86,59 +79,62 @@ static inline void read_env(MPI_Comm comm){
             char *ptr = strtok_r(copy, delim, &rest);
             uint i = 0;
             while(ptr != NULL){
-                dimensions[i] = atoi(ptr);
+                env.dimensions[i] = atoi(ptr);
                 ptr = strtok_r(NULL, delim, &rest);
                 ++i;
             } 
             free(copy);
-            dimensions_num = i;       
+            env.dimensions_num = i;       
         }else{
             int size;
             MPI_Comm_size(comm, &size);
-            dimensions[0] = size;
+            env.dimensions[0] = size;
+            env.dimensions_num = 1;
         }
-        assert(dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
+        assert(env.dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
 
         env_str = getenv("LIBSWING_BIN_TREE_DISTANCE");
         if(env_str){
             if(strcmp(env_str, "INCREASING") == 0){
-                distance_type = SWING_DISTANCE_INCREASING;
+                env.distance_type = SWING_DISTANCE_INCREASING;
             }else{
-                distance_type = SWING_DISTANCE_DECREASING;
+                env.distance_type = SWING_DISTANCE_DECREASING;
             }
+        }else{
+            env.distance_type = SWING_DISTANCE_INCREASING;
         }
 
         env_str = getenv("LIBSWING_ALGO");
         if(env_str){
             if(strcmp(env_str, "DEFAULT") == 0){
-                algo = ALGO_DEFAULT;
+                env.algo = ALGO_DEFAULT;
             }else if(strcmp(env_str, "SWING_L") == 0){
-                algo = ALGO_SWING_L;
+                env.algo = ALGO_SWING_L;
             }else if(strcmp(env_str, "SWING_L_UTOFU") == 0){
-                algo = ALGO_SWING_L_UTOFU;
+                env.algo = ALGO_SWING_L_UTOFU;
             }else if(strcmp(env_str, "SWING_B") == 0){
-                algo = ALGO_SWING_B;
+                env.algo = ALGO_SWING_B;
             }else if(strcmp(env_str, "SWING_B_COALESCE") == 0){
-                algo = ALGO_SWING_B_COALESCE;
+                env.algo = ALGO_SWING_B_COALESCE;
             }else if(strcmp(env_str, "SWING_B_CONT") == 0){
-                algo = ALGO_SWING_B_CONT;
+                env.algo = ALGO_SWING_B_CONT;
             }else if(strcmp(env_str, "SWING_B_UTOFU") == 0){
-                algo = ALGO_SWING_B_UTOFU;
+                env.algo = ALGO_SWING_B_UTOFU;
             }else if(strcmp(env_str, "RING") == 0){
-                algo = ALGO_RING;
-                assert(dimensions_num == 1 && num_ports == 1);
+                env.algo = ALGO_RING;
+                assert(env.dimensions_num == 1 && env.num_ports == 1);
             }else if(strcmp(env_str, "RECDOUB_L") == 0){
-                algo = ALGO_RECDOUB_L;
-                assert(dimensions_num == 1 && num_ports == 1);
+                env.algo = ALGO_RECDOUB_L;
+                assert(env.dimensions_num == 1 && env.num_ports == 1);
             }else if(strcmp(env_str, "RECDOUB_B") == 0){
-                algo = ALGO_RECDOUB_B;
-                assert(dimensions_num == 1 && num_ports == 1);
+                env.algo = ALGO_RECDOUB_B;
+                assert(env.dimensions_num == 1 && env.num_ports == 1);
             }else if(strcmp(env_str, "RECDOUB_L_UTOFU") == 0){
-                algo = ALGO_RECDOUB_L_UTOFU;
+                env.algo = ALGO_RECDOUB_L_UTOFU;
             }else if(strcmp(env_str, "RECDOUB_B_UTOFU") == 0){
-                algo = ALGO_RECDOUB_B_UTOFU;
+                env.algo = ALGO_RECDOUB_B_UTOFU;
             }else if(strcmp(env_str, "BRUCK") == 0){
-                algo = ALGO_BRUCK;
+                env.algo = ALGO_BRUCK;
             }else{
                 fprintf(stderr, "Unknown LIBSWING_ALGO\n");
                 exit(-1);
@@ -146,13 +142,14 @@ static inline void read_env(MPI_Comm comm){
         }
 
         char* prealloc_buf = NULL;
-        if(prealloc_size){
-            posix_memalign((void**) &prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, prealloc_size);
+        if(env.prealloc_size){
+            posix_memalign((void**) &env.prealloc_buf, LIBSWING_TMPBUF_ALIGNMENT, env.prealloc_size);
         }
 
-        swing_common = new SwingCommon(comm, dimensions, dimensions_num, algo, num_ports, segment_size, prealloc_size, prealloc_buf, utofu_add_ag, bcast_tmp_threshold, distance_type);
+        swing_common = new SwingCommon(comm, env);
 
 #ifdef DEBUG
+        // TODO: Dump env
         int rank;
         MPI_Comm_rank(comm, &rank);
         if(rank == 0){
@@ -615,10 +612,10 @@ static inline BlockInfo** get_blocks_info(size_t count, SwingCommon* swing_commo
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(/*disable_allreduce || */ algo == ALGO_DEFAULT){
+    if(/*disable_allreduce || */ env.algo == ALGO_DEFAULT){
         return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
     }else{        
-        if(algo == ALGO_SWING_L || algo == ALGO_SWING_L_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
+        if(env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
@@ -629,7 +626,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             }
             free(blocks_info);
             return res;
-        }else if(algo == ALGO_SWING_B || algo == ALGO_SWING_B_CONT || algo == ALGO_SWING_B_COALESCE || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
+        }else if(env.algo == ALGO_SWING_B || env.algo == ALGO_SWING_B_CONT || env.algo == ALGO_SWING_B_COALESCE || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
             int dtsize;
             MPI_Type_size(datatype, &dtsize);
             BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
@@ -640,13 +637,13 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             }
             free(blocks_info);
             return res;
-        }else if(algo == ALGO_RING){ // Ring
+        }else if(env.algo == ALGO_RING){ // Ring
             // TODO: Implement multiported ring
             return MPI_Allreduce_ring((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
-        }else if(algo == ALGO_RECDOUB_B){ // Recdoub_b
+        }else if(env.algo == ALGO_RECDOUB_B){ // Recdoub_b
             // TODO: Implement multiported ring
             return MPI_Allreduce_recdoub_b((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
-        }else if(algo == ALGO_RECDOUB_L){ // Recdoub_l
+        }else if(env.algo == ALGO_RECDOUB_L){ // Recdoub_l
             // TODO: Implement multiported ring
             return MPI_Allreduce_recdoub_l((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         }else{
@@ -662,20 +659,20 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
  * first by block, and then by port (rather than the other way around like in allreduce).
  */
 static int reducescatter_algo_supported(Algo algo, size_t count){
-    if(algo == ALGO_SWING_B){
+    if(env.algo == ALGO_SWING_B){
         if(count >= (size_t) swing_common->get_size()){
             return 1;
         }else{
             return 0;
         }
-    }else if(algo == ALGO_SWING_B_COALESCE && swing_common->get_num_ports() == 1){
+    }else if(env.algo == ALGO_SWING_B_COALESCE && swing_common->get_num_ports() == 1){
         if(count >= (size_t) swing_common->get_size()){
             return 1;
         }else{
             return 0;
         }
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
-        algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
+        env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
          return 1;
     }
     return 0;
@@ -684,7 +681,7 @@ static int reducescatter_algo_supported(Algo algo, size_t count){
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     // TODO: Actually there are assumption of it being a reduce_scatter_block, so we need to fix that
     read_env(comm);
-    if(/*disable_reducescatter || */ algo == ALGO_DEFAULT){
+    if(/*disable_reducescatter || */ env.algo == ALGO_DEFAULT){
         return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
     }else{  
         size_t count = 0;
@@ -692,7 +689,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             count += recvcounts[i];
         }
 
-        if(reducescatter_algo_supported(algo, count)){            
+        if(reducescatter_algo_supported(env.algo, count)){            
             // For reduce-scatter we do not do chunking (would complicate things too much). 
             // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
             // This is the opposite of what we do in allreduce.
@@ -737,7 +734,7 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             //free(tmpbuf);
             
             int res;
-            if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+            if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
                 res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, datatype, op, blocks_info, comm);
             }else{
                 res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, datatype, op, blocks_info, comm);
@@ -762,8 +759,8 @@ static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Dataty
         return 0;
     }
 
-    if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
-       algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+    if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
+       env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
         return 1;
     }
     return 0;
@@ -788,10 +785,10 @@ int MPI_Finalize(void){
 
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(/*disable_reducescatter || */ algo == ALGO_DEFAULT){
+    if(/*disable_reducescatter || */ env.algo == ALGO_DEFAULT){
         return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
     }else{  
-        if(allgather_algo_supported(algo, sendtype, recvtype, sendcount, recvcount)){
+        if(allgather_algo_supported(env.algo, sendtype, recvtype, sendcount, recvcount)){
             // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
             // This is the opposite of what we do in allreduce.
             // Allocate blocks_info
@@ -830,7 +827,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
             int res;
             //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);            
             
-            if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+            if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
                 res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
             }else{
                 res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
@@ -851,16 +848,16 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
 int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root, 
                MPI_Comm comm ){
     read_env(comm);
-    if(algo == ALGO_DEFAULT){
+    if(env.algo == ALGO_DEFAULT){
         return PMPI_Bcast(buffer, count, datatype, root, comm);
     }else{        
-        if(algo == ALGO_SWING_L){
+        if(env.algo == ALGO_SWING_L){
             return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);
-        }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_RECDOUB_L_UTOFU){ // Swing_l 
+        }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU){ // Swing_l 
             return swing_common->swing_bcast_l(buffer, count, datatype, root, comm);
-        }else if(algo == ALGO_SWING_B){
+        }else if(env.algo == ALGO_SWING_B){
             return swing_common->swing_bcast_b_mpi(buffer, count, datatype, root, comm);
-        }else if(algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
+        }else if(env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
             return swing_common->swing_bcast_b(buffer, count, datatype, root, comm);
         }else{
             return 1;
@@ -871,13 +868,13 @@ int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root,
 int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                  void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(algo == ALGO_DEFAULT){
+    if(env.algo == ALGO_DEFAULT){
         return PMPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-    }else if(algo == ALGO_BRUCK){
+    }else if(env.algo == ALGO_BRUCK){
         return swing_common->bruck_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);        
-    }else if(algo == ALGO_SWING_L){
+    }else if(env.algo == ALGO_SWING_L){
         return swing_common->swing_alltoall_mpi(sendbuf, recvbuf, sendcount, sendtype, comm);        
-    }else if(algo == ALGO_SWING_L_UTOFU){
+    }else if(env.algo == ALGO_SWING_L_UTOFU){
         return swing_common->swing_alltoall_utofu(sendbuf, recvbuf, sendcount, sendtype, comm);        
     }
     return MPI_ERR_OTHER;
@@ -887,10 +884,10 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                 void *recvbuf, int recvcount, MPI_Datatype recvtype, int root,
                 MPI_Comm comm){    
     read_env(comm);
-    if(algo == ALGO_DEFAULT){
+    if(env.algo == ALGO_DEFAULT){
         return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
-             algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
+             env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
         // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
         // This is the opposite of what we do in allreduce.
         // Allocate blocks_info
@@ -922,7 +919,7 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
 
         DPRINTF("Calling scatter.\n");
         int res = MPI_SUCCESS;
-        if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+        if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
             res = swing_common->swing_scatter_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
         }else{
             res = swing_common->swing_scatter_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
@@ -943,10 +940,10 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                 void *recvbuf, int recvcount, MPI_Datatype recvtype, int root,
                 MPI_Comm comm){    
     read_env(comm);
-    if(algo == ALGO_DEFAULT){
+    if(env.algo == ALGO_DEFAULT){
         return PMPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU || \
-             algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
+             env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
         // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
         // This is the opposite of what we do in allreduce.
         // Allocate blocks_info
@@ -977,7 +974,7 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
         }
 
         int res = MPI_SUCCESS;
-        if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+        if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
             res = swing_common->swing_gather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
         }else{
             res = swing_common->swing_gather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
@@ -996,11 +993,11 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
 int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
                MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
     read_env(comm);
-    if(algo == ALGO_DEFAULT){
+    if(env.algo == ALGO_DEFAULT){
         return PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm);
-    }else if(algo == ALGO_SWING_L_UTOFU || algo == ALGO_SWING_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
         return swing_common->swing_reduce_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
-    }else if(algo == ALGO_SWING_L || algo == ALGO_SWING_B || algo == ALGO_RECDOUB_L || algo == ALGO_RECDOUB_B){
+    }else if(env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
         return swing_common->swing_reduce_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
     }
     return MPI_ERR_OTHER;
