@@ -60,14 +60,14 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
@@ -91,10 +91,10 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
+            compute_peers(this->rank, port, env.algo_family, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_scatter_utofu_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_reduce_scatter, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
 
         size_t offset_port = tmpbuf_send_size / env.num_ports * port;
         size_t offset_port_recv = tmpbuf_recv_size / env.num_ports * port;
@@ -120,7 +120,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         size_t offset_step_recv = 0; // This is used so that each step writes at a different location in tmpbuf_recv
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.distance_type_reduce_scatter == SWING_DISTANCE_DECREASING){
+            if(env.reduce_scatter_config.distance_type == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -221,10 +221,10 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, port, env.algo, this->scc_real, peers[port]);
+            compute_peers(this->rank, port, env.reduce_scatter_config.algo_family, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.algo, env.distance_type_reduce_scatter, this->scc_real);
+        swing_tree_t tree = get_tree(this->rank, port, env.reduce_scatter_config.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
 
         size_t offset_port = tmpbuf_size / env.num_ports * port;
         DPRINTF("Offset_port %d: %d\n", port, offset_port);
@@ -244,7 +244,7 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         // Now perform all the subsequent steps            
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.distance_type_reduce_scatter == SWING_DISTANCE_DECREASING){
+            if(env.reduce_scatter_config.distance_type == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];

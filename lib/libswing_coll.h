@@ -17,9 +17,9 @@ int ceil_log2(unsigned long long x);
 int mod(int a, int b);
 int is_power_of_two(int x);
 
-void compute_peers(uint rank, int port, Algo algo, SwingCoordConverter* scc, uint* peers);
+void compute_peers(uint rank, int port, swing_algo_family_t algo, SwingCoordConverter* scc, uint* peers);
 
-void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, Algo algo);
+void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo);
 
 int get_mirroring_port(int num_ports, uint dimensions_num);
 
@@ -32,7 +32,7 @@ int get_mirroring_port(int num_ports, uint dimensions_num);
  * @param scc (IN) The SwingCoordConverter object
  * @return A swing_tree_t object
  */
-swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc);
+swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc);
 void destroy_tree(swing_tree_t* tree);
 
 void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op);

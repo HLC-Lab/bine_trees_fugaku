@@ -14,7 +14,7 @@
 
 // TODO: Rely on trees as for the other collectives.
 
-static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, Algo algo, SwingCoordConverter* scc, bool allgather_schedule){
+static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, swing_algo_family_t algo, SwingCoordConverter* scc, bool allgather_schedule){
     for(size_t i = step; i < num_steps; i++){
         int real_step;
         if(allgather_schedule){
@@ -34,7 +34,7 @@ static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_
     }
 }
 
-static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, Algo algo, bool allgather_schedule){
+static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo, bool allgather_schedule){
     SwingCoordConverter scc(dimensions, dimensions_num);
     dfs_reversed(coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule);
     parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
@@ -60,7 +60,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     char use_tmpbuf = 0;
     // For small messages we do everything in the known temp buffer to avoid exchanging information
     // about STADDs and to avoid registering the buffer.
-    if(count*dtsize <= env.bcast_tmp_threshold){
+    if(count*dtsize <= env.bcast_config.tmp_threshold){ // TODO: Do it in the same way we do for the other collectives.
         assert(tmpbuf_size <= env.prealloc_size); // I do not want to complicate the code too much so I assume the preallocated buffer is large enough
         tmpbuf = env.prealloc_buf;
         use_tmpbuf = 1;
@@ -76,7 +76,6 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, env.num_ports); 
         }                
     }
-
 
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
@@ -95,14 +94,14 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             // TODO: Probably need to do this for all the ports for torus with different dimensions
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }        
@@ -117,7 +116,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, p, env.algo, this->scc_real, peers[p]);
+            compute_peers(this->rank, p, env.algo_family, this->scc_real, peers[p]);
         }        
         timer.reset("= swing_bcast_l (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -132,7 +131,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
         }
-        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.algo, true);
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.algo_family, true);
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 
@@ -218,7 +217,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Type_size(datatype, &dtsize);    
     
     uint* peers = (uint*) malloc(sizeof(uint)*this->num_steps);
-    compute_peers(this->rank, 0, env.algo, this->scc_real, peers);
+    compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers);
 
     // Not actually needed, is just to use the get_peer, should be refactored
     int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -235,7 +234,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
         reached_at_step[i] = this->num_steps;
         parent[i] = UINT32_MAX;
     }
-    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, env.dimensions_num, env.dimensions, env.algo, true);
+    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true);
     int receiving_step = reached_at_step[this->rank];
     int peer;
     if(root != this->rank){        

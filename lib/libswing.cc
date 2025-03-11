@@ -26,21 +26,49 @@ static swing_env_t env;
 static void init_env(swing_env_t* env, MPI_Comm comm){
     MPI_Comm_size(comm, (int*) &(env->dimensions[0]));
     env->dimensions_num = 1;
-    env->algo = ALGO_DEFAULT;
     env->num_ports = 1;
     env->segment_size = 0;
     env->prealloc_size = 0;
     env->prealloc_buf = NULL;
     env->utofu_add_ag = 0;
-    env->bcast_tmp_threshold = 0;
-    env->distance_type_allreduce = SWING_DISTANCE_INCREASING;
-    env->distance_type_allgather = SWING_DISTANCE_DECREASING;
-    env->distance_type_reduce_scatter = SWING_DISTANCE_INCREASING;
-    env->distance_type_bcast = SWING_DISTANCE_DECREASING;
-    env->distance_type_alltoall = SWING_DISTANCE_INCREASING;
-    env->distance_type_scatter = SWING_DISTANCE_DECREASING;
-    env->distance_type_gather = SWING_DISTANCE_DECREASING;
-    env->distance_type_reduce = SWING_DISTANCE_INCREASING;
+
+    env->allreduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->allgather_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->bcast_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->alltoall_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->scatter_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->gather_config.algo_family = SWING_ALGO_FAMILY_SWING;
+    env->reduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
+
+    env->allreduce_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->allgather_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->reduce_scatter_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->bcast_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->alltoall_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->scatter_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->gather_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+    env->reduce_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+
+    env->allreduce_config.algo = SWING_ALLREDUCE_ALGO_B;
+    env->allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE;
+    env->reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE;
+    env->bcast_config.algo = SWING_BCAST_ALGO_BINOMIAL_TREE;
+    env->alltoall_config.algo = SWING_ALLTOALL_ALGO_LOG;
+    env->scatter_config.algo = SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
+    env->gather_config.algo = SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
+    env->reduce_config.algo = SWING_REDUCE_ALGO_BINOMIAL_TREE;
+
+    env->allreduce_config.distance_type = SWING_DISTANCE_INCREASING;
+    env->allgather_config.distance_type = SWING_DISTANCE_DECREASING;
+    env->reduce_scatter_config.distance_type = SWING_DISTANCE_INCREASING;
+    env->bcast_config.distance_type = SWING_DISTANCE_DECREASING;    
+    env->alltoall_config.distance_type = SWING_DISTANCE_INCREASING;
+    env->scatter_config.distance_type = SWING_DISTANCE_DECREASING;
+    env->gather_config.distance_type = SWING_DISTANCE_DECREASING;
+    env->reduce_config.distance_type = SWING_DISTANCE_INCREASING;
+
+    env->bcast_config.tmp_threshold = 0;
 }
 
 static inline void read_env(MPI_Comm comm){
@@ -77,11 +105,6 @@ static inline void read_env(MPI_Comm comm){
             env.utofu_add_ag = atoi(env_str);
         }
 
-        env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
-        if(env_str){
-            env.bcast_tmp_threshold = atoi(env_str);
-        }
-
         env_str = getenv("LIBSWING_DIMENSIONS");
         if(env_str){
             char* copy = (char*) malloc(sizeof(char)*(strlen(env_str) + 1));
@@ -100,113 +123,415 @@ static inline void read_env(MPI_Comm comm){
         }
         assert(env.dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
 
-        env_str = getenv("LIBSWING_DISTANCE_ALLREDUCE");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_allreduce = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_allreduce = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_ALLGATHER");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_allgather = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_allgather = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_REDUCE_SCATTER");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_reduce_scatter = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_reduce_scatter = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_BCAST");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_bcast = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_bcast = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_ALLTOALL");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_alltoall = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_alltoall = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_SCATTER");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_scatter = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_scatter = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_GATHER");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_gather = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_gather = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_DISTANCE_REDUCE");
-        if(env_str){
-            if(strcmp(env_str, "INCREASING") == 0){
-                env.distance_type_reduce = SWING_DISTANCE_INCREASING;
-            }else{
-                env.distance_type_reduce = SWING_DISTANCE_DECREASING;
-            }
-        }
-
-        env_str = getenv("LIBSWING_ALGO");
+        /****************************/
+        /* Algo family              */
+        /****************************/
+        env_str = getenv("LIBSWING_ALLREDUCE_ALGO_FAMILY");
         if(env_str){
             if(strcmp(env_str, "DEFAULT") == 0){
-                env.algo = ALGO_DEFAULT;
-            }else if(strcmp(env_str, "SWING_L") == 0){
-                env.algo = ALGO_SWING_L;
-            }else if(strcmp(env_str, "SWING_L_UTOFU") == 0){
-                env.algo = ALGO_SWING_L_UTOFU;
-            }else if(strcmp(env_str, "SWING_B") == 0){
-                env.algo = ALGO_SWING_B;
-            }else if(strcmp(env_str, "SWING_B_COALESCE") == 0){
-                env.algo = ALGO_SWING_B_COALESCE;
-            }else if(strcmp(env_str, "SWING_B_CONT") == 0){
-                env.algo = ALGO_SWING_B_CONT;
-            }else if(strcmp(env_str, "SWING_B_UTOFU") == 0){
-                env.algo = ALGO_SWING_B_UTOFU;
-            }else if(strcmp(env_str, "RING") == 0){
-                env.algo = ALGO_RING;
-                assert(env.dimensions_num == 1 && env.num_ports == 1);
-            }else if(strcmp(env_str, "RECDOUB_L") == 0){
-                env.algo = ALGO_RECDOUB_L;
-                assert(env.dimensions_num == 1 && env.num_ports == 1);
-            }else if(strcmp(env_str, "RECDOUB_B") == 0){
-                env.algo = ALGO_RECDOUB_B;
-                assert(env.dimensions_num == 1 && env.num_ports == 1);
-            }else if(strcmp(env_str, "RECDOUB_L_UTOFU") == 0){
-                env.algo = ALGO_RECDOUB_L_UTOFU;
-            }else if(strcmp(env_str, "RECDOUB_B_UTOFU") == 0){
-                env.algo = ALGO_RECDOUB_B_UTOFU;
+                env.allreduce_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.allreduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.allreduce_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
             }else if(strcmp(env_str, "BRUCK") == 0){
-                env.algo = ALGO_BRUCK;
+                env.allreduce_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.allreduce_config.algo_family = SWING_ALGO_FAMILY_RING;
             }else{
-                fprintf(stderr, "Unknown LIBSWING_ALGO\n");
-                exit(-1);
+                assert("Invalid value for LIBSWING_ALLREDUCE_ALGO_FAMILY" && 0);
             }
+        }
+
+        env_str = getenv("LIBSWING_ALLGATHER_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.allgather_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.allgather_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.allgather_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.allgather_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.allgather_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_ALLGATHER_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_SCATTER_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.reduce_scatter_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_BCAST_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.bcast_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.bcast_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.bcast_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.bcast_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.bcast_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_BCAST_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLTOALL_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.alltoall_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.alltoall_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.alltoall_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.alltoall_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.alltoall_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_ALLTOALL_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_SCATTER_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.scatter_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.scatter_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.scatter_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.scatter_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.scatter_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_SCATTER_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_GATHER_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.gather_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.gather_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.gather_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.gather_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.gather_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_GATHER_ALGO_FAMILY" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_ALGO_FAMILY");
+        if(env_str){
+            if(strcmp(env_str, "DEFAULT") == 0){
+                env.reduce_config.algo_family = SWING_ALGO_FAMILY_DEFAULT;
+            }else if(strcmp(env_str, "SWING") == 0){
+                env.reduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
+            }else if(strcmp(env_str, "RECDOUB") == 0){
+                env.reduce_config.algo_family = SWING_ALGO_FAMILY_RECDOUB;
+            }else if(strcmp(env_str, "BRUCK") == 0){
+                env.reduce_config.algo_family = SWING_ALGO_FAMILY_BRUCK;
+            }else if(strcmp(env_str, "RING") == 0){
+                env.reduce_config.algo_family = SWING_ALGO_FAMILY_RING;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_ALGO_FAMILY" && 0);
+            }
+        }
+
+        /****************************/
+        /* Algo layer               */
+        /****************************/
+        env_str = getenv("LIBSWING_ALLREDUCE_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.allreduce_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.allreduce_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_ALLREDUCE_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLGATHER_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.allgather_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.allgather_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_ALLGATHER_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_SCATTER_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.reduce_scatter_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.reduce_scatter_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_BCAST_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.bcast_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.bcast_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_BCAST_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLTOALL_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.alltoall_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.alltoall_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_ALLTOALL_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_SCATTER_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.scatter_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.scatter_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_SCATTER_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_GATHER_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.gather_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.gather_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_GATHER_ALGO_LAYER" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_ALGO_LAYER");
+        if(env_str){
+            if(strcmp(env_str, "UTOFU") == 0){
+                env.reduce_config.algo_layer = SWING_ALGO_LAYER_UTOFU;
+            }else if(strcmp(env_str, "MPI") == 0){
+                env.reduce_config.algo_layer = SWING_ALGO_LAYER_MPI;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_ALGO_LAYER" && 0);
+            }
+        }
+
+        /****************************/
+        /* Algo                     */
+        /****************************/
+        env_str = getenv("LIBSWING_ALLREDUCE_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "L")){
+                env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_L;
+            }else if(strcmp(env_str, "B")){
+                env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B;
+            }else if(strcmp(env_str, "REDUCE_BCAST")){
+                env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_REDUCE_BCAST;
+            }else if(strcmp(env_str, "B_CONT")){
+                env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B_CONT;
+            }else if(strcmp(env_str, "B_COALESCE")){
+                env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B_COALESCE;
+            }else{
+                assert("Invalid value for LIBSWING_ALLREDUCE_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLGATHER_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "VEC_DOUBLING_CONT_PERMUTE")){
+                env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE;
+            }else if(strcmp(env_str, "VEC_DOUBLING_CONT_SEND")){
+                env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND;
+            }else if(strcmp(env_str, "VEC_DOUBLING_BLOCKS")){
+                env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS;
+            }else if(strcmp(env_str, "GATHER_BCAST")){
+                env.allgather_config.algo = SWING_ALLGATHER_ALGO_GATHER_BCAST;
+            }else{
+                assert("Invalid value for LIBSWING_ALLGATHER_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_SCATTER_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "VEC_HALVING_CONT_PERMUTE")){
+                env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE;
+            }else if(strcmp(env_str, "VEC_HALVING_CONT_SEND")){
+                env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_SEND;
+            }else if(strcmp(env_str, "VEC_HALVING_BLOCKS")){
+                env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_BLOCKS;
+            }else if(strcmp(env_str, "REDUCE_SCATTER")){
+                env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_REDUCE_SCATTER;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_BCAST_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "BINOMIAL_TREE")){
+                env.bcast_config.algo = SWING_BCAST_ALGO_BINOMIAL_TREE;
+            }else if(strcmp(env_str, "SCATTER_ALLGATHER")){
+                env.bcast_config.algo = SWING_BCAST_ALGO_SCATTER_ALLGATHER;
+            }else{
+                assert("Invalid value for LIBSWING_BCAST_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLTOALL_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "LOG")){
+                env.alltoall_config.algo = SWING_ALLTOALL_ALGO_LOG;
+            }else{
+                assert("Invalid value for LIBSWING_ALLTOALL_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_SCATTER_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE")){
+                env.scatter_config.algo = SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
+            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND")){
+                env.scatter_config.algo = SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_SEND;
+            }else{
+                assert("Invalid value for LIBSWING_SCATTER_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_GATHER_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE")){
+                env.gather_config.algo = SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
+            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND")){
+                env.gather_config.algo = SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_SEND;
+            }else{
+                assert("Invalid value for LIBSWING_GATHER_ALGO" && 0);
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_ALGO");
+        if(env_str){
+            if(strcmp(env_str, "BINOMIAL_TREE")){
+                env.reduce_config.algo = SWING_REDUCE_ALGO_BINOMIAL_TREE;
+            }else{
+                assert("Invalid value for LIBSWING_REDUCE_ALGO" && 0);
+            }
+        }
+
+        /****************************/
+        /* Distance                 */
+        /****************************/
+        env_str = getenv("LIBSWING_ALLREDUCE_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.allreduce_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.allreduce_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_ALLGATHER_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.allgather_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.allgather_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_SCATTER_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.reduce_scatter_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.reduce_scatter_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_BCAST_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.bcast_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.bcast_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+        
+        env_str = getenv("LIBSWING_ALLTOALL_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.alltoall_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.alltoall_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_SCATTER_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.scatter_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.scatter_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_GATHER_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.gather_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.gather_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_REDUCE_DISTANCE");
+        if(env_str){
+            if(strcmp(env_str, "INCREASING") == 0){
+                env.reduce_config.distance_type = SWING_DISTANCE_INCREASING;
+            }else{
+                env.reduce_config.distance_type = SWING_DISTANCE_DECREASING;
+            }
+        }
+
+        env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
+        if(env_str){
+            env.bcast_config.tmp_threshold = atoi(env_str);
         }
 
         if(env.prealloc_size){
@@ -679,158 +1004,132 @@ static inline BlockInfo** get_blocks_info(size_t count, SwingCommon* swing_commo
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    if(/*disable_allreduce || */ env.algo == ALGO_DEFAULT){
-        return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
-    }else{        
-        if(env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || count < swing_common->get_num_ports()*swing_common->get_size()){ // Swing_l (either if selected or if there is not at least one element per rank -- i.e., I need to have at least 1 element per block)
-            int dtsize;
-            MPI_Type_size(datatype, &dtsize);
-            BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
-            int res = swing_common->swing_coll_l(sendbuf, recvbuf, count, datatype, op, comm);
-            // Free blocks_info
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                free(blocks_info[p]);
+    switch(env.reduce_scatter_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:
+            switch(env.allreduce_config.algo){
+                case SWING_ALLREDUCE_ALGO_L:{
+                    int dtsize;
+                    MPI_Type_size(datatype, &dtsize);
+                    BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
+                    int res = swing_common->swing_coll_l(sendbuf, recvbuf, count, datatype, op, comm);
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);
+                    return res;
+                }
+                case SWING_ALLREDUCE_ALGO_B:
+                case SWING_ALLREDUCE_ALGO_B_CONT:
+                case SWING_ALLREDUCE_ALGO_B_COALESCE:{
+                    assert(count >= swing_common->get_num_ports()*swing_common->get_size());
+                    int dtsize;
+                    MPI_Type_size(datatype, &dtsize);
+                    BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
+                    int res = swing_common->swing_coll_b(sendbuf, recvbuf, count, datatype, op, comm, blocks_info, SWING_ALLREDUCE);            
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);
+                    return res;
+                }
+                default:
+                    assert("Invalid value for LIBSWING_ALLREDUCE_ALGO" && 0);
             }
-            free(blocks_info);
-            return res;
-        }else if(env.algo == ALGO_SWING_B || env.algo == ALGO_SWING_B_CONT || env.algo == ALGO_SWING_B_COALESCE || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
-            int dtsize;
-            MPI_Type_size(datatype, &dtsize);
-            BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
-            int res = swing_common->swing_coll_b(sendbuf, recvbuf, count, datatype, op, comm, blocks_info, SWING_ALLREDUCE);            
-            // Free blocks_info
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                free(blocks_info[p]);
-            }
-            free(blocks_info);
-            return res;
-        }else if(env.algo == ALGO_RING){ // Ring
+        case SWING_ALGO_FAMILY_RING:
             // TODO: Implement multiported ring
             return MPI_Allreduce_ring((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
-        }else if(env.algo == ALGO_RECDOUB_B){ // Recdoub_b
-            // TODO: Implement multiported ring
-            return MPI_Allreduce_recdoub_b((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
-        }else if(env.algo == ALGO_RECDOUB_L){ // Recdoub_l
-            // TODO: Implement multiported ring
-            return MPI_Allreduce_recdoub_l((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
-        }else{
-            return 1;
-        }
+        default:
+            assert("Invalid value for LIBSWING_ALLREDUCE_ALGO_FAMILY" && 0);
     }
-}
-
-/**
- * SWING_CONT and SWING_COALESCE are not supported for Reduce_scatter if we are 
- * using the multiported version. Indeed, in that case, consecutive blocks on
- * a given port will not be contiguous in memory, since we split the buffers
- * first by block, and then by port (rather than the other way around like in allreduce).
- */
-static int reducescatter_algo_supported(Algo algo, size_t count){
-    if(env.algo == ALGO_SWING_B){
-        if(count >= (size_t) swing_common->get_size()){
-            return 1;
-        }else{
-            return 0;
-        }
-    }else if(env.algo == ALGO_SWING_B_COALESCE && swing_common->get_num_ports() == 1){
-        if(count >= (size_t) swing_common->get_size()){
-            return 1;
-        }else{
-            return 0;
-        }
-    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
-        env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
-         return 1;
-    }
-    return 0;
+    return MPI_ERR_OTHER;
 }
 
 int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     // TODO: Actually there are assumption of it being a reduce_scatter_block, so we need to fix that
     read_env(comm);
-    if(/*disable_reducescatter || */ env.algo == ALGO_DEFAULT){
-        return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
-    }else{  
-        size_t count = 0;
-        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
-            count += recvcounts[i];
-        }
-
-        if(reducescatter_algo_supported(env.algo, count)){            
-            // For reduce-scatter we do not do chunking (would complicate things too much). 
-            // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
-            // This is the opposite of what we do in allreduce.
-            // Allocate blocks_info
-            BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
-            }
-            size_t count_so_far = 0;
-            //size_t my_offset = 0;
-            int dtsize;
-            MPI_Type_size(datatype, &dtsize);
+    switch(env.reduce_scatter_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:{
+            size_t count = 0;
             for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
-                DPRINTF("[%d] recvcnt %d: %d\n", swing_common->get_rank(), i, recvcounts[i]);
-                size_t partition_size = recvcounts[i] / swing_common->get_num_ports();
-                size_t remaining = recvcounts[i] % swing_common->get_num_ports();                
-                size_t block_offset = count_so_far*dtsize;
-                size_t block_count_so_far = 0;
-                for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                    size_t count_port = partition_size + (p < remaining ? 1 : 0);
-                    size_t offset_port = block_offset + block_count_so_far*dtsize;
-                    block_count_so_far += count_port;
-                    blocks_info[p][i].count = count_port;
-                    blocks_info[p][i].offset = offset_port;
-                    DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
-                }
-
-                //if(i == (size_t) swing_common->get_rank()){
-                //    my_offset = block_offset;
-                //}
-
-                count_so_far += recvcounts[i];
+                count += recvcounts[i];
             }
-            assert(count == count_so_far);
-            // Call the actual collective
-            
-            // OLD way of doing it
-            //char* tmpbuf = (char*) malloc(count*dtsize);
-            //int res = swing_common->swing_coll_b(sendbuf, tmpbuf, count, datatype, op, comm, blocks_info, SWING_REDUCE_SCATTER);            
-            //DPRINTF("[%d] Copying %d bytes from offset %d into recvbuf\n", swing_common->get_rank(), recvcounts[swing_common->get_rank()]*dtsize, my_offset);
-            //memcpy(recvbuf, tmpbuf + my_offset, recvcounts[swing_common->get_rank()]*dtsize);
-            //free(tmpbuf);
-            
-            int res;
-            if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
-                res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, datatype, op, blocks_info, comm);
-            }else{
-                res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, datatype, op, blocks_info, comm);
-            }        
+            assert(count >= swing_common->get_num_ports()*swing_common->get_size());
 
-            // Free blocks_info
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                free(blocks_info[p]);
+            switch(env.reduce_scatter_config.algo){
+                case SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE:{
+                    // For reduce-scatter we do not do chunking (would complicate things too much). 
+                    // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+                    // This is the opposite of what we do in allreduce.
+                    // Allocate blocks_info
+                    BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
+                    }
+                    size_t count_so_far = 0;
+                    //size_t my_offset = 0;
+                    int dtsize;
+                    MPI_Type_size(datatype, &dtsize);
+                    for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
+                        DPRINTF("[%d] recvcnt %d: %d\n", swing_common->get_rank(), i, recvcounts[i]);
+                        size_t partition_size = recvcounts[i] / swing_common->get_num_ports();
+                        size_t remaining = recvcounts[i] % swing_common->get_num_ports();                
+                        size_t block_offset = count_so_far*dtsize;
+                        size_t block_count_so_far = 0;
+                        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                            size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                            size_t offset_port = block_offset + block_count_so_far*dtsize;
+                            block_count_so_far += count_port;
+                            blocks_info[p][i].count = count_port;
+                            blocks_info[p][i].offset = offset_port;
+                            DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+                        }
+
+                        //if(i == (size_t) swing_common->get_rank()){
+                        //    my_offset = block_offset;
+                        //}
+
+                        count_so_far += recvcounts[i];
+                    }
+                    assert(count == count_so_far);
+                    // Call the actual collective
+                    
+                    // OLD way of doing it
+                    //char* tmpbuf = (char*) malloc(count*dtsize);
+                    //int res = swing_common->swing_coll_b(sendbuf, tmpbuf, count, datatype, op, comm, blocks_info, SWING_REDUCE_SCATTER);            
+                    //DPRINTF("[%d] Copying %d bytes from offset %d into recvbuf\n", swing_common->get_rank(), recvcounts[swing_common->get_rank()]*dtsize, my_offset);
+                    //memcpy(recvbuf, tmpbuf + my_offset, recvcounts[swing_common->get_rank()]*dtsize);
+                    //free(tmpbuf);
+                    int res;
+                    if(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+                    }else{
+                        res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+                    }        
+        
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);
+                    return res;
+                }                    
+                default:
+                    assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO" && 0);
             }
-            free(blocks_info);
-            return res;
+            break;
         }
-        return MPI_ERR_OTHER;
+        default:
+            assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO_FAMILY" && 0);
     }
-}
-
-static int allgather_algo_supported(Algo algo, MPI_Datatype sendtype, MPI_Datatype recvtype, int sendcount, int recvcount){
-    if(sendtype != recvtype){ // Right now not supported if datatypes are different
-        return 0;
-    }
-    if(sendcount != recvcount){ // Right now not supported if counts are different
-        return 0;
-    }
-
-    if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
-       env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
-        return 1;
-    }
-    return 0;
+    return MPI_ERR_OTHER;
 }
 
 #ifdef FUGAKU
@@ -852,97 +1151,115 @@ int MPI_Finalize(void){
 
 int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(/*disable_reducescatter || */ env.algo == ALGO_DEFAULT){
-        return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-    }else{  
-        if(allgather_algo_supported(env.algo, sendtype, recvtype, sendcount, recvcount)){
-            // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
-            // This is the opposite of what we do in allreduce.
-            // Allocate blocks_info
-            BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
-            }
-            size_t count_so_far = 0;
-            size_t my_offset = 0;
-            int dtsize;
-            MPI_Type_size(sendtype, &dtsize);
-            for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
-                size_t partition_size = recvcount / swing_common->get_num_ports();
-                size_t remaining = recvcount % swing_common->get_num_ports();                
-                size_t block_offset = count_so_far*dtsize;
-                size_t block_count_so_far = 0;
-                for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                    size_t count_port = partition_size + (p < remaining ? 1 : 0);
-                    size_t offset_port = block_offset + block_count_so_far*dtsize;
-                    block_count_so_far += count_port;
-                    blocks_info[p][i].count = count_port;
-                    blocks_info[p][i].offset = offset_port;
-                    DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+    assert(sendtype == recvtype); // Right now not supported if datatypes are different
+    assert(sendcount == recvcount); // Right now not supported if counts are different
+    switch(env.allgather_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:{
+            switch(env.allgather_config.algo){
+                case SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE:{
+                    // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+                    // This is the opposite of what we do in allreduce.
+                    // Allocate blocks_info
+                    BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
+                    }
+                    size_t count_so_far = 0;
+                    size_t my_offset = 0;
+                    int dtsize;
+                    MPI_Type_size(sendtype, &dtsize);
+                    for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
+                        size_t partition_size = recvcount / swing_common->get_num_ports();
+                        size_t remaining = recvcount % swing_common->get_num_ports();                
+                        size_t block_offset = count_so_far*dtsize;
+                        size_t block_count_so_far = 0;
+                        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                            size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                            size_t offset_port = block_offset + block_count_so_far*dtsize;
+                            block_count_so_far += count_port;
+                            blocks_info[p][i].count = count_port;
+                            blocks_info[p][i].offset = offset_port;
+                            DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+                        }
+
+                        if(i == (size_t) swing_common->get_rank()){
+                            my_offset = block_offset;
+                        }
+                        count_so_far += recvcount;
+                    }
+
+                    // Copy my data in the right place in the recvbuf
+                    memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
+                    size_t count = swing_common->get_size()*recvcount*dtsize;
+
+                    int res;
+                    //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);                    
+                    if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+                    }else{
+                        res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+                    }        
+
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);        
+                    return res;
                 }
-
-                if(i == (size_t) swing_common->get_rank()){
-                    my_offset = block_offset;
-                }
-                count_so_far += recvcount;
+                default:
+                    assert("Invalid value for LIBSWING_ALLGATHER_ALGO" && 0);
             }
-
-            // Copy my data in the right place in the recvbuf
-            memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
-            size_t count = swing_common->get_size()*recvcount*dtsize;
-
-            int res;
-            //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);            
-            
-            if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
-                res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-            }else{
-                res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-            }        
-
-            // Free blocks_info
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                free(blocks_info[p]);
-            }
-            free(blocks_info);        
-            return res;
-        }else{
-            return MPI_ERR_OTHER;
         }
+        default:
+            assert("Invalid value for LIBSWING_ALLGATHER_ALGO_FAMILY" && 0);
     }
+    return MPI_ERR_OTHER;
 }
 
-int MPI_Bcast( void *buffer, int count, MPI_Datatype datatype, int root, 
-               MPI_Comm comm ){
+int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm ){
     read_env(comm);
-    if(env.algo == ALGO_DEFAULT){
-        return PMPI_Bcast(buffer, count, datatype, root, comm);
-    }else{        
-        if(env.algo == ALGO_SWING_L){
-            return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);
-        }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU){ // Swing_l 
-            return swing_common->swing_bcast_l(buffer, count, datatype, root, comm);
-        }else if(env.algo == ALGO_SWING_B){
-            return swing_common->swing_bcast_b_mpi(buffer, count, datatype, root, comm);
-        }else if(env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){ // Swing_b
-            return swing_common->swing_bcast_b(buffer, count, datatype, root, comm);
-        }else{
-            return 1;
-        }
+    switch(env.bcast_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Bcast(buffer, count, datatype, root, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:
+            switch(env.bcast_config.algo){
+                case SWING_BCAST_ALGO_BINOMIAL_TREE:{
+                    if(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        return swing_common->swing_bcast_l(buffer, count, datatype, root, comm);
+                    }else{
+                        return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);
+                    }
+                }
+                default:
+                    assert("Invalid value for LIBSWING_BCAST_ALGO" && 0);
+            }
+        default:
+            assert("Invalid value for LIBSWING_BCAST_ALGO_FAMILY" && 0);
     }
 }
 
 int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                  void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
     read_env(comm);
-    if(env.algo == ALGO_DEFAULT){
-        return PMPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-    }else if(env.algo == ALGO_BRUCK){
-        return swing_common->bruck_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);        
-    }else if(env.algo == ALGO_SWING_L){
-        return swing_common->swing_alltoall_mpi(sendbuf, recvbuf, sendcount, sendtype, comm);        
-    }else if(env.algo == ALGO_SWING_L_UTOFU){
-        return swing_common->swing_alltoall_utofu(sendbuf, recvbuf, sendcount, sendtype, comm);        
+    switch(env.alltoall_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+        case SWING_ALGO_FAMILY_SWING:{
+            if(env.alltoall_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                return swing_common->swing_alltoall_utofu(sendbuf, recvbuf, sendcount, sendtype, comm);        
+            }else{
+                return swing_common->swing_alltoall_mpi(sendbuf, recvbuf, sendcount, sendtype, comm);        
+            }
+        }
+        case SWING_ALGO_FAMILY_BRUCK:
+            return swing_common->bruck_alltoall(sendbuf, recvbuf, sendcount, sendtype, comm);    
+        default:
+            assert("Invalid value for LIBSWING_ALLTOALL_ALGO_FAMILY" && 0);
     }
     return MPI_ERR_OTHER;
 }
@@ -951,54 +1268,62 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                 void *recvbuf, int recvcount, MPI_Datatype recvtype, int root,
                 MPI_Comm comm){    
     read_env(comm);
-    if(env.algo == ALGO_DEFAULT){
-        return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
-             env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
-        // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
-        // This is the opposite of what we do in allreduce.
-        // Allocate blocks_info
-        DPRINTF("Creating block infos.\n");
-        assert(recvcount >= swing_common->get_num_ports());
-        BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
-        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-            blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
-        }
-        size_t count_so_far = 0;
-        int dtsize;
-        MPI_Type_size(sendtype, &dtsize);
-        size_t partition_size = recvcount / swing_common->get_num_ports();
-        size_t remaining = recvcount % swing_common->get_num_ports();     
-        
-        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){           
-            size_t block_offset = count_so_far*dtsize;
-            size_t block_count_so_far = 0;
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                size_t count_port = partition_size + (p < remaining ? 1 : 0);
-                size_t offset_port = block_offset + block_count_so_far*dtsize;
-                block_count_so_far += count_port;
-                blocks_info[p][i].count = count_port;
-                blocks_info[p][i].offset = offset_port;
-                DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+    switch(env.scatter_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Scatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:{
+            switch(env.scatter_config.algo){
+                case SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE:{
+                    // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+                    // This is the opposite of what we do in allreduce.
+                    // Allocate blocks_info
+                    DPRINTF("Creating block infos.\n");
+                    assert(recvcount >= swing_common->get_num_ports());
+                    BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
+                    }
+                    size_t count_so_far = 0;
+                    int dtsize;
+                    MPI_Type_size(sendtype, &dtsize);
+                    size_t partition_size = recvcount / swing_common->get_num_ports();
+                    size_t remaining = recvcount % swing_common->get_num_ports();     
+                    
+                    for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){           
+                        size_t block_offset = count_so_far*dtsize;
+                        size_t block_count_so_far = 0;
+                        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                            size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                            size_t offset_port = block_offset + block_count_so_far*dtsize;
+                            block_count_so_far += count_port;
+                            blocks_info[p][i].count = count_port;
+                            blocks_info[p][i].offset = offset_port;
+                            DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+                        }
+                        count_so_far += recvcount;
+                    }
+
+                    int res = MPI_SUCCESS;
+                    if(env.scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_scatter_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+                    }else{
+                        res = swing_common->swing_scatter_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+                    }
+
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);        
+                    return res;
+                }
+                default:
+                    assert("Invalid value for LIBSWING_SCATTER_ALGO" && 0);
             }
-            count_so_far += recvcount;
         }
-
-        DPRINTF("Calling scatter.\n");
-        int res = MPI_SUCCESS;
-        if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
-            res = swing_common->swing_scatter_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
-        }else{
-            res = swing_common->swing_scatter_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
-        }
-        DPRINTF("Scatter called.\n");
-
-        // Free blocks_info
-        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-            free(blocks_info[p]);
-        }
-        free(blocks_info);        
-        return res;
+        default:
+            assert("Invalid value for LIBSWING_SCATTER_ALGO" && 0);
     }
     return MPI_ERR_OTHER;
 }
@@ -1007,67 +1332,86 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                 void *recvbuf, int recvcount, MPI_Datatype recvtype, int root,
                 MPI_Comm comm){    
     read_env(comm);
-    if(env.algo == ALGO_DEFAULT){
-        return PMPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU || \
-             env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
-        // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
-        // This is the opposite of what we do in allreduce.
-        // Allocate blocks_info
-        DPRINTF("Creating block infos.\n");
-        assert(recvcount >= swing_common->get_num_ports());
-        BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
-        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-            blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
-        }
-        size_t count_so_far = 0;
-        int dtsize;
-        MPI_Type_size(sendtype, &dtsize);
-        size_t partition_size = recvcount / swing_common->get_num_ports();
-        size_t remaining = recvcount % swing_common->get_num_ports();     
-        
-        for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){           
-            size_t block_offset = count_so_far*dtsize;
-            size_t block_count_so_far = 0;
-            for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-                size_t count_port = partition_size + (p < remaining ? 1 : 0);
-                size_t offset_port = block_offset + block_count_so_far*dtsize;
-                block_count_so_far += count_port;
-                blocks_info[p][i].count = count_port;
-                blocks_info[p][i].offset = offset_port;
-                DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+    switch(env.gather_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:{
+            switch(env.gather_config.algo){
+                case SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE:{
+                    // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
+                    // This is the opposite of what we do in allreduce.
+                    // Allocate blocks_info
+                    DPRINTF("Creating block infos.\n");
+                    assert(recvcount >= swing_common->get_num_ports());
+                    BlockInfo** blocks_info = (BlockInfo**) malloc(sizeof(BlockInfo*)*swing_common->get_num_ports());
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
+                    }
+                    size_t count_so_far = 0;
+                    int dtsize;
+                    MPI_Type_size(sendtype, &dtsize);
+                    size_t partition_size = recvcount / swing_common->get_num_ports();
+                    size_t remaining = recvcount % swing_common->get_num_ports();     
+                    
+                    for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){           
+                        size_t block_offset = count_so_far*dtsize;
+                        size_t block_count_so_far = 0;
+                        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                            size_t count_port = partition_size + (p < remaining ? 1 : 0);
+                            size_t offset_port = block_offset + block_count_so_far*dtsize;
+                            block_count_so_far += count_port;
+                            blocks_info[p][i].count = count_port;
+                            blocks_info[p][i].offset = offset_port;
+                            DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
+                        }
+                        count_so_far += recvcount;
+                    }
+
+                    int res = MPI_SUCCESS;
+                    if(env.gather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_gather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+                    }else{
+                        res = swing_common->swing_gather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
+                    }
+
+                    // Free blocks_info
+                    for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                        free(blocks_info[p]);
+                    }
+                    free(blocks_info);        
+                    return res;
+                }
+                default:
+                    assert("Invalid value for LIBSWING_GATHER_ALGO" && 0);
             }
-            count_so_far += recvcount;
         }
-
-        int res = MPI_SUCCESS;
-        if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
-            res = swing_common->swing_gather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
-        }else{
-            res = swing_common->swing_gather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
-        }
-
-        // Free blocks_info
-        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
-            free(blocks_info[p]);
-        }
-        free(blocks_info);        
-        return res;
+        default:
+            assert("Invalid value for LIBSWING_GATHER_ALGO_FAMILY" && 0);
     }
-    return MPI_ERR_OTHER;
 }
 
 int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
                MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
     read_env(comm);
-    if(env.algo == ALGO_DEFAULT){
-        return PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm);
-    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
-        return swing_common->swing_reduce_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
-    }else if(env.algo == ALGO_SWING_L || env.algo == ALGO_SWING_B || env.algo == ALGO_RECDOUB_L || env.algo == ALGO_RECDOUB_B){
-        return swing_common->swing_reduce_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
+    switch(env.reduce_config.algo_family){
+        case SWING_ALGO_FAMILY_DEFAULT:
+            return PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm);
+        case SWING_ALGO_FAMILY_SWING:
+        case SWING_ALGO_FAMILY_RECDOUB:
+            switch(env.reduce_config.algo){
+                case SWING_REDUCE_ALGO_BINOMIAL_TREE:
+                    if(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        return swing_common->swing_reduce_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
+                    }else{
+                        return swing_common->swing_reduce_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
+                    }
+                default:
+                    assert("Invalid value for LIBSWING_REDUCE_ALGO" && 0);
+            }
+        default:
+            assert("Invalid value for LIBSWING_REDUCE_ALGO_FAMILY" && 0);
     }
-    return MPI_ERR_OTHER;
 }
 
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)

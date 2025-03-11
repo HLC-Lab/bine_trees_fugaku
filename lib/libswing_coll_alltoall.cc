@@ -55,14 +55,14 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
@@ -88,10 +88,10 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     }
 
     // Compute the tree
-    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type_alltoall, this->scc_real);
+    swing_tree_t tree = get_tree(rank, port, env.algo_family, env.alltoall_config.distance_type, this->scc_real);
     if(peers[port] == NULL){
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-        compute_peers(rank, port, env.algo, this->scc_real, peers[port]);
+        compute_peers(rank, port, env.algo_family, this->scc_real, peers[port]);
     }
 
     timer.reset("= swing_alltoall_utofu (remap)");    
@@ -104,7 +104,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall_utofu (bookeeping and copies)");
         uint peer;
-        if(env.distance_type_alltoall == SWING_DISTANCE_DECREASING){
+        if(env.alltoall_config.distance_type == SWING_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - step - 1];
         }else{          
             peer = peers[port][step];
@@ -191,7 +191,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     // I should consider the decreasing tree, and viceversa.
     // The DFS order (i.e., the remapping) of that tree gives me the permutation.
     // TODO: For multiport I should start from the last port I received from.
-    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_alltoall == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    swing_tree_t perm_tree = get_tree(rank, port, env.algo_family, env.alltoall_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
     for(size_t i = 0; i < size; i++){
         size_t index = perm_tree.remapped_ranks[i];
         size_t offset_src = index*count*dtsize;
@@ -246,9 +246,9 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     }
 
     // Compute the tree
-    swing_tree_t tree = get_tree(rank, port, env.algo, env.distance_type_alltoall, this->scc_real);
+    swing_tree_t tree = get_tree(rank, port, env.alltoall_config.algo_family, env.alltoall_config.distance_type, this->scc_real);
     uint* peers = (uint*) malloc(sizeof(uint)*this->size);
-    compute_peers(rank, port, env.algo, this->scc_real, peers);
+    compute_peers(rank, port, env.alltoall_config.algo_family, this->scc_real, peers);
 
     timer.reset("= swing_alltoall_mpi (remap)");    
     memcpy(tmpbuf, sendbuf, count*dtsize*size);
@@ -259,7 +259,7 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     for(size_t step = 0; step < this->num_steps; step++){
         timer.reset("= swing_alltoall_mpi (bookeeping and copies)");
         uint peer;
-        if(env.distance_type_alltoall == SWING_DISTANCE_DECREASING){
+        if(env.alltoall_config.distance_type == SWING_DISTANCE_DECREASING){
             peer = peers[this->num_steps - step - 1];
         }else{          
             peer = peers[step];
@@ -331,7 +331,7 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     // I should consider the decreasing tree, and viceversa.
     // The DFS order (i.e., the remapping) of that tree gives me the permutation.
     // TODO: For multiport I should start from the last port I received from.
-    swing_tree_t perm_tree = get_tree(rank, port, env.algo, env.distance_type_alltoall == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    swing_tree_t perm_tree = get_tree(rank, port, env.alltoall_config.algo_family, env.alltoall_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
     for(size_t i = 0; i < size; i++){
         size_t index = perm_tree.remapped_ranks[i];
         size_t offset_src = index*count*dtsize;

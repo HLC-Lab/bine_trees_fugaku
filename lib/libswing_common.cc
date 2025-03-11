@@ -604,7 +604,7 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
                 // Get the peer
                 if(virtual_peers[p] == NULL){
                     virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-                    compute_peers(rank_virtual, p, env.algo, this->scc_virtual, virtual_peers[p]);
+                    compute_peers(rank_virtual, p, env.allreduce_config.algo_family, this->scc_virtual, virtual_peers[p]);
                 }
                 int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
                 int virtual_peer = virtual_peers[p][step];                 
@@ -644,9 +644,9 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
 }
 
 int SwingCommon::swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-    if(env.algo == ALGO_SWING_L){
+    if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI){
         return swing_coll_l_mpi(sendbuf, recvbuf, count, datatype, op, comm);
-    }else if(env.algo == ALGO_SWING_L_UTOFU || env.algo == ALGO_RECDOUB_L_UTOFU){
+    }else if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
 #ifdef FUGAKU
         return swing_coll_l_utofu(sendbuf, recvbuf, count, datatype, op, comm);
 #else
@@ -1024,11 +1024,11 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
 int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
-    if(env.algo == ALGO_SWING_B){
+    if(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B){
         return swing_coll_step_b(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
-    }else if(env.algo == ALGO_SWING_B_COALESCE){
+    }else if(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_COALESCE){
         return swing_coll_step_coalesce(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
-    }else if(env.algo == ALGO_SWING_B_CONT){
+    }else if(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT){
         if(is_power_of_two(this->size)){
             return swing_coll_step_cont(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
         }else{
@@ -1419,7 +1419,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     size_t tmpbuf_size = 0;
     bool free_tmpbuf = false;
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
-        if(env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){
+        if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
             // We can't write in the actual blocks positions since writes
             // might be executed in a different order than the one in which they were issued.
             // Thus, we must enforce writes to do not overlap. However, this means a rank must 
@@ -1449,7 +1449,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     // Create bitmap calculators if not already created
     for(size_t p = 0; p < env.num_ports; p++){
         if(this->sbc[p] == NULL){
-            this->sbc[p] = new SwingBitmapCalculator(this->rank, env.dimensions, env.dimensions_num, p, blocks_info, (env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_SWING_B_CONT || env.algo == ALGO_RECDOUB_B_UTOFU) && is_power_of_two(this->size), env.algo);
+            this->sbc[p] = new SwingBitmapCalculator(this->rank, env.dimensions, env.dimensions_num, p, blocks_info, (env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT) && is_power_of_two(this->size), env.allreduce_config.algo_family);
         }
     }
     
@@ -1488,7 +1488,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             return MPI_ERR_OTHER;
         }
     }
-    if(env.algo == ALGO_SWING_B_UTOFU || env.algo == ALGO_RECDOUB_B_UTOFU){     
+    if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){     
 #ifdef FUGAKU   
         int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
         // Setup all the communications        
@@ -1663,7 +1663,7 @@ static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, 
 // @param target_rank (IN): the rank to find
 // @param remap_rank (OUT): the remapped rank
 // @param found (OUT): if true, the rank was found
-static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, Algo algo){
+static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo){
     for(size_t i = step; i < num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
@@ -1677,7 +1677,7 @@ static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank
     }
 }
 
-SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, Algo algo):
+SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, swing_algo_family_t algo):
          scc(dimensions, dimensions_num), dimensions_num(dimensions_num), port(port), blocks_info(blocks_info), remap_blocks(remap_blocks), next_step(0), rank(rank), algo(algo){
     this->size = 1;
     this->num_steps = 0;

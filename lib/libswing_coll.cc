@@ -148,7 +148,7 @@ int ceil_log2(unsigned long long x){
  * @param reached_at_step (OUT) An array of size scc->size to store the step at which a node is reached
  * @param parent (OUT) An array of size scc->size to store the parent of a node
  */
-static void build_tree(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t* parent){
+static void build_tree(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t* parent){
     for(size_t i = step; i < scc->num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
@@ -296,7 +296,7 @@ void reduce_local(const void* inbuf_a, const void* inbuf_b, void* outbuf, int co
  * @param remapped_ranks (OUT) An array of size scc->size to store the remapped ranks
  * @param remapped_ranks_max (OUT) An array of size scc->size to store the maximum remapped rank in the subtree rooted at i
  */
-static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, const uint* parent, uint* remapped_ranks, uint* remapped_ranks_max){
+static void remap_ranks(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, const uint* parent, uint* remapped_ranks, uint* remapped_ranks_max){
     remapped_ranks_max[scc->getIdFromCoord(coord_root)] = *next_rank;
     for(size_t i = step; i < scc->num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -319,7 +319,7 @@ static void remap_ranks(int* coord_root, size_t step, uint port, Algo algo, swin
     (*next_rank)--;
 }
 
-swing_tree_t get_tree(uint root, uint port, Algo algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
+swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
     int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     scc->getCoordFromId(root, coord_root);
     swing_tree_t tree;
@@ -349,15 +349,18 @@ void destroy_tree(swing_tree_t* tree){
     free(tree->parent);
 }
 
-void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, Algo algo){
-    if(algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B_UTOFU){
+void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo){
+    if(algo == SWING_ALGO_FAMILY_RECDOUB){
         get_peer_recdoub(coord_rank, step, coord_peer, port, dimensions_num, dimensions);
-    }else{
+    }else if(algo == SWING_ALGO_FAMILY_SWING){
         get_peer_swing(coord_rank, step, coord_peer, port, dimensions_num, dimensions);
+    }else{
+        fprintf(stderr, "Unknown algorithm family\n");
+        exit(EXIT_FAILURE);
     }
 }
 
-void compute_peers(uint rank, int port, Algo algo, SwingCoordConverter* scc, uint* peers){
+void compute_peers(uint rank, int port, swing_algo_family_t algo, SwingCoordConverter* scc, uint* peers){
     bool terminated_dimensions_bitmap[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint8_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     memset(next_step_per_dim, 0, sizeof(uint8_t)*LIBSWING_MAX_SUPPORTED_DIMENSIONS);
@@ -390,12 +393,15 @@ void compute_peers(uint rank, int port, Algo algo, SwingCoordConverter* scc, uin
             coord[0] = rank;
         }
 
-        if(algo == ALGO_RECDOUB_B_UTOFU || algo == ALGO_RECDOUB_L_UTOFU || algo == ALGO_RECDOUB_B || algo == ALGO_RECDOUB_L){
+        if(algo == SWING_ALGO_FAMILY_RECDOUB){
             distance = (coord[target_dim] ^ (1 << relative_step)) - coord[target_dim];
-        }else{
+        }else if(algo == SWING_ALGO_FAMILY_SWING){
             distance = rhos[relative_step];
             // Flip the sign for odd nodes
             if(is_odd(coord[target_dim])){distance *= -1;}
+        }else{
+            fprintf(stderr, "Unknown algorithm family\n");
+            exit(EXIT_FAILURE);
         }
         
         // Mirrored collectives

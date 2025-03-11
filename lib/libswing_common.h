@@ -42,22 +42,6 @@ typedef enum{
     SWING_ALLREDUCE
 }CollType;
 
-typedef enum{
-    ALGO_DEFAULT = 0,
-    ALGO_SWING_L,
-    ALGO_SWING_L_UTOFU,
-    ALGO_SWING_B,
-    ALGO_SWING_B_COALESCE,
-    ALGO_SWING_B_CONT,
-    ALGO_SWING_B_UTOFU,
-    ALGO_RING,
-    ALGO_RECDOUB_L,
-    ALGO_RECDOUB_B,
-    ALGO_RECDOUB_L_UTOFU,
-    ALGO_RECDOUB_B_UTOFU,
-    ALGO_BRUCK,
-}Algo;
-
 /**
  * @brief Enum to specify whether a binomial tree is built with distance between
  * nodes increasing or decreasing at each step.
@@ -72,24 +56,144 @@ typedef struct{
     size_t count;
 }BlockInfo;
 
+typedef enum {
+    // Default
+    SWING_ALGO_FAMILY_DEFAULT = 0,
+    // Swing
+    SWING_ALGO_FAMILY_SWING,
+    // Recdoub
+    SWING_ALGO_FAMILY_RECDOUB,
+    // Bruck
+    SWING_ALGO_FAMILY_BRUCK,
+    // Ring
+    SWING_ALGO_FAMILY_RING,
+} swing_algo_family_t;
+
+typedef enum {
+    SWING_ALGO_LAYER_MPI = 0,
+    SWING_ALGO_LAYER_UTOFU,
+} swing_algo_layer_t;
+
+typedef enum {
+    SWING_ALLREDUCE_ALGO_L = 0,
+    SWING_ALLREDUCE_ALGO_B,
+    SWING_ALLREDUCE_ALGO_REDUCE_BCAST,
+    SWING_ALLREDUCE_ALGO_B_CONT,
+    SWING_ALLREDUCE_ALGO_B_COALESCE,
+} swing_allreduce_algo_t;
+
+typedef enum {
+    SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE = 0, // Permutation at the end
+    SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND, // Sendrecv at the beginning
+    SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS, // Block-by-block
+    SWING_ALLGATHER_ALGO_GATHER_BCAST, // Gather + bcast
+} swing_allgather_algo_t;
+
+typedef enum {
+    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE = 0, // Permutation at the beginning
+    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_SEND, // Sendrecv at the end
+    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_BLOCKS, // Block-by-block
+    SWING_REDUCE_SCATTER_ALGO_REDUCE_SCATTER, // Reduce + scatter
+} swing_reduce_scatter_algo_t;
+
+typedef enum {
+    SWING_BCAST_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+    SWING_BCAST_ALGO_SCATTER_ALLGATHER, // Scatter + allgather
+} swing_bcast_algo_t;
+
+typedef enum {
+    SWING_ALLTOALL_ALGO_LOG = 0,
+} swing_alltoall_algo_t;
+
+typedef enum {
+    SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the beginning
+    SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the end
+    SWING_SCATTER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
+} swing_scatter_algo_t;
+
+typedef enum {
+    SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the end
+    SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the beginning
+    SWING_GATHER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
+} swing_gather_algo_t;
+
+typedef enum {
+    SWING_REDUCE_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+} swing_reduce_algo_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_allreduce_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_allreduce_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_allgather_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_allgather_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_reduce_scatter_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_reduce_scatter_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_bcast_algo_t algo;
+    swing_distance_type_t distance_type;
+    size_t tmp_threshold;
+} swing_bcast_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_alltoall_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_alltoall_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_scatter_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_scatter_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_gather_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_gather_config_t;
+
+typedef struct {
+    swing_algo_family_t algo_family;
+    swing_algo_layer_t algo_layer;
+    swing_reduce_algo_t algo;
+    swing_distance_type_t distance_type;
+} swing_reduce_config_t;
+
 typedef struct {
     uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint dimensions_num;
-    Algo algo;
     uint num_ports;
     uint segment_size;
     size_t prealloc_size;
     char* prealloc_buf;
     int utofu_add_ag;
-    size_t bcast_tmp_threshold;
-    swing_distance_type_t distance_type_allreduce;
-    swing_distance_type_t distance_type_allgather;
-    swing_distance_type_t distance_type_reduce_scatter;
-    swing_distance_type_t distance_type_bcast;
-    swing_distance_type_t distance_type_alltoall;
-    swing_distance_type_t distance_type_scatter;
-    swing_distance_type_t distance_type_gather;
-    swing_distance_type_t distance_type_reduce;
+    swing_allreduce_config_t allreduce_config;
+    swing_allgather_config_t allgather_config;
+    swing_reduce_scatter_config_t reduce_scatter_config;
+    swing_bcast_config_t bcast_config;
+    swing_alltoall_config_t alltoall_config;
+    swing_scatter_config_t scatter_config;
+    swing_gather_config_t gather_config;
+    swing_reduce_config_t reduce_config;
 } swing_env_t;
 
 
@@ -190,7 +294,7 @@ class SwingBitmapCalculator {
         bool remap_blocks;
         int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
         uint32_t* block_step;
-        Algo algo;
+        swing_algo_family_t algo;
         size_t next_step; 
         volatile char padding2[CACHE_LINE_SIZE];
 
@@ -220,7 +324,7 @@ class SwingBitmapCalculator {
         // @param port (IN): the port the collective starts from
         // @param blocks_info (IN): the blocks info
         // @param remap_blocks (IN): if true, the blocks are remapped to be contiguous
-        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, Algo algo);
+        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, swing_algo_family_t algo);
 
         // Destructor
         ~SwingBitmapCalculator();
