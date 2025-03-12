@@ -13,6 +13,12 @@
 #endif
 
 int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.scatter_config.algo == SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
 #ifdef FUGAKU
@@ -157,6 +163,12 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
 }
 
 int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.scatter_config.algo == SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     assert(env.num_ports == 1);
