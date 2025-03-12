@@ -16,22 +16,10 @@ if [ ${SYSTEM} = "fugaku" ]; then
     EXTRA_LIBS="-ltofucom ./lib/fugaku/swing_utofu.o"
 fi
 
-# Normal compilation
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libswing_common.cc -o ./lib/libswing_common.o ${MPI_COMPILER_FLAGS}
-if [ ! -f "./lib/libswing_common.o" ]; then
-    echo "${RED}[Error] libswing_common.o compilation failed, please check error messages above.${NC}"
-    exit 1
-fi
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libswing_coll.cc -o ./lib/libswing_coll.o ${MPI_COMPILER_FLAGS}
-if [ ! -f "./lib/libswing_coll.o" ]; then
-    echo "${RED}[Error] libswing_coll.o compilation failed, please check error messages above.${NC}"
-    exit 1
-fi
-
 # Collective impls
 # Bash list of collectives to compile
 # Define a list of collectives
-collectives=("libswing_coll_reduce" "libswing_coll_reduce_scatter" "libswing_coll_bcast" "libswing_coll_allgather" "libswing_coll_gather" "libswing_coll_scatter" "libswing_coll_alltoall")
+collectives=("libswing" "libswing_common" "libswing_coll" "libswing_coll_reduce" "libswing_coll_reduce_scatter" "libswing_coll_bcast" "libswing_coll_allgather" "libswing_coll_gather" "libswing_coll_scatter" "libswing_coll_alltoall")
 collective_objects=""
 # Compile each collective
 for collective in "${collectives[@]}"; do
@@ -43,15 +31,21 @@ for collective in "${collectives[@]}"; do
     collective_objects="${collective_objects} ./lib/${collective}.o"
 done
 
+# VALIDATE compilation
+# Collective impls
+# Bash list of collectives to compile
+collective_objects_validate=""
+# Compile each collective
+for collective in "${collectives[@]}"; do
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -DVALIDATE -D${SYSTEM^^} -c -fPIC -pthread ./lib/${collective}.cc -o ./lib/${collective}_validate.o ${MPI_COMPILER_FLAGS}
+    if [ ! -f "./lib/${collective}_validate.o" ]; then
+        echo "${RED}[Error] ${collective}_validate.o compilation failed, please check error messages above.${NC}"
+        exit 1
+    fi
+    collective_objects_validate="${collective_objects_validate} ./lib/${collective}_validate.o"
+done
 
-
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libswing.cc -o ./lib/libswing.o ${MPI_COMPILER_FLAGS}
-if [ ! -f "./lib/libswing.o" ]; then
-    echo "${RED}[Error] libswing.o compilation failed, please check error messages above.${NC}"
-    exit 1
-fi
-
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -shared -pthread -pthread -o ./lib/libswing.so ./lib/libswing.o ./lib/libswing_common.o ${EXTRA_LIBS} ${MPI_COMPILER_FLAGS}
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -shared -pthread -pthread -o ./lib/libswing.so ${collective_objects} ${EXTRA_LIBS} ${MPI_COMPILER_FLAGS}
 if [ ! -f "./lib/libswing.so" ]; then
     echo "${RED}[Error] libswing.so compilation failed, please check error messages above.${NC}"
     exit 1
@@ -76,6 +70,7 @@ fi
 
 # Bench
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ./lib/libswing.o ./lib/libswing_common.o ${collective_objects} ./lib/libswing_coll.o -o ./bench/bench ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects_validate} -o ./bench/bench_validate ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/get_coord_daint.c -o ./bench/get_coord_daint
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_dummy_utofu.c -o ./bench/bench_dummy_utofu ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}

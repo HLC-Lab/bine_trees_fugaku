@@ -16,6 +16,12 @@
 
 // Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
 int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.alltoall_config.algo_family == SWING_ALGO_FAMILY_BRUCK);
+    assert(env.alltoall_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.alltoall_config.algo == SWING_ALLTOALL_ALGO_LOG);
+#endif
     Timer timer("bruck_alltoall (init)");
 
 	int rank, nprocs;
@@ -101,6 +107,12 @@ int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, M
 }
 
 int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.alltoall_config.algo_family == SWING_ALGO_FAMILY_SWING);
+    assert(env.alltoall_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.alltoall_config.algo == SWING_ALLTOALL_ALGO_LOG);
+#endif
 #ifdef FUGAKU
     assert(env.num_ports == 1); // TODO: Support multiport
     Timer timer("swing_alltoall_utofu (init)");
@@ -300,6 +312,12 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
 }
 
 int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.alltoall_config.algo_family == SWING_ALGO_FAMILY_SWING);
+    assert(env.alltoall_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.alltoall_config.algo == SWING_ALLTOALL_ALGO_LOG);
+#endif
     assert(env.num_ports == 1); // TODO: Support multiport
     Timer timer("swing_alltoall_mpi (init)");
     int rank, size, dtsize;
