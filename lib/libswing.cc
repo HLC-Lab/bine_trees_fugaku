@@ -1029,7 +1029,12 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     int dtsize;
                     MPI_Type_size(datatype, &dtsize);
                     BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
-                    int res = swing_common->swing_coll_b(sendbuf, recvbuf, count, datatype, op, comm, blocks_info, SWING_ALLREDUCE);            
+                    int res;
+                    if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI){
+                        res = swing_common->swing_coll_b(sendbuf, recvbuf, count, datatype, op, comm, blocks_info, SWING_ALLREDUCE);            
+                    }else{
+                        res = swing_common->swing_coll_b_cont_utofu(sendbuf, recvbuf, count, datatype, op, comm, blocks_info, SWING_ALLREDUCE);
+                    }
                     // Free blocks_info
                     for(size_t p = 0; p < swing_common->get_num_ports(); p++){
                         free(blocks_info[p]);

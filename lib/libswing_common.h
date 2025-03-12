@@ -464,6 +464,7 @@ class SwingCommon {
                                  MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                  CollType coll_type);
 
+
         // Wrapper for step_b/step_cont
         int swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                            MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
@@ -515,7 +516,8 @@ class SwingCommon {
         
         // TODO: Document
         int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
-
+        int swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
+        
         int swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);

@@ -1,34 +1,90 @@
 #!/bin/bash
-declare -a ALGORITHMS=("B_CONT" "L" "B" "B_COALESCE")
-declare -a FAMILIES=("SWING")
-declare -a COUNTS=("131072")
 COLLECTIVE="MPI_Allreduce"
 
 # Check that I call the right functions
+###########
+# SWING_L #
+###########
 export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
 export LIBSWING_ALLREDUCE_ALGO="L" 
 export LIBSWING_ALLREDUCE_ALGO_LAYER="MPI" 
-FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
-[ "${FUNC_NAME}" == "swing_coll_l" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_coll_l_mpi" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
+export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
+export LIBSWING_ALLREDUCE_ALGO="L" 
+export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_coll_l_utofu" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
+###########
+# SWING_B #
+###########
 export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
 export LIBSWING_ALLREDUCE_ALGO="B" 
 export LIBSWING_ALLREDUCE_ALGO_LAYER="MPI" 
-FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
 [ "${FUNC_NAME}" == "swing_coll_step_b" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
+####################
+# SWING_B_COALESCE #
+####################
 export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
 export LIBSWING_ALLREDUCE_ALGO="B_COALESCE" 
 export LIBSWING_ALLREDUCE_ALGO_LAYER="MPI" 
-FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
 [ "${FUNC_NAME}" == "swing_coll_step_coalesce" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
+################
+# SWING_B_CONT #
+################
 export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
 export LIBSWING_ALLREDUCE_ALGO="B_CONT" 
 export LIBSWING_ALLREDUCE_ALGO_LAYER="MPI" 
-FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
 [ "${FUNC_NAME}" == "swing_coll_step_cont" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
+export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
+export LIBSWING_ALLREDUCE_ALGO="B_CONT" 
+export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_coll_b_cont_utofu" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLREDUCE_ALGO_FAMILY} ${LIBSWING_ALLREDUCE_ALGO} ${LIBSWING_ALLREDUCE_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
+declare -a ALGORITHMS=("B_CONT")
+declare -a FAMILIES=("SWING")
+declare -a COUNTS=("131072")
+# Now check correctness
+for ALGO in "${ALGORITHMS[@]}"
+do        
+    for TYPE in "INT32"
+    do
+        for COUNT in ${COUNTS[@]}
+        do
+            for FAMILY in ${FAMILIES[@]}
+            do  
+                echo "=== ALGO: ${ALGO} -- FAMILY: ${FAMILY} ==="
+                for ITERATIONS in 4
+                do
+                    export LIBSWING_ALLREDUCE_ALGO=${ALGO}
+                    export LIBSWING_ALLREDUCE_ALGO_FAMILY=${FAMILY}
+                    export LIBSWING_ALLREDUCE_ALGO_LAYER="MPI"
+                    for N in 4 8 64
+                    do
+                        echo "Running ${COLLECTIVE} ${ALGO} with n=${N}..."
+                        LIBSWING_ALGO=${ALGO} mpirun -n ${N} --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+                    done
+
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=2x8x2.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2,8,2  mpirun -n 32 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+                done
+            done
+        done
+    done
+done
+
+declare -a ALGORITHMS=("B" "B_COALESCE" "L")
+declare -a FAMILIES=("SWING")
+declare -a COUNTS=("131072")
 # Now check correctness
 for ALGO in "${ALGORITHMS[@]}"
 do        

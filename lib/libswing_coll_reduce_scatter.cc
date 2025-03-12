@@ -18,6 +18,12 @@ int SwingCommon::swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *re
 }
 
 int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+#endif    
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_scatter_utofu_contiguous (init)");
     Timer timer("swing_reduce_scatter_utofu_contiguous (init)");
@@ -186,6 +192,12 @@ int SwingCommon::swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, 
 
 
 int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+#endif    
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_scatter_mpi_contiguous (init)");
     Timer timer("swing_reduce_scatter_mpi_contiguous (init)");
     int dtsize;

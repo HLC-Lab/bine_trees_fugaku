@@ -1406,7 +1406,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     int res = MPI_SUCCESS;
     int dtsize;
     MPI_Type_size(datatype, &dtsize);  
-
     timer.reset("= swing_coll_b (tmpbuf alloc)");
     // Receive into tmpbuf and aggregate into recvbuf
     char* tmpbuf = NULL;

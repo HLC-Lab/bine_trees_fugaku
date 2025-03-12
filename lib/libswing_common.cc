@@ -656,20 +656,10 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
 }
 
 int SwingCommon::swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
-#ifdef VALIDATE
-    printf("func_called: %s\n", __func__);
-    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_L);    
-#endif
     if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI){
         return swing_coll_l_mpi(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-#ifdef FUGAKU
         return swing_coll_l_utofu(sendbuf, recvbuf, count, datatype, op, comm);
-#else
-        fprintf(stderr, "uTofu can only be used on Fugaku.\n");
-        exit(-1);
-#endif
     }else{
         assert("Unknown algorithm");
     }
@@ -1067,7 +1057,8 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
         if(is_power_of_two(this->size)){
             return swing_coll_step_cont(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
         }else{
-            return swing_coll_step_coalesce(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
+            assert("CONT cannot be called with non p2 nodes" == 0);
+            return MPI_ERR_OTHER;
         }
     }else{
         assert("Unknown algo" == 0);
@@ -1528,69 +1519,18 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
             return MPI_ERR_OTHER;
         }
     }
-    if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){     
-#ifdef FUGAKU   
-        int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
-        // Setup all the communications        
-        if(tmpbuf_size > env.prealloc_size){
-            timer.reset("= swing_coll_b (utofu buf reg)");        
-            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
-            timer.reset("= swing_coll_b (utofu buf exch)");     
-            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
-            if(mp != -1){
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
-            }
-        }else{
-            timer.reset("= swing_coll_b (utofu buf reg)");        
-            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
-            // Tempbuf not registered, so add it manually
-            for(size_t i = 0; i < env.num_ports; i++){
-                this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
-            }
-            timer.reset("= swing_coll_b (utofu buf exch)");           
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
-            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
-            if(mp != -1){
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
-            }
-        }
-            
-        timer.reset("= swing_coll_b (utofu main loop)");
 
-#pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
-        for(size_t port = 0; port < env.num_ports; port++){
-            /*
-            int thread_num = omp_get_thread_num();
-            int cpu_num = sched_getcpu();
-            printf("Thread %3d is running on CPU %3d\n", thread_num, cpu_num);
-            */
-            for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
-                for(size_t step = 0; step < this->num_steps; step++){       
-                    int r = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
-                                                op, comm, datatype, datatype, 
-                                                collectives_to_run[collective], collective == 0);                                                    
-                    assert(r == MPI_SUCCESS);
-                }
-            }
-        }
-#else
-        fprintf(stderr, "uTofu can only be used on Fugaku.\n");
-        exit(-1);
-#endif
-    }else{
-        if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
-            size_t total_size_bytes = count*dtsize;
-            memcpy(recvbuf, sendbuf, total_size_bytes);  // TODO: If we are going to compare with the non utofu version we should remove this memcpy from here as well.
-        }
-        for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
-            for(size_t step = 0; step < this->num_steps; step++){                        
-                DPRINTF("[%d] Bitmap computed for step %d\n", this->rank, step);
-                res = swing_coll_step(buf_s[collective], buf_r[collective], blocks_info, step,                                 
-                                      op, comm, datatype, datatype,  
-                                      collectives_to_run[collective]);
-                if(res != MPI_SUCCESS){return res;} 
-            }
+    if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
+        size_t total_size_bytes = count*dtsize;
+        memcpy(recvbuf, sendbuf, total_size_bytes);  // TODO: If we are going to compare with the non utofu version we should remove this memcpy from here as well.
+    }
+    for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+        for(size_t step = 0; step < this->num_steps; step++){                        
+            DPRINTF("[%d] Bitmap computed for step %d\n", this->rank, step);
+            res = swing_coll_step(buf_s[collective], buf_r[collective], blocks_info, step,                                 
+                                    op, comm, datatype, datatype,  
+                                    collectives_to_run[collective]);
+            if(res != MPI_SUCCESS){return res;} 
         }
     }
    
@@ -1603,6 +1543,158 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     timer.reset("= swing_coll_b (profile writing)");
     return res;
 }
+
+/**
+ * A generic collective operation sending/transmitting blocks rather than the entire buffer.
+ * @param blocks_info: For each chunk, port, and block, the count and offset of the block
+*/
+int SwingCommon::swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type){    
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT);    
+#endif
+#ifdef FUGAKU   
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_coll_b (init)");
+    Timer timer("= swing_coll_b_cont_utofu (init)");
+    int res = MPI_SUCCESS;
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);  
+    timer.reset("= swing_coll_b_cont_utofu (tmpbuf alloc)");
+    // Receive into tmpbuf and aggregate into recvbuf
+    char* tmpbuf = NULL;
+    size_t tmpbuf_size = 0;
+    bool free_tmpbuf = false;
+    if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){        
+        if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+            // We can't write in the actual blocks positions since writes
+            // might be executed in a different order than the one in which they were issued.
+            // Thus, we must enforce writes to do not overlap. However, this means a rank must 
+            // know how many blocks have been already written. Because blocks might have uneven size
+            // (e.g., if the buffer size is not divisible by the number of ranks), it is hard to know
+            // where exactly to write the data so that it does not overlap.
+            // For this reason, we allocate a buffer so that it is a multiple of num_ports*num_blocks,
+            // so that we can assume all the blocks have the same size.
+            size_t fixed_count = count;
+            if(count % (env.num_ports * this->size)){
+                // Set fixed_count to the next multiple of env.num_ports * this->size
+                fixed_count = count + (env.num_ports * this->size - count % (env.num_ports * this->size));
+            }
+            tmpbuf_size = fixed_count*dtsize;  
+        }else{
+            tmpbuf_size = count*dtsize;        
+        }        
+        if(tmpbuf_size > env.prealloc_size){
+            posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+            free_tmpbuf = true;
+        }else{
+            tmpbuf = env.prealloc_buf;
+        }
+    }   
+
+    timer.reset("= swing_coll_b_cont_utofu (sbc alloc)");
+    // Create bitmap calculators if not already created
+    for(size_t p = 0; p < env.num_ports; p++){
+        if(this->sbc[p] == NULL){
+            this->sbc[p] = new SwingBitmapCalculator(this->rank, env.dimensions, env.dimensions_num, p, blocks_info, (env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT) && is_power_of_two(this->size), env.allreduce_config.algo_family);
+        }
+    }
+    
+    timer.reset("= swing_coll_b_cont_utofu (coll to run)");
+    size_t collectives_to_run_num = 0;
+    CollType collectives_to_run[LIBSWING_MAX_COLLECTIVE_SEQUENCE]; 
+    void *buf_s[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
+    void *buf_r[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
+    switch(coll_type){
+        case SWING_ALLREDUCE:{
+            collectives_to_run[0] = SWING_REDUCE_SCATTER;            
+            buf_s[0] = recvbuf;
+            buf_r[0] = tmpbuf;
+            collectives_to_run[1] = SWING_ALLGATHER;
+            buf_s[1] = recvbuf;
+            buf_r[1] = recvbuf;
+            collectives_to_run_num = 2;
+            break;
+        }
+        case SWING_REDUCE_SCATTER:{
+            collectives_to_run[0] = SWING_REDUCE_SCATTER;
+            collectives_to_run_num = 1;
+            buf_s[0] = recvbuf;
+            buf_r[0] = tmpbuf;
+            break;
+        }
+        case SWING_ALLGATHER:{
+            collectives_to_run[0] = SWING_ALLGATHER;
+            collectives_to_run_num = 1;
+            buf_s[0] = recvbuf;
+            buf_r[0] = recvbuf;
+            break;
+        }
+        default:{
+            assert("Unknown collective" == 0);
+            return MPI_ERR_OTHER;
+        }
+    }
+    int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
+    // Setup all the communications        
+    if(tmpbuf_size > env.prealloc_size){
+        timer.reset("= swing_coll_b_cont_utofu (utofu buf reg)");        
+        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= swing_coll_b_cont_utofu (utofu buf exch)");     
+        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
+        swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+        if(mp != -1){
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
+        }
+    }else{
+        timer.reset("= swing_coll_b_cont_utofu (utofu buf reg)");        
+        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
+        // Tempbuf not registered, so add it manually
+        for(size_t i = 0; i < env.num_ports; i++){
+            this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
+        }
+        timer.reset("= swing_coll_b_cont_utofu (utofu buf exch)");           
+        swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[0]->get_peers()); 
+        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)      
+        if(mp != -1){
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, this->num_steps, this->sbc[mp]->get_peers()); 
+        }
+    }
+        
+    timer.reset("= swing_coll_b_cont_utofu (utofu main loop)");
+
+#pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+    for(size_t port = 0; port < env.num_ports; port++){
+        /*
+        int thread_num = omp_get_thread_num();
+        int cpu_num = sched_getcpu();
+        printf("Thread %3d is running on CPU %3d\n", thread_num, cpu_num);
+        */
+        for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
+            for(size_t step = 0; step < this->num_steps; step++){       
+                int r = swing_coll_step_utofu(port, utofu_descriptor, sendbuf, recvbuf, tmpbuf, tmpbuf_size, blocks_info, step, 
+                                            op, comm, datatype, datatype, 
+                                            collectives_to_run[collective], collective == 0);                                                    
+                assert(r == MPI_SUCCESS);
+            }
+        }
+    }
+   
+    /********/
+    /* Free */
+    /********/
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
+    timer.reset("= swing_coll_b_cont_utofu (profile writing)");
+    return res;
+#else
+    fprintf(stderr, "uTofu can only be used on Fugaku.\n");
+    exit(-1);
+#endif
+}
+
 
 uint SwingBitmapCalculator::get_peer(uint step, CollType coll_type){
     size_t block_step = (coll_type == SWING_REDUCE_SCATTER) ? step : (this->num_steps - step - 1);   
