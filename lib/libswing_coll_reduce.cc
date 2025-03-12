@@ -15,6 +15,12 @@
 #define SWING_REDUCE_NOSYNC_THRESHOLD 1024 // TODO Read from env. Env should be passed to SwingCommon as a struct with all the variables.
 
 int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+#endif
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
     Timer timer("swing_reduce_utofu (init)");
@@ -186,6 +192,12 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
 }
     
 int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+#endif
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
     Timer timer("swing_reduce_mpi (init)");
     int dtsize;
