@@ -358,15 +358,15 @@ static inline void read_env(MPI_Comm comm){
         /****************************/
         env_str = getenv("LIBSWING_ALLREDUCE_ALGO");
         if(env_str){
-            if(strcmp(env_str, "L")){
+            if(strcmp(env_str, "L") == 0){
                 env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_L;
-            }else if(strcmp(env_str, "B")){
+            }else if(strcmp(env_str, "B") == 0){
                 env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B;
-            }else if(strcmp(env_str, "REDUCE_BCAST")){
+            }else if(strcmp(env_str, "REDUCE_BCAST") == 0){
                 env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_REDUCE_BCAST;
-            }else if(strcmp(env_str, "B_CONT")){
+            }else if(strcmp(env_str, "B_CONT") == 0){
                 env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B_CONT;
-            }else if(strcmp(env_str, "B_COALESCE")){
+            }else if(strcmp(env_str, "B_COALESCE") == 0){
                 env.allreduce_config.algo = SWING_ALLREDUCE_ALGO_B_COALESCE;
             }else{
                 assert("Invalid value for LIBSWING_ALLREDUCE_ALGO" && 0);
@@ -375,13 +375,13 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_ALLGATHER_ALGO");
         if(env_str){
-            if(strcmp(env_str, "VEC_DOUBLING_CONT_PERMUTE")){
+            if(strcmp(env_str, "VEC_DOUBLING_CONT_PERMUTE") == 0){
                 env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE;
-            }else if(strcmp(env_str, "VEC_DOUBLING_CONT_SEND")){
+            }else if(strcmp(env_str, "VEC_DOUBLING_CONT_SEND") == 0){
                 env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND;
-            }else if(strcmp(env_str, "VEC_DOUBLING_BLOCKS")){
+            }else if(strcmp(env_str, "VEC_DOUBLING_BLOCKS") == 0){
                 env.allgather_config.algo = SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS;
-            }else if(strcmp(env_str, "GATHER_BCAST")){
+            }else if(strcmp(env_str, "GATHER_BCAST") == 0){
                 env.allgather_config.algo = SWING_ALLGATHER_ALGO_GATHER_BCAST;
             }else{
                 assert("Invalid value for LIBSWING_ALLGATHER_ALGO" && 0);
@@ -390,13 +390,13 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_REDUCE_SCATTER_ALGO");
         if(env_str){
-            if(strcmp(env_str, "VEC_HALVING_CONT_PERMUTE")){
+            if(strcmp(env_str, "VEC_HALVING_CONT_PERMUTE") == 0){
                 env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE;
-            }else if(strcmp(env_str, "VEC_HALVING_CONT_SEND")){
+            }else if(strcmp(env_str, "VEC_HALVING_CONT_SEND") == 0){
                 env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_SEND;
-            }else if(strcmp(env_str, "VEC_HALVING_BLOCKS")){
+            }else if(strcmp(env_str, "VEC_HALVING_BLOCKS") == 0){
                 env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_BLOCKS;
-            }else if(strcmp(env_str, "REDUCE_SCATTER")){
+            }else if(strcmp(env_str, "REDUCE_SCATTER") == 0){
                 env.reduce_scatter_config.algo = SWING_REDUCE_SCATTER_ALGO_REDUCE_SCATTER;
             }else{
                 assert("Invalid value for LIBSWING_REDUCE_SCATTER_ALGO" && 0);
@@ -405,9 +405,9 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_BCAST_ALGO");
         if(env_str){
-            if(strcmp(env_str, "BINOMIAL_TREE")){
+            if(strcmp(env_str, "BINOMIAL_TREE") == 0){
                 env.bcast_config.algo = SWING_BCAST_ALGO_BINOMIAL_TREE;
-            }else if(strcmp(env_str, "SCATTER_ALLGATHER")){
+            }else if(strcmp(env_str, "SCATTER_ALLGATHER") == 0){
                 env.bcast_config.algo = SWING_BCAST_ALGO_SCATTER_ALLGATHER;
             }else{
                 assert("Invalid value for LIBSWING_BCAST_ALGO" && 0);
@@ -416,7 +416,7 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_ALLTOALL_ALGO");
         if(env_str){
-            if(strcmp(env_str, "LOG")){
+            if(strcmp(env_str, "LOG") == 0){
                 env.alltoall_config.algo = SWING_ALLTOALL_ALGO_LOG;
             }else{
                 assert("Invalid value for LIBSWING_ALLTOALL_ALGO" && 0);
@@ -425,9 +425,9 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_SCATTER_ALGO");
         if(env_str){
-            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE")){
+            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE") == 0){
                 env.scatter_config.algo = SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
-            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND")){
+            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND") == 0){
                 env.scatter_config.algo = SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_SEND;
             }else{
                 assert("Invalid value for LIBSWING_SCATTER_ALGO" && 0);
@@ -436,9 +436,9 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_GATHER_ALGO");
         if(env_str){
-            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE")){
+            if(strcmp(env_str, "BINOMIAL_TREE_CONT_PERMUTE") == 0){
                 env.gather_config.algo = SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE;
-            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND")){
+            }else if(strcmp(env_str, "BINOMIAL_TREE_CONT_SEND") == 0){
                 env.gather_config.algo = SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_SEND;
             }else{
                 assert("Invalid value for LIBSWING_GATHER_ALGO" && 0);
@@ -447,7 +447,7 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_REDUCE_ALGO");
         if(env_str){
-            if(strcmp(env_str, "BINOMIAL_TREE")){
+            if(strcmp(env_str, "BINOMIAL_TREE") == 0){
                 env.reduce_config.algo = SWING_REDUCE_ALGO_BINOMIAL_TREE;
             }else{
                 assert("Invalid value for LIBSWING_REDUCE_ALGO" && 0);
@@ -1004,7 +1004,7 @@ static inline BlockInfo** get_blocks_info(size_t count, SwingCommon* swing_commo
 
 int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     read_env(comm);
-    switch(env.reduce_scatter_config.algo_family){
+    switch(env.allreduce_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm);
         case SWING_ALGO_FAMILY_SWING:

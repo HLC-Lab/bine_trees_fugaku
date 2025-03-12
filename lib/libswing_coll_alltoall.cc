@@ -14,6 +14,92 @@
 
 #define SWING_ALLTOALL_NOSYNC_THRESHOLD 1024
 
+// Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
+int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
+    Timer timer("bruck_alltoall (init)");
+
+	int rank, nprocs;
+	MPI_Comm_rank(comm, &rank);
+	MPI_Comm_size(comm, &nprocs);
+
+	int typesize;
+	MPI_Type_size(datatype, &typesize);
+
+    char *temp_send_buffer, *temp_buffer, *temp_recv_buffer;
+
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*nprocs*typesize + count*typesize*((nprocs+1)/2) + count*typesize*((nprocs+1)/2);
+    if(tmpbuf_size > env.prealloc_size){
+        temp_send_buffer = (char*)malloc(count*nprocs*typesize);
+        temp_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
+        temp_recv_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
+        free_tmpbuf = true;
+    }else{
+        temp_send_buffer = env.prealloc_buf;
+        temp_buffer = env.prealloc_buf + count*nprocs*typesize;
+        temp_recv_buffer = env.prealloc_buf + count*nprocs*typesize + count*typesize*((nprocs+1)/2);
+    }
+
+    // 2. local rotation	
+    timer.reset("= bruck_alltoall (rotation)");
+	memset(temp_send_buffer, 0, count*nprocs*typesize);
+	int offset = 0;
+	for (int i = 0; i < nprocs; i++) {
+		int index = (i - rank + nprocs) % nprocs;
+		memcpy(&temp_send_buffer[index*count*typesize], &((char*) sendbuf)[offset], count*typesize);
+		offset += count*typesize;
+	}
+
+	// 3. exchange data with log(P) steps
+	long long unit_size = count * typesize;
+	for (int k = 1; k < nprocs; k <<= 1) {
+		// 1) find which data blocks to send
+        timer.reset("= bruck_alltoall (send_indexes calc)");
+		int send_indexes[(nprocs+1)/2];
+		int sendb_num = 0;
+		for (int i = k; i < nprocs; i++) {
+			if (i & k)
+				send_indexes[sendb_num++] = i;
+		}
+
+		// 2) copy blocks which need to be sent at this step
+        timer.reset("= bruck_alltoall (memcpys)");
+		for (int i = 0; i < sendb_num; i++) {
+			long long offset = send_indexes[i] * unit_size;
+			memcpy(temp_buffer+(i*unit_size), temp_send_buffer+offset, unit_size);
+		}
+
+		// 3) send and receive
+        timer.reset("= bruck_alltoall (sendrecv)");
+		int recv_proc = (rank - k + nprocs) % nprocs; // receive data from rank - 2^step process
+		int send_proc = (rank + k) % nprocs; // send data from rank + 2^k process
+
+		long long comm_size = sendb_num * unit_size;
+		MPI_Sendrecv(temp_buffer, comm_size, MPI_CHAR, send_proc, 0, temp_recv_buffer, comm_size, MPI_CHAR, recv_proc, 0, comm, MPI_STATUS_IGNORE);
+
+		// 4) replace with received data
+        timer.reset("= bruck_alltoall (replace)");
+		for (int i = 0; i < sendb_num; i++) {
+			long long offset = send_indexes[i] * unit_size;
+			memcpy(temp_send_buffer+offset, temp_recv_buffer+(i*unit_size), unit_size);
+		}
+	}
+
+	// 4. second rotation
+    timer.reset("= bruck_alltoall (final rotation)");
+	offset = 0;
+	for (int i = 0; i < nprocs; i++) {
+		int index = (rank - i + nprocs) % nprocs;
+		memcpy(&((char*)recvbuf)[index*count*typesize], &temp_send_buffer[i*unit_size], count*typesize);
+	}
+    if(free_tmpbuf){
+        free(temp_buffer);
+	    free(temp_recv_buffer);
+	    free(temp_send_buffer);
+    }
+    return MPI_SUCCESS;
+}
+
 int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
 #ifdef FUGAKU
     assert(env.num_ports == 1); // TODO: Support multiport

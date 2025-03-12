@@ -351,6 +351,12 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 #define SWING_ALLREDUCE_NOSYNC_THRESHOLD 1024
 
 int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_L);    
+#endif
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_coll_l_utofu (init)");
     Timer timer("swing_coll_l_utofu (init)");
@@ -535,6 +541,12 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
 //
 // TODO: Implement a multiport version of the shrink/enlarge? 
 int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_L);    
+#endif
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_coll_l_mpi (init)");
     Timer timer("swing_coll_l_mpi (init)");
     int dtsize;
@@ -644,6 +656,11 @@ int SwingCommon::swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count,
 }
 
 int SwingCommon::swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_L);    
+#endif
     if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI){
         return swing_coll_l_mpi(sendbuf, recvbuf, count, datatype, op, comm);
     }else if(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
@@ -732,7 +749,13 @@ static inline int get_last_step(uint32_t block_distance){
 
 int SwingCommon::swing_coll_step_b(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                             
                                    MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                   CollType coll_type){    
+                                   CollType coll_type){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B);    
+#endif    
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     memset(requests_s, 0, sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
@@ -829,6 +852,12 @@ int SwingCommon::swing_coll_step_b(void *buf, void* tmpbuf, BlockInfo** blocks_i
 int SwingCommon::swing_coll_step_coalesce(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                           MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                           CollType coll_type){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_COALESCE);    
+#endif    
     MPI_Request* requests_s = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     MPI_Request* requests_r = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
     memset(requests_s, 0, sizeof(MPI_Request)*this->size*LIBSWING_MAX_SUPPORTED_PORTS);
@@ -953,6 +982,12 @@ int SwingCommon::swing_coll_step_coalesce(void *buf, void* tmpbuf, BlockInfo** b
 int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                 CollType coll_type){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT);    
+#endif    
     MPI_Request requests_s[LIBSWING_MAX_SUPPORTED_PORTS];
     MPI_Request requests_r[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(requests_s, 0, sizeof(requests_s));
@@ -1023,7 +1058,7 @@ int SwingCommon::swing_coll_step_cont(void *buf, void* tmpbuf, BlockInfo** block
 
 int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_info, size_t step,                                 
                                 MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                CollType coll_type){
+                                CollType coll_type){    
     if(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B){
         return swing_coll_step_b(buf, tmpbuf, blocks_info, step, op, comm, sendtype, recvtype, coll_type);
     }else if(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_COALESCE){
@@ -1043,7 +1078,13 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
 #ifdef FUGAKU
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, const BlockInfo *const *const blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
-                                       CollType coll_type, bool is_first_coll){                                        
+                                       CollType coll_type, bool is_first_coll){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU)
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT); 
+#endif    
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
@@ -1412,7 +1453,6 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
     int res = MPI_SUCCESS;
     int dtsize;
     MPI_Type_size(datatype, &dtsize);  
-
     timer.reset("= swing_coll_b (tmpbuf alloc)");
     // Receive into tmpbuf and aggregate into recvbuf
     char* tmpbuf = NULL;
@@ -1747,94 +1787,6 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
     }
     free(chunk_params_per_step);
 }
-
-// Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
-int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
-    Timer timer("bruck_alltoall (init)");
-
-	int rank, nprocs;
-	MPI_Comm_rank(comm, &rank);
-	MPI_Comm_size(comm, &nprocs);
-
-	int typesize;
-	MPI_Type_size(datatype, &typesize);
-
-    char *temp_send_buffer, *temp_buffer, *temp_recv_buffer;
-
-    bool free_tmpbuf = false;
-    size_t tmpbuf_size = count*nprocs*typesize + count*typesize*((nprocs+1)/2) + count*typesize*((nprocs+1)/2);
-    if(tmpbuf_size > env.prealloc_size){
-        temp_send_buffer = (char*)malloc(count*nprocs*typesize);
-        temp_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
-        temp_recv_buffer = (char*)malloc(count*typesize*((nprocs+1)/2));
-        free_tmpbuf = true;
-    }else{
-        temp_send_buffer = env.prealloc_buf;
-        temp_buffer = env.prealloc_buf + count*nprocs*typesize;
-        temp_recv_buffer = env.prealloc_buf + count*nprocs*typesize + count*typesize*((nprocs+1)/2);
-    }
-
-    // 2. local rotation	
-    timer.reset("= bruck_alltoall (rotation)");
-	memset(temp_send_buffer, 0, count*nprocs*typesize);
-	int offset = 0;
-	for (int i = 0; i < nprocs; i++) {
-		int index = (i - rank + nprocs) % nprocs;
-		memcpy(&temp_send_buffer[index*count*typesize], &((char*) sendbuf)[offset], count*typesize);
-		offset += count*typesize;
-	}
-
-	// 3. exchange data with log(P) steps
-	long long unit_size = count * typesize;
-	for (int k = 1; k < nprocs; k <<= 1) {
-		// 1) find which data blocks to send
-        timer.reset("= bruck_alltoall (send_indexes calc)");
-		int send_indexes[(nprocs+1)/2];
-		int sendb_num = 0;
-		for (int i = k; i < nprocs; i++) {
-			if (i & k)
-				send_indexes[sendb_num++] = i;
-		}
-
-		// 2) copy blocks which need to be sent at this step
-        timer.reset("= bruck_alltoall (memcpys)");
-		for (int i = 0; i < sendb_num; i++) {
-			long long offset = send_indexes[i] * unit_size;
-			memcpy(temp_buffer+(i*unit_size), temp_send_buffer+offset, unit_size);
-		}
-
-		// 3) send and receive
-        timer.reset("= bruck_alltoall (sendrecv)");
-		int recv_proc = (rank - k + nprocs) % nprocs; // receive data from rank - 2^step process
-		int send_proc = (rank + k) % nprocs; // send data from rank + 2^k process
-
-		long long comm_size = sendb_num * unit_size;
-		MPI_Sendrecv(temp_buffer, comm_size, MPI_CHAR, send_proc, 0, temp_recv_buffer, comm_size, MPI_CHAR, recv_proc, 0, comm, MPI_STATUS_IGNORE);
-
-		// 4) replace with received data
-        timer.reset("= bruck_alltoall (replace)");
-		for (int i = 0; i < sendb_num; i++) {
-			long long offset = send_indexes[i] * unit_size;
-			memcpy(temp_send_buffer+offset, temp_recv_buffer+(i*unit_size), unit_size);
-		}
-	}
-
-	// 4. second rotation
-    timer.reset("= bruck_alltoall (final rotation)");
-	offset = 0;
-	for (int i = 0; i < nprocs; i++) {
-		int index = (rank - i + nprocs) % nprocs;
-		memcpy(&((char*)recvbuf)[index*count*typesize], &temp_send_buffer[i*unit_size], count*typesize);
-	}
-    if(free_tmpbuf){
-        free(temp_buffer);
-	    free(temp_recv_buffer);
-	    free(temp_send_buffer);
-    }
-    return MPI_SUCCESS;
-}
-
-
 
 /**
  * When receiving data from a peer, we need to know the data from which rank has been already aggregated/concatenated.
