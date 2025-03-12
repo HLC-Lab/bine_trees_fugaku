@@ -419,11 +419,11 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             // TODO Probably easier/better to do allgather???
-            compute_peers(rank_virtual, 0, env.algo, this->scc_virtual, peers);
+            compute_peers(rank_virtual, 0, env.allreduce_config.algo_family, this->scc_virtual, peers);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1){
-                compute_peers(rank_virtual, mp, env.algo, this->scc_virtual, peers);
+                compute_peers(rank_virtual, mp, env.allreduce_config.algo_family, this->scc_virtual, peers);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
             }
             free(peers);
@@ -453,7 +453,7 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
             // Get the peer
             if(virtual_peers[p] == NULL){
                 virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
-                compute_peers(rank_virtual, p, env.algo, this->scc_virtual, virtual_peers[p]);
+                compute_peers(rank_virtual, p, env.allreduce_config.algo_family, this->scc_virtual, virtual_peers[p]);
             }
             for(size_t step = 0; step < (uint) num_steps_virtual; step++){  
                 size_t offset_port_tmpbuf;
@@ -1070,12 +1070,6 @@ int SwingCommon::swing_coll_step(void *buf, void* tmpbuf, BlockInfo** blocks_inf
 int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sendbuf, void *recvbuf, void* tempbuf, size_t tmpbuf_size, const BlockInfo *const *const blocks_info, size_t step, 
                                        MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                        CollType coll_type, bool is_first_coll){
-#ifdef VALIDATE
-    printf("func_called: %s\n", __func__);
-    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU)
-    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_B_CONT); 
-#endif    
     size_t offsets_s, counts_s;
     size_t offsets_r, counts_r;
     
@@ -1604,31 +1598,21 @@ int SwingCommon::swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int
     timer.reset("= swing_coll_b_cont_utofu (coll to run)");
     size_t collectives_to_run_num = 0;
     CollType collectives_to_run[LIBSWING_MAX_COLLECTIVE_SEQUENCE]; 
-    void *buf_s[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
-    void *buf_r[LIBSWING_MAX_COLLECTIVE_SEQUENCE];
     switch(coll_type){
         case SWING_ALLREDUCE:{
             collectives_to_run[0] = SWING_REDUCE_SCATTER;            
-            buf_s[0] = recvbuf;
-            buf_r[0] = tmpbuf;
             collectives_to_run[1] = SWING_ALLGATHER;
-            buf_s[1] = recvbuf;
-            buf_r[1] = recvbuf;
             collectives_to_run_num = 2;
             break;
         }
         case SWING_REDUCE_SCATTER:{
             collectives_to_run[0] = SWING_REDUCE_SCATTER;
             collectives_to_run_num = 1;
-            buf_s[0] = recvbuf;
-            buf_r[0] = tmpbuf;
             break;
         }
         case SWING_ALLGATHER:{
             collectives_to_run[0] = SWING_ALLGATHER;
             collectives_to_run_num = 1;
-            buf_s[0] = recvbuf;
-            buf_r[0] = recvbuf;
             break;
         }
         default:{

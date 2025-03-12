@@ -100,14 +100,14 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             // TODO: Probably need to do this for all the ports for torus with different dimensions
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.bcast_config.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }        
@@ -122,7 +122,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, p, env.algo_family, this->scc_real, peers[p]);
+            compute_peers(this->rank, p, env.bcast_config.algo_family, this->scc_real, peers[p]);
         }        
         timer.reset("= swing_bcast_l (computing trees)");
         int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
@@ -137,7 +137,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
         }
-        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.algo_family, true);
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true);
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 

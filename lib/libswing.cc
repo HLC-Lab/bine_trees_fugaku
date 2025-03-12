@@ -569,6 +569,7 @@ static inline void read_env(MPI_Comm comm){
     }
 }
 
+#if 0
 // Code copied from MPICH repo (https://github.com/pmodels/mpich/tree/bb7f0a9f61dbee66c67073f9c68fa28b6f443e0a/src/mpi/coll/allreduce)
 static int MPI_Allreduce_recdoub_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int comm_size, rank;
@@ -861,6 +862,7 @@ static int MPI_Allreduce_recdoub_b(const void *sendbuf, void *recvbuf, int count
     free(tmp_buf);
     return mpi_errno;
 }
+#endif
 
 static int MPI_Allreduce_ring(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int rank;
@@ -1246,6 +1248,7 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
         default:
             assert("Invalid value for LIBSWING_BCAST_ALGO_FAMILY" && 0);
     }
+    return MPI_ERR_OTHER;
 }
 
 int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
@@ -1394,6 +1397,7 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
         default:
             assert("Invalid value for LIBSWING_GATHER_ALGO_FAMILY" && 0);
     }
+    return MPI_ERR_OTHER;
 }
 
 int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
@@ -1417,6 +1421,7 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
         default:
             assert("Invalid value for LIBSWING_REDUCE_ALGO_FAMILY" && 0);
     }
+    return MPI_ERR_OTHER;
 }
 
 // TODO: Don't use Swing for non-continugous non-native datatypes (tedious implementation)

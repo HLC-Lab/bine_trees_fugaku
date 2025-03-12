@@ -48,14 +48,14 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.gather_config.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.gather_config.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
@@ -77,10 +77,10 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, port, env.algo_family, this->scc_real, peers[port]);
+            compute_peers(this->rank, port, env.gather_config.algo_family, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_gather_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.algo_family, env.gather_config.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -285,5 +285,4 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
     }    
     timer.reset("= swing_gather_mpi (writing profile data to file)");
     return res;
-
 }

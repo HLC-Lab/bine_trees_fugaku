@@ -47,14 +47,14 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.algo_family, this->scc_real, peers[0]);
+            compute_peers(this->rank, 0, env.scatter_config.algo_family, this->scc_real, peers[0]);
             swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.algo_family, this->scc_real, peers[mp]);
+                compute_peers(this->rank, mp, env.scatter_config.algo_family, this->scc_real, peers[mp]);
                 swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
@@ -77,10 +77,10 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, p, env.algo_family, this->scc_real, peers[p]);
+            compute_peers(this->rank, p, env.scatter_config.algo_family, this->scc_real, peers[p]);
         }        
         timer.reset("= swing_scatter_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, p, env.algo_family, env.scatter_config.distance_type, this->scc_real);
+        swing_tree_t tree = get_tree(root, p, env.scatter_config.algo_family, env.scatter_config.distance_type, this->scc_real);
 
         int receiving_step = tree.reached_at_step[this->rank];
 
