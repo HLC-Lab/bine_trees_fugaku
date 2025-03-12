@@ -42,6 +42,12 @@ static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint3
 }
 
 int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.bcast_config.algo_family == SWING_ALGO_FAMILY_SWING || env.bcast_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.bcast_config.algo == SWING_BCAST_ALGO_BINOMIAL_TREE);
+#endif
 #ifdef FUGAKU
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_bcast_l (init)");
     Timer timer("swing_bcast_l (init)");
@@ -210,6 +216,12 @@ int SwingCommon::swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, i
 
 // TODO: Pipeline
 int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.bcast_config.algo_family == SWING_ALGO_FAMILY_SWING || env.bcast_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.bcast_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.bcast_config.algo == SWING_BCAST_ALGO_BINOMIAL_TREE);
+#endif
     assert(env.num_ports == 1); // Hard to do without being able to call MPI from multiple threads at the same time
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_bcast_l_mpi (init)");
     Timer timer("swing_bcast_l_mpi (init)");
