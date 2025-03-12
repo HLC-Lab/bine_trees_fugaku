@@ -13,6 +13,12 @@
 #endif
 
 int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
@@ -163,6 +169,12 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
 }
 
 int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_gather_mpi (init)");

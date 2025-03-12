@@ -1373,7 +1373,7 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                         count_so_far += recvcount;
                     }
 
-                    int res = MPI_SUCCESS;
+                    int res = MPI_SUCCESS;                    
                     if(env.gather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
                         res = swing_common->swing_gather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, blocks_info, comm);
                     }else{

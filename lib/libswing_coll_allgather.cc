@@ -21,7 +21,7 @@ int SwingCommon::swing_allgather_utofu_blocks(const void *sendbuf, int sendcount
 int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
     assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
     assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
 #endif
@@ -157,7 +157,7 @@ int SwingCommon::swing_allgather_utofu(const void *sendbuf, int sendcount, MPI_D
 int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
     assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
     assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
 #endif
