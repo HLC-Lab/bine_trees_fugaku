@@ -19,6 +19,12 @@ int SwingCommon::swing_allgather_utofu_blocks(const void *sendbuf, int sendcount
 }
 
 int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
+#endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
@@ -141,19 +147,20 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
 }
 
 int SwingCommon::swing_allgather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
-#ifdef FUGAKU
     if(is_power_of_two(this->size)){
         return swing_allgather_utofu_contiguous(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }else{
         return swing_allgather_utofu_blocks(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }
-#else
-    assert("uTofu not supported");
-    return MPI_ERR_OTHER;
-#endif   
 }
 
 int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
+#endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_mpi_contiguous (init)");
