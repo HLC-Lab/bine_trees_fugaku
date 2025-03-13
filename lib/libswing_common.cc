@@ -128,9 +128,12 @@ SwingCommon::SwingCommon(MPI_Comm comm, swing_env_t env):all_p2_dimensions(true)
     if(this->num_steps > LIBSWING_MAX_STEPS){
         assert("Max steps limit must be increased and constants updated.");
     }
-    int size;
-    MPI_Comm_size(comm, &size);
-    assert(size == this->size);
+    int size_check;
+    MPI_Comm_size(comm, &size_check);
+
+    //printf("COMM SIZE %d world %d %d %d\n", size_check, comm == MPI_COMM_WORLD, size_check, this->size);
+
+    assert(size_check == this->size);
     MPI_Comm_rank(comm, &this->rank);
     for(size_t i = 0; i < env.num_ports; i++){
         this->sbc[i] = NULL;

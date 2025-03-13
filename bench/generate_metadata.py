@@ -1,13 +1,14 @@
 import os
 import csv
 import sys
+from typing import Optional
 
-RESULTS_DIR = "results/"
+RESULTS_DIR = "../results/"
 
 # Update or create metadata CSV
 def update_metadata(system_name: str, timestamp: str, test_id: int, number_of_nodes: int,
                     collective_type: str, mpi_lib: str, mpi_lib_version : str,
-                    libswing_version: str, cuda: str, output_level: str, mpi_op: str | None, notes: str | None):
+                    libswing_version: str, cuda: str, output_level: str, mpi_op: Optional[str], notes: Optional[str]):
     output_file = os.path.join(RESULTS_DIR, f"{system_name}_metadata.csv")
 
     # Check if file exists to determine whether to write the header
@@ -68,12 +69,10 @@ if __name__ == "__main__":
     output_level = os.getenv('OUTPUT_LEVEL')
     mpi_op = os.getenv('MPI_OP')
     notes = os.getenv('NOTES') or "null"
-    if not (system_name and timestamp and number_of_nodes and number_of_nodes.isdigit() and collective_type and mpi_lib and mpi_lib_version and libswing_version and cuda and output_level):
+    if not (system_name and timestamp and number_of_nodes and number_of_nodes and collective_type and mpi_lib and mpi_lib_version and libswing_version and cuda and output_level):
         print (f"{__file__}: Environment variables not set.", file=sys.stderr)
         print (f"LOCATION={system_name}\nTIMESTAMP={timestamp}\nN_NODES={number_of_nodes}\nCOLLECTIVE_TYPE={collective_type}\nMPI_LIB={mpi_lib}\nMPI_LIB_VERSION={mpi_lib_version}\nLIBSWING_VERSION={libswing_version}\nCUDA={cuda}", file=sys.stderr)
         sys.exit(1)
-
-    number_of_nodes = int(number_of_nodes)
 
     update_metadata(system_name, timestamp, test_id, number_of_nodes, \
                     collective_type, mpi_lib, mpi_lib_version, \

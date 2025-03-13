@@ -236,7 +236,7 @@ int main(int argc, char** argv){
     MPI_Init(&argc, &argv);
     int rank, comm_size;
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);    
 
     MPI_Op MPI_VOIDOP;
     MPI_Op_create(voidop, 1, &MPI_VOIDOP);
@@ -355,7 +355,7 @@ int main(int argc, char** argv){
             avg_iteration += samples_all[i];
         }
         avg_iteration /= iterations;
-        fprintf(stderr, "Average runtime: %f\n", avg_iteration);
+        printf("Average runtime: %f\n", avg_iteration);
     }
     MPI_Finalize();
     free(sendbuf);

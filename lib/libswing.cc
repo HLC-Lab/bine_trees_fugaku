@@ -109,7 +109,7 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             char* copy = (char*) malloc(sizeof(char)*(strlen(env_str) + 1));
             strcpy(copy, env_str);
-            const char *delim = ",";
+            const char *delim = "x";
             char* rest = NULL;
             char *ptr = strtok_r(copy, delim, &rest);
             uint i = 0;

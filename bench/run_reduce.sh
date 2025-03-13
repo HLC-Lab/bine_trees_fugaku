@@ -1,0 +1,174 @@
+#!/bin/bash
+COLLECTIVE="MPI_Reduce"
+
+pushd ..
+source conf.sh
+popd
+
+GREEN=$(tput setaf 2)
+RED=$(tput setaf 1)
+NC=$(tput sgr0
+
+NODES=""
+EXTRA=""
+DIMENSIONS=""
+PORTS_LIST=""
+EXP_ID=""
+while getopts d:p:o:i: flag
+do
+    case "${flag}" in
+        d) DIMENSIONS=${OPTARG};;
+        p) PORTS_LIST=${OPTARG};;
+        o) OUTPUT_DIR=${OPTARG};;
+        i) EXP_ID=${OPTARG};;
+    esac
+done
+
+OUT_PREFIX="swing_out"
+ERR_PREFIX="swing_err"
+MPIEXEC_OUT="-stdout-proc /vol0004/mdt1/home/u12936/swing-allreduce/bench/${OUT_PREFIX} -stderr-proc /vol0004/mdt1/home/u12936/swing-allreduce/bench/${ERR_PREFIX}"
+
+DATATYPE="INT32"
+SIZEOF_DATATYPE=4
+DATATYPE_lc=$(echo ${DATATYPE} | tr '[:upper:]' '[:lower:]')
+
+# Split the values in DIMENSIONS (by x), and multiply them
+IFS='x' read -r -a DIMENSIONS_ARRAY <<< "$DIMENSIONS"
+p=1
+for i in "${DIMENSIONS_ARRAY[@]}"
+do
+    p=$((p * i))
+done
+
+export MPI_OP="MPI_SUM"
+python3 generate_metadata.py ${EXP_ID} || exit 1
+
+for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+do
+    # DATATYPE to lowercase
+    msg_size=$((n * SIZEOF_DATATYPE))
+    iterations=0
+    if [ $n -le 512 ]
+    then
+        iterations=100 #00
+    elif [ $n -le 1048576 ]
+    then
+        iterations=100 #0
+    elif [ $n -le 8388608 ]
+    then
+        iterations=100
+    elif [ $n -le 67108864 ]
+    then
+        iterations=10
+    else
+        iterations=4
+    fi
+    echo -n "Running on "${DIMENSIONS}" (${p} nodes) with count="${n}"..."
+
+
+    #########################
+    # Run the default algos #
+    #########################
+    export LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" 
+    export LIBSWING_REDUCE_ALGO_LAYER="MPI" 
+
+    coll_tuned_prealloc_size=512 # This is in MiB
+    
+    # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
+    # TODO: Maybe I should prealloc only for large REDUCE?
+    EXTRA_MCAS="" #"-mca mpi_print_stats 1 -mca coll_select_show_decision_process 2" #"-mca coll_base_reduce_commute_safe 1"
+
+    DEFAULT_ALGO="default"
+    
+    LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+    ALGO_FNAME=default-${DEFAULT_ALGO}
+    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+    
+    for DEFAULT_ALGO in "linear" "chain" "pipeline"
+    do        
+        LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbl -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+        ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
+        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+    done
+
+    for DEFAULT_ALGO in "binary" "binomial" "trinaryx6" "trinaryx3"
+    do        
+        # Same rules as in the fjmpirules file
+        if [ $msg_size -le 24577 ]
+        then
+            coll_select_reduce_algorithm_segmentsize=0
+        elif [ $msg_size -le 49152 ]
+        then
+            coll_select_reduce_algorithm_segmentsize=1024
+        elif [ $msg_size -le 393216 ]
+        then
+            coll_select_reduce_algorithm_segmentsize=4096
+        elif [ $msg_size -le 6291456 ]
+        then
+            coll_select_reduce_algorithm_segmentsize=16384
+        else
+            coll_select_reduce_algorithm_segmentsize=65536
+        fi
+
+        LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbl -mca coll_select_reduce_algorithm_segmentsize ${coll_select_reduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+        ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
+        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+    done
+
+    for DEFAULT_ALGO in "in-order_binary"
+    do        
+        # Same rules as in the fjmpirules file
+        coll_select_reduce_algorithm_segmentsize=65536
+
+        LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbl -mca coll_select_reduce_algorithm_segmentsize ${coll_select_reduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+        ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
+        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+    done
+
+
+    #######################
+    # Run the Swing algos #
+    #######################
+    PREALLOC_SIZE=536870912
+    export LIBSWING_DIMENSIONS=${DIMENSIONS} 
+    export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    for PORTS in ${PORTS_LIST//,/ }
+    do
+        export LIBSWING_NUM_PORTS=${PORTS}
+        # Run swing binomial tree
+        export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
+        export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
+        export LIBSWING_REDUCE_ALGO="BINOMIAL_TREE"    
+        for SEGMENT_SIZE in 0 4096 65536 1048576
+        do                
+            if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+            fi
+        done
+
+        # Run recdoub binomial tree
+        export LIBSWING_REDUCE_ALGO_FAMILY="RECDOUB" 
+        export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
+        export LIBSWING_REDUCE_ALGO="BINOMIAL_TREE"    
+        for SEGMENT_SIZE in 0 4096 65536 1048576
+        do                
+            if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* #${ERR_PREFIX}*
+            fi
+        done
+    done
+    echo " ${GREEN}[Done]${NC}"
+done
+
+DELETE="no"
+echo "Compressing "${OUTPUT_DIR}/" ..."
+tarball_path="$(dirname "$OUTPUT_DIR")/$(basename "$OUTPUT_DIR").tar.gz"
+if tar -czf "$tarball_path" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"; then
+    if [[ "$DELETE" == "yes" ]]; then
+        rm -rf "$OUTPUT_DIR"
+    fi
+fi
