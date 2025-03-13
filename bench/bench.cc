@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <assert.h>
-
+#include <cinttypes>
 
 #ifdef FUGAKU
 // Adapted from https://www.fugaku.r-ccs.riken.jp/doc_root/en/user_guides/use_latest/JobExecution/TofuStatistics.html
@@ -263,7 +263,7 @@ int main(int argc, char** argv){
     MPI_Type_size(dt, &dtsize);
     srand(time(NULL)*rank);
     if(rank == 0){
-        samples_all = (double*) malloc(sizeof(double)*comm_size*iterations);
+        samples_all = (double*) malloc(sizeof(double)*iterations);
     }
 
     char *sendbuf, *recvbuf, *recvbuf_validation; // To check correctness of results
@@ -345,31 +345,18 @@ int main(int argc, char** argv){
     //print_tnr_stats(tnr_diff, rank);
 #endif    
 
-    PMPI_Gather(samples, iterations, MPI_DOUBLE, samples_all, iterations, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    if(rank == 0){
-        printf("#MessageSize ");
-        for(size_t r = 0; r < (size_t) comm_size; r++){
-            printf("Rank%ldTime(us) ", r);
-        }
-        printf("\n");
+    PMPI_Reduce(samples, samples_all, iterations, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    if(rank == 0){ 
+        printf("highest\n");
         double avg_iteration = 0.0;
         for(i = 0; i < iterations; i++){
-            printf("%d ", count);
-            double max_ranks = 0.0;
-            for(size_t r = 0; r < (size_t) comm_size; r++){
-                double sample = samples_all[r*iterations + i];
-                printf("%f ", sample);
-                if(sample > max_ranks){
-                    max_ranks = sample;
-                }
-            }
-            avg_iteration += max_ranks;
-            printf("\n");
+            samples_all[i] /= comm_size;
+            printf("%" PRId64"\n", (int64_t)(samples_all[i] * 1e9));
+            avg_iteration += samples_all[i];
         }
         avg_iteration /= iterations;
-        printf("Average runtime: %f\n", avg_iteration);
+        fprintf(stderr, "Average runtime: %f\n", avg_iteration);
     }
-    PMPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     free(sendbuf);
     if(recvbuf != sendbuf){
