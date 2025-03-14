@@ -23,6 +23,9 @@ static int force_env_reload = 1, env_read = 0;
 static SwingCommon* swing_common = NULL;
 static swing_env_t env;
 
+std::unordered_map<swing_comm_info_key_t, swing_comm_info_t> comm_info;
+
+
 static void init_env(swing_env_t* env, MPI_Comm comm){
     MPI_Comm_size(comm, (int*) &(env->dimensions[0]));
     env->dimensions_num = 1;

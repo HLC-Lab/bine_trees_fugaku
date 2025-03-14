@@ -5,22 +5,14 @@
 #include <unistd.h>
 #include "libswing_common.h"
 
-typedef struct {
-    uint* parent; // For each node in the tree, its parent.
-    uint* reached_at_step; // For each node in the tree, the step at which it is reached.
-    uint* remapped_ranks; // The remapped rank so that each subtree contains contiguous remapped ranks    
-    uint* remapped_ranks_max; // remapped_ranks_max[i] is the maximum remapped rank in the subtree rooted at i
-    // We do not need to store the min because it is the remapped rank itself (the node is the last in the subtree to be numbered)
-    //uint* remapped_ranks_min; // remapped_ranks_min[i] is the minimum remapped rank in the subtree rooted at i
-} swing_tree_t;
-
 int ceil_log2(unsigned long long x);
 int mod(int a, int b);
 int is_power_of_two(int x);
 
 void compute_peers(uint rank, int port, swing_algo_family_t algo, SwingCoordConverter* scc, uint* peers);
 
-void get_peer_c(int* coord_rank, size_t step, int* coord_peer, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo);
+void get_peer_c(int* coord_rank, size_t step, uint port, swing_step_info_t* step_info, swing_algo_family_t algo, uint dimensions_num, uint* dimensions, int* coord_peer);
+swing_step_info_t* compute_step_info(uint port, SwingCoordConverter* scc, uint dimensions_num, uint* dimensions);
 
 int get_mirroring_port(int num_ports, uint dimensions_num);
 

@@ -14,7 +14,7 @@
 
 // TODO: Rely on trees as for the other collectives.
 
-static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, swing_algo_family_t algo, SwingCoordConverter* scc, bool allgather_schedule){
+static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, swing_algo_family_t algo, SwingCoordConverter* scc, bool allgather_schedule, swing_step_info_t* step_info){
     for(size_t i = step; i < num_steps; i++){
         int real_step;
         if(allgather_schedule){
@@ -23,20 +23,20 @@ static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_
             real_step = i;
         }
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, real_step, peer_rank, port, scc->dimensions_num, scc->dimensions, algo);
+        get_peer_c(coord_rank, real_step, port, step_info, algo, scc->dimensions_num, scc->dimensions, peer_rank);
         
         uint32_t rank = scc->getIdFromCoord(peer_rank);
         if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
             parent[rank] = scc->getIdFromCoord(coord_rank);
             reached_at_step[rank] = i;
         }
-        dfs_reversed(peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule);
+        dfs_reversed(peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule, step_info);
     }
 }
 
-static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo, bool allgather_schedule){
+static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo, bool allgather_schedule, swing_step_info_t* step_info){
     SwingCoordConverter scc(dimensions, dimensions_num);
-    dfs_reversed(coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule);
+    dfs_reversed(coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule, step_info);
     parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
     reached_at_step[scc.getIdFromCoord(coord_root)] = 0; // To avoid sending the step for myself at a wrong value
 }
@@ -119,6 +119,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t p = 0; p < env.num_ports; p++){
+        swing_step_info_t* step_info = compute_step_info(p, this->scc_real, evn.dimensions_num, env.dimensions);
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
@@ -137,7 +138,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             reached_at_step[i] = this->num_steps;
             parent[i] = UINT32_MAX;
         }
-        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true);
+        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true, step_info);
         int receiving_step = reached_at_step[this->rank];
         int peer;        
 
@@ -192,6 +193,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         free(reached_at_step);
         free(parent);
         free(peers[p]);
+        free(step_info);
     }
 
     if(use_tmpbuf && root != this->rank){
@@ -200,8 +202,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
     }
     if(free_tmpbuf){
         free(tmpbuf);
-    }
-    
+    }    
     timer.reset("= swing_bcast_l (writing profile data to file)");
     return res;
 #else
@@ -246,7 +247,9 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
         reached_at_step[i] = this->num_steps;
         parent[i] = UINT32_MAX;
     }
-    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true);
+    swing_step_info_t* step_info = compute_step_info(0, this->scc_real, env.dimensions_num, env.dimensions);
+    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true, step_info);
+    free(step_info);    
     int receiving_step = reached_at_step[this->rank];
     int peer;
     if(root != this->rank){        

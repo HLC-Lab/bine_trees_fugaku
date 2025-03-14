@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 #ifdef FUGAKU
 #include <utofu.h>
 #endif
@@ -35,6 +36,20 @@ static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 
 #define TAG_SWING_SCATTER       (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*6)
 #define TAG_SWING_GATHER        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*7)
 #define TAG_SWING_REDUCE        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*8)
+
+typedef struct {
+    uint* parent; // For each node in the tree, its parent.
+    uint* reached_at_step; // For each node in the tree, the step at which it is reached.
+    uint* remapped_ranks; // The remapped rank so that each subtree contains contiguous remapped ranks    
+    uint* remapped_ranks_max; // remapped_ranks_max[i] is the maximum remapped rank in the subtree rooted at i
+    // We do not need to store the min because it is the remapped rank itself (the node is the last in the subtree to be numbered)
+    //uint* remapped_ranks_min; // remapped_ranks_min[i] is the minimum remapped rank in the subtree rooted at i
+} swing_tree_t;
+
+typedef struct{
+    uint d; // In which dimension is this global step performed
+    uint step_in_d; // What's the relative step in this specific dimension
+} swing_step_info_t;
 
 typedef enum{
     SWING_REDUCE_SCATTER = 0,
@@ -178,6 +193,49 @@ typedef struct {
     swing_distance_type_t distance_type;
 } swing_reduce_config_t;
 
+typedef struct swing_comm_info_key {
+    uint root;
+    uint port;
+    swing_algo_family_t algo;
+    swing_distance_type_t dist_type;
+    MPI_Comm comm;  
+
+    bool operator==(const swing_comm_info_key &other) const
+    { return (root == other.root &&
+              port == other.port &&
+              algo == other.algo &&
+              dist_type == other.dist_type &&
+              comm == other.comm);
+    }
+} swing_comm_info_key_t;
+
+template <>
+struct std::hash<swing_comm_info_key_t>
+{
+  std::size_t operator()(const swing_comm_info_key_t& k) const
+  {
+    using std::size_t;
+    using std::hash;
+    using std::string;
+
+    // Compute individual hash values for first,
+    // second and third and combine them using XOR
+    // and bit shifting:
+
+    return (hash<uint>()(k.root) ^ 
+            hash<uint>()(k.port) ^
+            hash<uint>()(k.algo) ^
+            hash<uint>()(k.dist_type) ^
+            hash<void*>()((void*) k.comm));
+  }
+};
+
+typedef struct {
+    swing_tree_t tree;
+} swing_comm_info_t;
+
+extern std::unordered_map<swing_comm_info_key_t, swing_comm_info_t> comm_info;
+
 typedef struct {
     uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
     uint dimensions_num;
@@ -193,7 +251,7 @@ typedef struct {
     swing_alltoall_config_t alltoall_config;
     swing_scatter_config_t scatter_config;
     swing_gather_config_t gather_config;
-    swing_reduce_config_t reduce_config;
+    swing_reduce_config_t reduce_config;    
 } swing_env_t;
 
 
@@ -279,6 +337,7 @@ class SwingBitmapCalculator {
         uint size;
         size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         uint num_steps;
+        swing_step_info_t* step_info;
 
         // I use either bitmaps or chunk params
         // depending on whether I can send contiguous blocks or not

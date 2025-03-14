@@ -1299,7 +1299,7 @@ void SwingBitmapCalculator::compute_block_step(int* coord_rank, size_t starting_
     if(step < num_steps){
         for(size_t i = step + 1; i < num_steps; i++){
             int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
+            get_peer_c(coord_rank, i, port, step_info, algo, dimensions_num, dimensions, peer_rank);
             compute_block_step(peer_rank, starting_step, i, num_steps, block_step);
         }
         uint rank = scc.getIdFromCoord(coord_rank);
@@ -1374,7 +1374,7 @@ void SwingBitmapCalculator::compute_next_bitmaps(){
 
         for(size_t j = this->next_step; j < this->num_steps; j++){
             int peer_peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            get_peer_c(peer_coord, j, peer_peer_rank, port, dimensions_num, dimensions, algo);
+            get_peer_c(peer_coord, j, port, step_info, algo, dimensions_num, dimensions, peer_peer_rank);
             compute_block_step(peer_peer_rank, j, j, this->num_steps, peer_block_step);
         }
 
@@ -1782,11 +1782,11 @@ static inline uint32_t remap_rank(uint32_t num_ranks, uint32_t rank, uint port, 
 // @param target_rank (IN): the rank to find
 // @param remap_rank (OUT): the remapped rank
 // @param found (OUT): if true, the rank was found
-static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo){
+static void dfs(int* coord_rank, size_t step, size_t num_steps, int* target_rank, uint32_t* remap_rank, bool* found, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo, swing_step_info_t* step_info){
     for(size_t i = step; i < num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, i, peer_rank, port, dimensions_num, dimensions, algo);
-        dfs(peer_rank, i + 1, num_steps, target_rank, remap_rank, found, port, dimensions_num, dimensions, algo);
+        get_peer_c(coord_rank, i, port, step_info, algo, dimensions_num, dimensions, peer_rank);
+        dfs(peer_rank, i + 1, num_steps, target_rank, remap_rank, found, port, dimensions_num, dimensions, algo, step_info);
     }
     if(*found){
         (*remap_rank)--;
@@ -1821,6 +1821,8 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
 
     chunk_params_per_step = (ChunkParams*) malloc(sizeof(ChunkParams)*this->num_steps);
 
+    step_info = compute_step_info(port, &scc, dimensions_num, dimensions);
+
     /* Decide when each block must be sent. */
     if(remap_blocks){
         // Compute the remapped rank
@@ -1830,7 +1832,7 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         int my_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         this->scc.getCoordFromId(rank, my_rank);
         bool found = false;
-        dfs(coord_rank, 0, this->num_steps, my_rank, &(this->remapped_rank), &found, port, dimensions_num, dimensions, algo);
+        dfs(coord_rank, 0, this->num_steps, my_rank, &(this->remapped_rank), &found, port, dimensions_num, dimensions, algo, step_info);
         assert(found);
         this->min_block_r = this->min_block_s = 0;
         this->max_block_r = this->max_block_s = this->size;
@@ -1841,7 +1843,7 @@ SwingBitmapCalculator::SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING
         }
         for(size_t i = 0; i < this->num_steps; i++){
             int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-            get_peer_c(coord_mine, i, peer_rank, port, dimensions_num, dimensions, algo);
+            get_peer_c(coord_mine, i, port, step_info, algo, dimensions_num, dimensions, peer_rank);
             compute_block_step(peer_rank, i, i, this->num_steps, block_step);
         }
         block_step[rank] = this->num_steps; // Disconnect myself (there might be loops, e.g., for 10 nodes)
@@ -1865,6 +1867,7 @@ SwingBitmapCalculator::~SwingBitmapCalculator(){
         free(block_step);
     }
     free(chunk_params_per_step);
+    free(step_info);
 }
 
 /**
