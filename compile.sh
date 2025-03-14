@@ -74,3 +74,6 @@ ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc $
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects_validate} -o ./bench/bench_validate ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/get_coord_daint.c -o ./bench/get_coord_daint
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_dummy_utofu.c -o ./bench/bench_dummy_utofu ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+
+# Tree benchmark
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_tree.cc ${collective_objects} -o ./bench/bench_tree ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
