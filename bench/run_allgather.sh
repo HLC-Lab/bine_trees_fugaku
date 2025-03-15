@@ -63,8 +63,15 @@ do
     else
         iterations=4
     fi
-    echo -n "Running on "${DIMENSIONS}" (${p} nodes) with count="${n}"..."
+    
+    actual_count=$((n / p))
 
+    # Skip if the actual count is less than 1
+    if [ $actual_count -lt 1 ]; then
+        continue
+    fi
+
+    echo -n "Running on "${DIMENSIONS}" (${p} nodes) with count="${n}" (actual count=${actual_count})..."
 
     #########################
     # Run the default algos #
@@ -72,7 +79,8 @@ do
     export LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" 
     export LIBSWING_ALLGATHER_ALGO_LAYER="MPI" 
 
-    coll_tuned_prealloc_size=512 # This is in MiB
+    coll_tuned_prealloc_size=1024 # This is in MiB (1 GiB)
+    PREALLOC_SIZE=1073741824 # 1 GiB
     
     # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
     # TODO: Maybe I should prealloc only for large ALLGATHER?
@@ -80,14 +88,14 @@ do
 
     DEFAULT_ALGO="default"
     
-    LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+    LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
     ALGO_FNAME=default-${DEFAULT_ALGO}
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     
     for DEFAULT_ALGO in "linear" "bruck" "recursive_doubling" "ring" "neighbor" "gtbc" "3dtorus" "3dtorus_sm"
     do        
-        LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbi -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allgather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+        LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbi -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allgather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -97,12 +105,11 @@ do
     #######################
     # Run the Swing algos #
     #######################
-    PREALLOC_SIZE=536870912
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
     for PORTS in ${PORTS_LIST//,/ }
     do
-        if [ $n -ge $PORTS ]; then
+        if [ $actual_count -ge $PORTS ]; then
             export LIBSWING_NUM_PORTS=${PORTS}
             # Run swing
             export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
@@ -111,7 +118,7 @@ do
             for SEGMENT_SIZE in 0 #4096 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
                     ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -125,7 +132,7 @@ do
             for SEGMENT_SIZE in 0 #4096 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
                     ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -135,12 +142,3 @@ do
     done
     echo " ${GREEN}[Done]${NC}"
 done
-
-DELETE="no"
-echo "Compressing "${OUTPUT_DIR}/" ..."
-tarball_path="$(dirname "$OUTPUT_DIR")/$(basename "$OUTPUT_DIR").tar.gz"
-if tar -czf "$tarball_path" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"; then
-    if [[ "$DELETE" == "yes" ]]; then
-        rm -rf "$OUTPUT_DIR"
-    fi
-fi

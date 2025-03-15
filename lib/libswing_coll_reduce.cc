@@ -75,6 +75,13 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     }
     DPRINTF("tmpbuf allocated\n");    
 
+    size_t max_count;
+    if(env.segment_size){
+        max_count = floor(env.segment_size / dtsize);
+    }else{
+        max_count = floor(MAX_PUTGET_SIZE / dtsize);
+    }
+
     int res = MPI_SUCCESS; 
 
     uint partition_size = count / env.num_ports;
@@ -136,23 +143,41 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                         swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);                    
                     }
 
-                    size_t segments_max_put_size = ceil(count_port*dtsize / ((float) MAX_PUTGET_SIZE));
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
+                    // Now start pipelining recv and reduce
+                    size_t remaining = count_port;
+                    size_t bytes_to_recv = 0;
+                    size_t next_recv = 0;
+                    char set_copied = 0;
+                    size_t offset_segment = 0;
 
-                    if(!copied){
-                        reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port_tmpbuf, ((char*) recvbuf) + offset_port, count_port, datatype, op);
-                        copied = 1;
-                    }else{
-                        reduce_local(tmpbuf + offset_port_tmpbuf, ((char*) recvbuf) + offset_port, count_port, datatype, op);
+                    while(remaining){
+                        size_t count = remaining < max_count ? remaining : max_count;
+                        bytes_to_recv = count*dtsize;
+
+                        swing_utofu_wait_recv(utofu_descriptor, port, step, next_recv);
+                        if(!copied){
+                            reduce_local(((char*) sendbuf) + offset_port + offset_segment, tmpbuf + offset_port_tmpbuf + offset_segment, ((char*) recvbuf) + offset_port + offset_segment, count, datatype, op);
+                            set_copied = 1;
+                        }else{
+                            reduce_local(tmpbuf + offset_port_tmpbuf + offset_segment, ((char*) recvbuf) + offset_port + offset_segment, count, datatype, op);
+                        }
+
+                        offset_segment += bytes_to_recv;
+                        remaining -= count;
+                        ++next_recv;
                     }
                     
+                    if(set_copied){
+                        copied = 1;
+                    }
+
+                    // Now wait for the 0-byte put notify completion
                     if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
                         swing_utofu_wait_sends(utofu_descriptor, port, 1);
                     }
                 }
             }else if(step == sending_step){
                 // Send to parent
-                size_t issued_sends = 0;
                 uint peer = tree.parent[this->rank];            
                 DPRINTF("[%d] Sending to %d at step %d\n", this->rank, peer, step);
                 utofu_stadd_t lcl_addr, rmt_addr;
@@ -169,7 +194,20 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                     swing_utofu_wait_recv(utofu_descriptor, port, step, 0);
                 }
 
-                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_port*dtsize, rmt_addr, step);
+                // Now start pipelining recv and reduce
+                size_t issued_sends = 0;
+                size_t remaining = count_port;
+                size_t bytes_to_send = 0;
+                size_t offset_segment = 0;
+                
+                while(remaining){
+                    size_t count = remaining < max_count ? remaining : max_count;
+                    bytes_to_send = count*dtsize;
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr + offset_segment, count*dtsize, rmt_addr + offset_segment, step);
+                    offset_segment += bytes_to_send;
+                    remaining -= count;
+                }
+                            
                 swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             }
             // Wait all the sends for this segment before moving to the next one

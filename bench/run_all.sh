@@ -44,3 +44,12 @@ do
     ./run_${COLLECTIVE}.sh -d "${DIMENSIONS}" -p "${PORTS_LIST}" -o "${OUTPUT_DIR}" -i "${i}"
     i=$((i+1))
 done
+
+DELETE="no"
+echo "Compressing "${OUTPUT_DIR}/" ..."
+tarball_path="$(dirname "$OUTPUT_DIR")/$(basename "$OUTPUT_DIR").tar.gz"
+if tar -czf "$tarball_path" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"; then
+    if [[ "$DELETE" == "yes" ]]; then
+        rm -rf "$OUTPUT_DIR"
+    fi
+fi

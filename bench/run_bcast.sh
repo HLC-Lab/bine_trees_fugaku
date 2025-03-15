@@ -72,7 +72,8 @@ do
     export LIBSWING_BCAST_ALGO_FAMILY="DEFAULT" 
     export LIBSWING_BCAST_ALGO_LAYER="MPI" 
 
-    coll_tuned_prealloc_size=512 # This is in MiB
+    coll_tuned_prealloc_size=1024 # This is in MiB (1 GiB)
+    PREALLOC_SIZE=1073741824 # 1 GiB
     
     # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
     # TODO: Maybe I should prealloc only for large BCAST?
@@ -125,7 +126,6 @@ do
     #######################
     # Run the Swing algos #
     #######################
-    PREALLOC_SIZE=536870912
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
     for PORTS in ${PORTS_LIST//,/ }
@@ -163,12 +163,3 @@ do
     done
     echo " ${GREEN}[Done]${NC}"
 done
-
-DELETE="no"
-echo "Compressing "${OUTPUT_DIR}/" ..."
-tarball_path="$(dirname "$OUTPUT_DIR")/$(basename "$OUTPUT_DIR").tar.gz"
-if tar -czf "$tarball_path" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"; then
-    if [[ "$DELETE" == "yes" ]]; then
-        rm -rf "$OUTPUT_DIR"
-    fi
-fi

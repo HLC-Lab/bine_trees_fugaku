@@ -181,17 +181,17 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     if(!strcmp(collective, "MPI_Allreduce")){
         send_count = count;
         recv_count = count;
+    }else if(!strcmp(collective, "MPI_Bcast")){
+        send_count = count;
+        recv_count = count;
+    }else if(!strcmp(collective, "MPI_Reduce")){
+        send_count = count;
+        recv_count = count;
     }else if(!strcmp(collective, "MPI_Reduce_scatter")){
         send_count = count*size;
         recv_count = count;
     }else if(!strcmp(collective, "MPI_Allgather")){
         send_count = count;
-        recv_count = count*size;
-    }else if(!strcmp(collective, "MPI_Bcast")){
-        send_count = count;
-        recv_count = count;
-    }else if(!strcmp(collective, "MPI_Alltoall")){
-        send_count = count*size;
         recv_count = count*size;
     }else if(!strcmp(collective, "MPI_Scatter")){
         send_count = count*size;
@@ -199,9 +199,9 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
     }else if(!strcmp(collective, "MPI_Gather")){
         send_count = count;
         recv_count = count*size;
-    }else if(!strcmp(collective, "MPI_Reduce")){
-        send_count = count;
-        recv_count = count;
+    }else if(!strcmp(collective, "MPI_Alltoall")){
+        send_count = count*size;
+        recv_count = count*size;
     }else{
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
