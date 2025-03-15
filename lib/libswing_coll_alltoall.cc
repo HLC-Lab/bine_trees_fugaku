@@ -295,6 +295,7 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
     
     timer.reset("= swing_alltoall_utofu (dealloc)");
     if(scratch){
+        swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         free(scratch);
     }
     free(peers[port]);

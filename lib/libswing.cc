@@ -100,7 +100,7 @@ static inline void read_env(MPI_Comm comm){
 
         env_str = getenv("LIBSWING_PREALLOC_SIZE");
         if(env_str){
-            env.prealloc_size = atoi(env_str);
+            env.prealloc_size = atol(env_str);
         }
 
         env_str = getenv("LIBSWING_UTOFU_ADD_AG");

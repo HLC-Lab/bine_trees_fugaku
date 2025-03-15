@@ -101,6 +101,16 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
     }
 }
 
+void swing_utofu_dereg_buf(swing_utofu_comm_descriptor* desc, void* buffer, int port){
+    auto it = desc->port_info[port].registration_cache->find(buffer);
+    if(it != desc->port_info[port].registration_cache->end()){
+        utofu_dereg_mem(desc->port_info[port].vcq_hdl, it->second, 0);
+        desc->port_info[port].registration_cache->erase(it);
+    }else{
+        assert("Buffer not found in registration cache." && 0);
+    }
+}
+
 void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_steps, uint* peers){
     uint64_t* sbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
     MPI_Request reqs[LIBSWING_MAX_STEPS];

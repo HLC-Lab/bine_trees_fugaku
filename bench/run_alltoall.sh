@@ -87,7 +87,7 @@ do
     
     for DEFAULT_ALGO in "linear" "pairwise" "modified_bruck" "linear_sync" "doublespread" "blacc3d" "blacc6d" "crp"
     do        
-        LIBSWING_ALLTOALL_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbl -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_alltoall_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+        LIBSWING_ALLTOALL_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbi -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_alltoall_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -102,37 +102,42 @@ do
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
     for PORTS in ${PORTS_LIST//,/ } # TODO Multiport alltoall not implemented yet
     do
-        export LIBSWING_NUM_PORTS=${PORTS}
-        # Run swing
-        export LIBSWING_ALLTOALL_ALGO_FAMILY="SWING" 
-        export LIBSWING_ALLTOALL_ALGO_LAYER="UTOFU" 
-        export LIBSWING_ALLTOALL_ALGO="LOG"    
-        if [ ${PORTS} -eq 1 ]; then # TODO Multiport alltoall not implemented yet
-            for SEGMENT_SIZE in 0 #4096 65536 1048576
-            do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_ALLTOALL_ALGO_FAMILY}-${LIBSWING_ALLTOALL_ALGO}-${LIBSWING_ALLTOALL_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-                fi
-            done
-        fi
-    
-        # Run Bruck (only if PORTS==1)
-        if [ ${PORTS} -eq 1 ]; then
-            export LIBSWING_ALLTOALL_ALGO_FAMILY="BRUCK" 
-            export LIBSWING_ALLTOALL_ALGO_LAYER="MPI" 
+        # Check if the number of elements is enough to run the algorithm
+        # This is equal to (PORTS*p)/2
+        MIN_ELEMS=$((PORTS * p / 2))
+        if [ "$n" -ge "$MIN_ELEMS" ]; then
+            export LIBSWING_NUM_PORTS=${PORTS}
+            # Run swing
+            export LIBSWING_ALLTOALL_ALGO_FAMILY="SWING" 
+            export LIBSWING_ALLTOALL_ALGO_LAYER="UTOFU" 
             export LIBSWING_ALLTOALL_ALGO="LOG"    
-            for SEGMENT_SIZE in 0 #4096 65536 1048576
-            do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_ALLTOALL_ALGO_FAMILY}-${LIBSWING_ALLTOALL_ALGO}-${LIBSWING_ALLTOALL_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-                fi
-            done
+            if [ ${PORTS} -eq 1 ]; then # TODO Multiport alltoall not implemented yet
+                for SEGMENT_SIZE in 0 #4096 65536 1048576
+                do                
+                    if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                        ALGO_FNAME=${LIBSWING_ALLTOALL_ALGO_FAMILY}-${LIBSWING_ALLTOALL_ALGO}-${LIBSWING_ALLTOALL_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                    fi
+                done
+            fi
+        
+            # Run Bruck (only if PORTS==1)
+            if [ ${PORTS} -eq 1 ]; then
+                export LIBSWING_ALLTOALL_ALGO_FAMILY="BRUCK" 
+                export LIBSWING_ALLTOALL_ALGO_LAYER="MPI" 
+                export LIBSWING_ALLTOALL_ALGO="LOG"    
+                for SEGMENT_SIZE in 0 #4096 65536 1048576
+                do                
+                    if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                        ALGO_FNAME=${LIBSWING_ALLTOALL_ALGO_FAMILY}-${LIBSWING_ALLTOALL_ALGO}-${LIBSWING_ALLTOALL_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                    fi
+                done
+            fi
         fi
     done
     echo " ${GREEN}[Done]${NC}"

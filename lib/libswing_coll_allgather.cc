@@ -133,6 +133,9 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
         
         free(peers[port]);
         destroy_tree(&tree);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+        }        
     }
 
     if(free_tmpbuf){

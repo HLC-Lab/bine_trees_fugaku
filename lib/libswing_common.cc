@@ -508,7 +508,10 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                     reduce_local((char*) tmpbuf + offset_port_tmpbuf, (char*) recvbuf + offset_port, count_port, datatype, op); // TODO: Try to replace again with MPI_Reduce_local ?                
                 }                         
                 DPRINTF("[%d] Step %d completed\n", rank, step);    
-            }        
+            }    
+            if(free_tmpbuf){
+                swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, p);
+            }    
         }
     }
 
@@ -1659,6 +1662,9 @@ int SwingCommon::swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int
                 assert(r == MPI_SUCCESS);
             }
         }
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+        }                
     }
    
     /********/

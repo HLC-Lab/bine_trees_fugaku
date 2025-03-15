@@ -20,6 +20,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
     assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
 #endif
 #ifdef FUGAKU
+    assert(sendcount >= env.num_ports);
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_gather_utofu (init)");
@@ -157,6 +158,9 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         
         free(peers[port]);
         destroy_tree(&tree);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+        }                
     }
 
     if(free_tmpbuf){

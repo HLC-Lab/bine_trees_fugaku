@@ -54,10 +54,9 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     
     size_t tmpbuf_size = tmpbuf_send_size + tmpbuf_recv_size;    
     timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf reg)"); 
-    printf("tmpbuf_size: %lu prealloc_size: %lu\n", tmpbuf_size, env.prealloc_size); fflush(stdout);
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        assert(posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size) == 0);
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
         timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf exch)");           
@@ -163,8 +162,10 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             offset_step_recv += count_to_sendrecv*dtsize;
         }        
         free(peers[port]);
-
         destroy_tree(&tree);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+        }        
     }
 
     if(free_tmpbuf){

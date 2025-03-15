@@ -22,6 +22,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
 #endif
 #ifdef FUGAKU
+    assert(count >= env.num_ports);
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
     Timer timer("swing_reduce_utofu (init)");
     int dtsize;
@@ -177,6 +178,9 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
         
         free(peers[port]);
         destroy_tree(&tree);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+        }        
     }
 
     if(free_tmpbuf){

@@ -22,6 +22,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
 #ifdef FUGAKU
+    assert(sendcount >= env.num_ports);
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_scatter_utofu (init)");
     Timer timer("swing_scatter_utofu (init)");
     int dtsize;
@@ -151,6 +152,9 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         memcpy((char*) recvbuf + blocks_info[p][0].offset, 
                tmpbuf + tmpbuf_offset_port + blocks_info[p][0].count*my_remapped_rank*dtsize, 
                blocks_info[p][my_remapped_rank].count*dtsize);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, p);
+        }        
     }
 
     if(free_tmpbuf){
