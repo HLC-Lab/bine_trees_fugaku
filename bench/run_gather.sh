@@ -43,7 +43,7 @@ done
 export MPI_OP="null"
 python3 generate_metadata.py ${EXP_ID} || exit 1
 
-for n in 1 8 64 512 2048 16384 131072 1048576 8388608 67108864
+for n in 1 8 64 512 4096 32768 262144 2097152 16777216 134217728
 do
     # DATATYPE to lowercase
     msg_size=$((n * SIZEOF_DATATYPE))
@@ -79,7 +79,7 @@ do
     export LIBSWING_GATHER_ALGO_FAMILY="DEFAULT" 
     export LIBSWING_GATHER_ALGO_LAYER="MPI" 
 
-    coll_tuned_prealloc_size=1024 # This is in MiB (1 GiB)
+    coll_tuned_prealloc_size=1027 # This is in MiB (1 GiB + 3MiB)
     PREALLOC_SIZE=1073741824 # 1 GiB
     
     # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
