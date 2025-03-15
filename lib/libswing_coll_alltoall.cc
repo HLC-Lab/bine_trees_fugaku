@@ -268,9 +268,12 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends); 
 
         // Update resident blocks
+        memcpy(resident_block, resident_block_next, sizeof(uint)*num_resident_blocks);
+        /**
         for(size_t i = 0; i < num_resident_blocks; i++){
             resident_block[i] = resident_block_next[i];
         }
+        **/
     }
 
     timer.reset("= swing_alltoall_utofu (final permutation)");
@@ -415,9 +418,12 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
         }      
 
         // Update resident blocks
+        memcpy(resident_block, resident_block_next, sizeof(uint)*num_resident_blocks);
+        /*
         for(size_t i = 0; i < num_resident_blocks; i++){
             resident_block[i] = resident_block_next[i];
         }
+        */
     }
 
     timer.reset("= swing_alltoall_mpi (final permutation)");
