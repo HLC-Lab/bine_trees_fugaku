@@ -35,15 +35,20 @@ done
 # Collective impls
 # Bash list of collectives to compile
 collective_objects_validate=""
-# Compile each collective
-for collective in "${collectives[@]}"; do
-    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -DVALIDATE -D${SYSTEM^^} -c -fPIC -pthread ./lib/${collective}.cc -o ./lib/${collective}_validate.o ${MPI_COMPILER_FLAGS}
-    if [ ! -f "./lib/${collective}_validate.o" ]; then
-        echo "${RED}[Error] ${collective}_validate.o compilation failed, please check error messages above.${NC}"
-        exit 1
-    fi
-    collective_objects_validate="${collective_objects_validate} ./lib/${collective}_validate.o"
-done
+
+if [ ${SYSTEM} = "fugaku" ]; then
+    echo "Skipping validation compilation for Fugaku"
+else
+    # Compile each collective
+    for collective in "${collectives[@]}"; do
+        ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -DVALIDATE -D${SYSTEM^^} -c -fPIC -pthread ./lib/${collective}.cc -o ./lib/${collective}_validate.o ${MPI_COMPILER_FLAGS}
+        if [ ! -f "./lib/${collective}_validate.o" ]; then
+            echo "${RED}[Error] ${collective}_validate.o compilation failed, please check error messages above.${NC}"
+            exit 1
+        fi
+        collective_objects_validate="${collective_objects_validate} ./lib/${collective}_validate.o"
+    done
+fi
 
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -shared -pthread -pthread -o ./lib/libswing.so ${collective_objects} ${EXTRA_LIBS} ${MPI_COMPILER_FLAGS}
 if [ ! -f "./lib/libswing.so" ]; then
@@ -77,3 +82,8 @@ ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/get_coord_daint.c -o ./be
 
 # Tree benchmark
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_tree.cc ${collective_objects} -o ./bench/bench_tree ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+
+# Compile system-specific stuff
+if [ ${SYSTEM} = "fugaku" ]; then
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/check_coord.cc ${collective_objects} -o ./bench/check_coord ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+fi

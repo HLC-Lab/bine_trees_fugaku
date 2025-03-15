@@ -3,7 +3,7 @@
 #PJM -L  "rscgrp=small-torus"
 #PJM -L  "elapse=01:00:00"
 #PJM -g hp240312
-#PJM --mpi  "rank-map-bynode=XY"
+#PJM --mpi  "rank-map-bynode=YX"
 #PJM --mpi "max-proc-per-node=1"
 #
 
