@@ -485,23 +485,16 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 }
                 rmt_addr = utofu_descriptor->port_info[p].rmt_temp_stadd[peer] + offset_port_tmpbuf;
 
-                size_t issued_sends = 0, issued_recvs = 0;
-
+                size_t issued_sends = 0;
                 if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
                     // Do a 0-byte put to notify I am ready to recv
-                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, 0, rmt_addr, step);                    
-                    ++issued_sends;
-
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, 0, rmt_addr, step);                    
                     // Do a 0-byte recv to check if the peer is ready to recv
-                    swing_utofu_wait_recv(utofu_descriptor, p, step, issued_recvs);
-                    ++issued_recvs;
+                    swing_utofu_wait_recv(utofu_descriptor, p, step, issued_sends - 1);
                 }
 
-                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, count_port*dtsize, rmt_addr, step); 
-                ++issued_sends;
-                
-                swing_utofu_wait_recv(utofu_descriptor, p, step, issued_recvs);   
-                ++issued_recvs;
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, count_port*dtsize, rmt_addr, step);                 
+                swing_utofu_wait_recv(utofu_descriptor, p, step, issued_sends - 1);   
 
                 // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
                 swing_utofu_wait_sends(utofu_descriptor, p, issued_sends); 

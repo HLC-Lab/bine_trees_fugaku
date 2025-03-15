@@ -47,7 +47,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          uint num_ports);
 void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_steps, uint* peers);
 void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, uint num_steps);
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
+size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
     utofu_stadd_t lcl_addr, size_t length, 
     utofu_stadd_t rmt_addr, uint64_t edata);
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count);

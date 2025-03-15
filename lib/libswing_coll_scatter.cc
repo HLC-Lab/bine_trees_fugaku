@@ -85,12 +85,16 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         int receiving_step = tree.reached_at_step[this->rank];
 
         DPRINTF("Step from root: %d\n", receiving_step);
-        size_t issued_sends = 0, issued_recvs = 0;
+        size_t issued_sends = 0;
         timer.reset("= swing_scatter_utofu (waiting recv)");
         if(root != this->rank){        
             // Receive the data from the root    
-            swing_utofu_wait_recv(utofu_descriptor, p, 0, issued_recvs);
-            issued_recvs++;
+            size_t min_block_r = tree.remapped_ranks[rank];
+            size_t max_block_r = tree.remapped_ranks_max[rank];
+            size_t blocks_to_recv = (max_block_r - min_block_r) + 1;
+            size_t bytes_to_recv = blocks_info[p][0].count*blocks_to_recv*dtsize; // All blocks for this port have the same size
+            size_t segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
+            swing_utofu_wait_recv(utofu_descriptor, p, 0, segments_max_put_size - 1);
         }else{
             receiving_step = -1;
         }
@@ -132,8 +136,7 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
                     utofu_stadd_t lcl_addr = utofu_descriptor->port_info[p].lcl_temp_stadd       + tmpbuf_offset_port + min_block_s*blocks_info[p][0].count*dtsize;
                     utofu_stadd_t rmt_addr = utofu_descriptor->port_info[p].rmt_temp_stadd[peer] + tmpbuf_offset_port + min_block_s*blocks_info[p][0].count*dtsize;
                     size_t tmpcnt = blocks_info[p][0].count*blocks_to_send; // All blocks for this port have the same size
-                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, 0);                                                             
-                    ++issued_sends;
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, 0);                                                             
                     swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
                 }
             }

@@ -65,7 +65,7 @@ do
     fi
     echo -n "Running on "${DIMENSIONS}" (${p} nodes) with count="${n}"..."
 
-
+    
     #########################
     # Run the default algos #
     #########################
@@ -153,23 +153,25 @@ do
         export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 
         export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
         export LIBSWING_ALLREDUCE_ALGO="L"    
-        #if [ $n -le 1048576 ]; then
+        MIN_ELEMS=$((PORTS))
+        if [ "$n" -ge "$MIN_ELEMS" ]; then
             for SEGMENT_SIZE in 0 4096 65536 1048576
             do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                if [ $SEGMENT_SIZE -lt $msg_size ]; then                    
                     LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
                     ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
-        #fi
+        fi
 
         # Run lat optimal recdoub
         export LIBSWING_ALLREDUCE_ALGO_FAMILY="RECDOUB" 
         export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
         export LIBSWING_ALLREDUCE_ALGO="L"    
-        #if [ $n -le 1048576 ]; then
+        MIN_ELEMS=$((PORTS))
+        if [ "$n" -ge "$MIN_ELEMS" ]; then
             for SEGMENT_SIZE in 0 4096 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $msg_size ]; then
@@ -179,7 +181,7 @@ do
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
-        #fi
+        fi
 
         # Run bw optimal swing
         export LIBSWING_ALLREDUCE_ALGO_FAMILY="SWING" 

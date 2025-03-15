@@ -54,6 +54,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     
     size_t tmpbuf_size = tmpbuf_send_size + tmpbuf_recv_size;    
     timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf reg)"); 
+    printf("tmpbuf_size: %lu prealloc_size: %lu\n", tmpbuf_size, env.prealloc_size); fflush(stdout);
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
         posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
@@ -87,7 +88,6 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
     }
-
     char* tmpbuf_send = tmpbuf;
     char* tmpbuf_recv = tmpbuf + tmpbuf_send_size;
 
@@ -134,8 +134,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 
             // Always send from the end of the buffer
             // and receive in the beginning of the buffer
-            timer.reset("= swing_reduce_scatter_utofu_contiguous (sendrecv)");
-            size_t issued_sends = 0, issued_recvs = 0;
+            timer.reset("= swing_reduce_scatter_utofu_contiguous (sendrecv)");            
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
             
@@ -145,12 +144,9 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             DPRINTF("Port %d sending from %d to %d\n", port, lcl_addr - utofu_descriptor->port_info[port].lcl_temp_stadd, rmt_addr - utofu_descriptor->port_info[port].rmt_temp_stadd[peer]);
             DPRINTF("tmpbuf[0] (port %d) at step %d before send: %d \n", port, step, ((char*) tmpbuf_send_port)[0]);
 
-            swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
-            issued_sends++;
-            
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
-            issued_recvs++;
-
+            size_t issued_sends = 0;
+            issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step); 
+            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
             swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
 
             DPRINTF("tmpbuf_recv[0] (port %d) at step %d after send: %d \n", port, step, ((char*) tmpbuf_recv_port)[0]);

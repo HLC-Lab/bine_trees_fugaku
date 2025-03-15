@@ -110,9 +110,9 @@ int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendc
             
             DPRINTF("[%d] Sending/receiving %d bytes from %d\n", this->rank, count_to_sendrecv*dtsize, peer);
             
-            swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
-            swing_utofu_wait_recv(utofu_descriptor, port, step, 0);
-            swing_utofu_wait_sends(utofu_descriptor, port, 1);
+            size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
+            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
+            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         }
 
         // For each port we need to permute back the data in the correct position

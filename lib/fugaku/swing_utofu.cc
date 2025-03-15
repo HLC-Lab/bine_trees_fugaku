@@ -125,7 +125,7 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
             desc->port_info[i].rmt_temp_stadd[peer] = rbuffer[2*i+1];
         }
     }
-    MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE);
+    MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE);    
 
     free(sbuffer);
     free(rbuffer);
@@ -168,27 +168,36 @@ static inline void swing_utofu_wait_send(swing_utofu_comm_descriptor* desc, uint
 
 
 // send data and confirm its completion
-void swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+// returns the number of issued sends
+size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
                        uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length, 
                        utofu_stadd_t rmt_addr, uint64_t edata){    
-    if(length > MAX_PUTGET_SIZE){
-        fprintf(stderr, "Put maximum length exceeded %ld vs. %ld.\n", length, MAX_PUTGET_SIZE);
-        exit(-1);
-    }
-    uintptr_t cbvalue = 0; // for tcq polling; the value is not used
-    // instruct the TNI to perform a Put communication
-    // embed the default communication path coordinates into the received VCQ ID.
-    assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
+    size_t remaining = length;
+    size_t bytes_to_send = 0;
+    size_t issued_sends = 0;
+    size_t offset = 0;
+    do{
+        bytes_to_send = remaining < MAX_PUTGET_SIZE ? remaining : MAX_PUTGET_SIZE;
 
-    // If too many put requests are posted, we need to wait for some of the previous
-    // ones to be over.
-    while(utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
-                    lcl_addr, rmt_addr, length,
-                    edata, SWING_UTOFU_POST_FLAGS, (void *)cbvalue) == UTOFU_ERR_BUSY){
-        swing_utofu_wait_send(desc, port);
-        desc->port_info[port].completed_send += 1;
-    }
+        uintptr_t cbvalue = 0; // for tcq polling; the value is not used
+        // instruct the TNI to perform a Put communication
+        // embed the default communication path coordinates into the received VCQ ID.
+        assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
+
+        // If too many put requests are posted, we need to wait for some of the previous
+        // ones to be over.
+        while(utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
+                        lcl_addr + offset, rmt_addr + offset, bytes_to_send,
+                        edata, SWING_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
+            swing_utofu_wait_send(desc, port);
+            desc->port_info[port].completed_send += 1;
+        }
+        ++issued_sends;
+        offset += bytes_to_send;
+        remaining -= bytes_to_send;
+    }while(remaining);
+    return issued_sends;
 }
 
 void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count){    

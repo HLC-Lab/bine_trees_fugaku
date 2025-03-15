@@ -105,7 +105,6 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                
         for(size_t step = 0; step < (uint) this->num_steps; step++){ 
             size_t issued_sends = 0;
-            size_t issued_recvs = 0;       
             if(step < sending_step){
                 // Receive from peer                
                 uint peer;
@@ -116,8 +115,12 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 }
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
-                    issued_recvs++;
+                    size_t min_block_r = tree.remapped_ranks[peer];
+                    size_t max_block_r = tree.remapped_ranks_max[peer];            
+                    size_t blocks_to_recv = (max_block_r - min_block_r) + 1; 
+                    size_t bytes_to_recv = blocks_info[port][0].count*blocks_to_recv*dtsize; // All blocks for this port have the same size
+                    size_t segments_max_put_size = ceil((float) bytes_to_recv / ((float) MAX_PUTGET_SIZE));
+                    swing_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -129,8 +132,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd       + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 size_t tmpcnt = num_blocks*blocks_info[port][0].count; // All blocks for this port have the same size
-                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, step);                                                             
-                ++issued_sends;
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, step);
                 swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             }
             // Wait all the sends for this segment before moving to the next one

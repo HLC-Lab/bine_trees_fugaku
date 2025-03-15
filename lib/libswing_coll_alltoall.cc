@@ -12,7 +12,7 @@
 #include "fugaku/swing_utofu.h"
 #endif
 
-#define SWING_ALLTOALL_NOSYNC_THRESHOLD 1024
+#define SWING_ALLTOALL_NOSYNC_THRESHOLD 0 //6710886400
 
 // Adapted from https://github.com/harp-lab/bruck-alltoallv/blob/main/src/padded_bruck.cpp
 int SwingCommon::bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
@@ -250,26 +250,21 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_offset + (size/2)*count*dtsize + tmpbuf_step_offset;
 
-        size_t issued_sends = 0, issued_recvs = 0;
+        size_t issued_sends = 0;
         if(count*dtsize > SWING_ALLTOALL_NOSYNC_THRESHOLD){ 
             // Do a 0-byte put to notify I am ready to recv
-            swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);                    
-            ++issued_sends;
+            issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);                    
 
             // Do a 0-byte recv to check if the peer is ready to recv
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
-            ++issued_recvs;
+            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
         }else{
             tmpbuf_step_offset += (size/2)*count*dtsize;            
         }
         
 
-        swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count*block_send_cnt*dtsize, rmt_addr, step); 
-        ++issued_sends;
+        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count*block_send_cnt*dtsize, rmt_addr, step); 
         
-        swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);   
-        ++issued_recvs;
-
+        swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);   
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends); 
 
         // Update resident blocks

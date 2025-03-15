@@ -119,7 +119,7 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t p = 0; p < env.num_ports; p++){
-        swing_step_info_t* step_info = compute_step_info(p, this->scc_real, evn.dimensions_num, env.dimensions);
+        swing_step_info_t* step_info = compute_step_info(p, this->scc_real, env.dimensions_num, env.dimensions);
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);

@@ -128,7 +128,6 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                 }
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
-                    size_t issued_recvs = 0;
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
 
                     if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
@@ -136,8 +135,9 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                         swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);                    
                     }
 
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs);
-                    issued_recvs++;                    
+                    size_t segments_max_put_size = ceil(count_port*dtsize / ((float) MAX_PUTGET_SIZE));
+                    swing_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
+
                     if(!copied){
                         reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port_tmpbuf, ((char*) recvbuf) + offset_port, count_port, datatype, op);
                         copied = 1;
@@ -146,7 +146,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
                     }
                     
                     if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
-                        swing_utofu_wait_sends(utofu_descriptor, port, issued_recvs);
+                        swing_utofu_wait_sends(utofu_descriptor, port, 1);
                     }
                 }
             }else if(step == sending_step){
@@ -165,11 +165,10 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
 
                 if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
                     // Do a 0-byte recv to check if the peer is ready to recv
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends);
+                    swing_utofu_wait_recv(utofu_descriptor, port, step, 0);
                 }
 
-                swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_port*dtsize, rmt_addr, step);                                                             
-                ++issued_sends;
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_port*dtsize, rmt_addr, step);
                 swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             }
             // Wait all the sends for this segment before moving to the next one
