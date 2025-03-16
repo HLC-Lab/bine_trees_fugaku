@@ -6,3 +6,7 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_03_16___17_18_15,1,4x4x4,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_16___17_18_15,2,4x4x4,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_03_16___17_18_15,3,4x4x4,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___17_18_15,4,4x4x4,ALLTOALL,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___17_18_15,5,4x4x4,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___17_18_15,6,4x4x4,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___17_18_15,7,4x4x4,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
