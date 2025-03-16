@@ -1,0 +1,20 @@
+bench: ./lib/fugaku/swing_utofu.cc:266: void swing_utofu_wait_recv(swing_utofu_comm_d *, unsigned int, unsigned long, unsigned long): Assertion `rc == UTOFU_ERR_NOT_FOUND' failed.
+[d08-4000c:09573] *** Process received signal ***
+[d08-4000c:09573] Signal: Aborted (6)
+[d08-4000c:09573] Signal code:  (-6)
+[d08-4000c:09573] [ 0] linux-vdso.so.1(__kernel_rt_sigreturn+0x0)[0x4000000707a0]
+[d08-4000c:09573] [ 1] /lib64/libc.so.6(gsignal+0xac)[0x400001566274]
+[d08-4000c:09573] [ 2] /lib64/libc.so.6(abort+0x114)[0x400001550a2c]
+[d08-4000c:09573] [ 3] /lib64/libc.so.6(+0x2fba0)[0x40000155fba0]
+[d08-4000c:09573] [ 4] /lib64/libc.so.6(__assert_perror_fail+0x0)[0x40000155fc18]
+[d08-4000c:09573] [ 5] ./bench[0x42f358]
+[d08-4000c:09573] [ 6] ./bench[0x425208]
+[d08-4000c:09573] [ 7] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomp.so(+0x74a48)[0x400000864a48]
+[d08-4000c:09573] [ 8] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomp.so(__kmp_invoke_microtask+0xa0)[0x400000884600]
+[d08-4000c:09573] [ 9] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomp.so(+0x37604)[0x400000827604]
+[d08-4000c:09573] [10] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomp.so(__kmp_launch_thread+0x10c)[0x40000082608c]
+[d08-4000c:09573] [11] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomphk.so(__kmp_launch_thread+0x5c)[0x4000007d219c]
+[d08-4000c:09573] [12] /opt/FJSVxtclanga/tcsds-1.2.40/lib64/libfjomp.so(+0x854a0)[0x4000008754a0]
+[d08-4000c:09573] [13] /lib64/libpthread.so.0(+0x78b8)[0x4000013d78b8]
+[d08-4000c:09573] [14] /lib64/libc.so.6(+0x23afc)[0x400001553afc]
+[d08-4000c:09573] *** End of error message ***

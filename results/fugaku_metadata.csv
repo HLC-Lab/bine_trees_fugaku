@@ -1,3 +1,4 @@
 timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_version,CUDA,output_level,MPI_Op,notes
 2025_03_16___11_46_49,0,8x8x8,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_16___11_46_49,1,8x8x8,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_16___11_46_49,2,8x8x8,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
