@@ -44,7 +44,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     // In case count not divisible by num ports, the first port will for sure have the largest blocks.
     // Thus, it is enough to check the count of the first block of the first port to know the largest block.
     // TODO: This work for reduce_scatter_block, generalize it to reduce_scatter
-    size_t tmpbuf_send_size = blocks_info[0][0].count * dtsize * env.num_ports * this->size;
+    size_t tmpbuf_send_size = blocks_info[0][0].count*env.num_ports*dtsize*this->size;
     // For tmpbuf_recv_size I have two options:
     // 1. I can either make it as large as the tmpbuf_send. In this case, at each step each rank can write in a different part of the buffer.
     // 2. I can make it half of that, but this would require explicit synchronization between rank before doing the PUTs

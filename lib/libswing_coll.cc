@@ -351,7 +351,10 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
         free(step_info);
         swing_comm_info_t cinfo;
         cinfo.tree = tree;
+#pragma omp critical
+        {
         comm_info[key] = cinfo;
+        }
         return tree;
     }
 }

@@ -44,9 +44,7 @@ export MPI_OP="null"
 python3 generate_metadata.py ${EXP_ID} || exit 1
 
 for n in 1 8 64 512 4096 32768 262144 2097152 16777216 134217728
-do
-    # DATATYPE to lowercase
-    msg_size=$((n * SIZEOF_DATATYPE))
+do   
     iterations=0
     if [ $n -le 512 ]
     then
@@ -65,6 +63,8 @@ do
     fi
     
     actual_count=$((n / p))
+    msg_size=$((actual_count * SIZEOF_DATATYPE))
+    total_msg_size=$((n * SIZEOF_DATATYPE))
 
     # Skip if the actual count is less than 1
     if [ $actual_count -lt 1 ]; then
@@ -86,8 +86,15 @@ do
     # TODO: Maybe I should prealloc only for large ALLGATHER?
     EXTRA_MCAS="" #"-mca mpi_print_stats 1 -mca coll_select_show_decision_process 2" #"-mca coll_base_reduce_commute_safe 1"
 
+    # Do a run just to print the decision process
     DEFAULT_ALGO="default"
-    
+    LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} -mca coll_select_show_decision_process 2 -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} 1
+    ALGO_FNAME=default-${DEFAULT_ALGO}
+    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.decision; rm -f ${OUT_PREFIX}* 
+    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.decision.err; rm -f ${ERR_PREFIX}*; fi
+
+    # Run the actual benchmark
+    DEFAULT_ALGO="default"
     LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
     ALGO_FNAME=default-${DEFAULT_ALGO}
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -95,7 +102,7 @@ do
     
     for DEFAULT_ALGO in "linear" "bruck" "recursive_doubling" "ring" "neighbor" "gtbc" "3dtorus" "3dtorus_sm"
     do        
-        LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll ^tbi -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allgather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+        LIBSWING_ALLGATHER_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_allgather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -117,7 +124,7 @@ do
             export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_PERMUTE"    
             for SEGMENT_SIZE in 0 #4096 65536 1048576
             do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
                     LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
                     ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -131,7 +138,7 @@ do
             export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_PERMUTE"    
             for SEGMENT_SIZE in 0 #4096 65536 1048576
             do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
                     LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
                     ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 

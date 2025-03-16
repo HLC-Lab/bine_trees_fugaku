@@ -6,7 +6,7 @@
 #PJM --mpi  "rank-map-bynode=YX"
 #PJM --mpi "max-proc-per-node=1"
 
-DIMENSIONS="8,8" # Must be equal to the one specified above
+DIMENSIONS="8x8" # Must be equal to the one specified above
 EXTRA="2D"
 
 pushd bench

@@ -263,6 +263,9 @@ void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t 
                 exit(-1);
             }
         }else{
+            if(rc != UTOFU_ERR_NOT_FOUND){
+                fprintf(stderr, "Error %d polling MRQ.\n", rc);
+            }            
             assert(rc == UTOFU_ERR_NOT_FOUND);
         }
     }   
