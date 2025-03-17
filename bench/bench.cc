@@ -298,7 +298,7 @@ int main(int argc, char** argv){
         }
 
         if(i >= 0){
-            samples[i] = ((MPI_Wtime() - start_time)*1000000.0);
+            samples[i] = (MPI_Wtime() - start_time);
         }
     }
 

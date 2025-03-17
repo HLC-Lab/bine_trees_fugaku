@@ -31,58 +31,35 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
         max_count = floor(MAX_PUTGET_SIZE / dtsize);
     }    
 
-    char* tmpbuf;
-    bool free_tmpbuf = false;
-    size_t tmpbuf_size = count*dtsize;
-    char use_tmpbuf = 0;
-    // For small messages we do everything in the known temp buffer to avoid exchanging information
-    // about STADDs and to avoid registering the buffer.
-    if(count*dtsize <= env.bcast_config.tmp_threshold){ // TODO: Do it in the same way we do for the other collectives.
-        assert(tmpbuf_size <= env.prealloc_size); // I do not want to complicate the code too much so I assume the preallocated buffer is large enough
-        tmpbuf = env.prealloc_buf;
-        use_tmpbuf = 1;
-    }
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*env.num_ports);    
     
     timer.reset("= swing_bcast_l (utofu buf reg)"); 
     if(this->rank == root){
         swing_utofu_reg_buf(this->utofu_descriptor, buffer, count*dtsize, NULL, 0, NULL, 0, env.num_ports); 
     }else{
-        if(use_tmpbuf){
-            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, 0, NULL, NULL, 0, env.num_ports); 
-        }else{
-            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, env.num_ports); 
-        }                
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, buffer, count*dtsize, NULL, 0, env.num_ports); 
     }
 
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
-    memset(peers, 0, sizeof(uint*)*env.num_ports);
-
-    if(use_tmpbuf){
-        // Store the lcl_recv_stadd and rmt_recv_buffer STADD of all the other ranks
-        for(size_t i = 0; i < env.num_ports; i++){
-            this->utofu_descriptor->port_info[i].rmt_recv_stadd = temp_buffers[i];
-            this->utofu_descriptor->port_info[i].lcl_recv_stadd = lcl_temp_stadd[i];
-        }
+    
+    timer.reset("= swing_bcast_l (utofu buf exch)");           
+    if(env.utofu_add_ag){
+        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
     }else{
-        timer.reset("= swing_bcast_l (utofu buf exch)");           
-        if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
-        }else{
-            // TODO: Probably need to do this for all the ports for torus with different dimensions
-            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
-            peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
-            
-            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
-            int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
-            if(mp != -1 && mp != 0){
-                peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
-                compute_peers(this->rank, mp, env.bcast_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
-            }
-        }        
-    }
+        // TODO: Probably need to do this for all the ports for torus with different dimensions
+        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+        peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
+        compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers[0]);
+        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+        
+        // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+        int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
+        if(mp != -1 && mp != 0){
+            peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(this->rank, mp, env.bcast_config.algo_family, this->scc_real, peers[mp]);
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+        }
+    }        
 
     uint partition_size = count / env.num_ports;
     uint remaining = count % env.num_ports;        
@@ -90,28 +67,15 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t p = 0; p < env.num_ports; p++){
-        swing_step_info_t* step_info = compute_step_info(p, this->scc_real, env.dimensions_num, env.dimensions);
+        swing_tree_t tree = get_tree(root, p, env.bcast_config.algo_family, env.bcast_config.distance_type, this->scc_real);
         // Compute the peers of this port if I did not do it yet
         if(peers[p] == NULL){
             peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, p, env.bcast_config.algo_family, this->scc_real, peers[p]);
         }        
         timer.reset("= swing_bcast_l (computing trees)");
-        int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc_real->retrieve_coord_mapping(this->rank, coord);
 
-        int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        this->scc_real->getCoordFromId(root, coord_root);
-
-        uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-        uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-        for(size_t i = 0; i < this->size; i++){
-            reached_at_step[i] = this->num_steps;
-            parent[i] = UINT32_MAX;
-        }
-        get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, p, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true, step_info);
-        int receiving_step = reached_at_step[this->rank];
-        int peer;        
+        uint peer;        
 
         size_t count_port = partition_size + (p < remaining ? 1 : 0);
         size_t offset_port = 0;
@@ -129,7 +93,9 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             bytes_to_send = count_segment*dtsize;
 
             timer.reset("= swing_bcast_l (waiting recv)");
+            int receiving_step;
             if(root != this->rank){        
+                receiving_step = tree.reached_at_step[this->rank];
                 // Receive the data from the root    
                 swing_utofu_wait_recv(utofu_descriptor, p, 0, issued_recvs);
                 issued_recvs++;
@@ -140,8 +106,13 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             // Now perform all the subsequent steps            
             issued_sends = 0;
             for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
-                peer = peers[p][(this->num_steps - step - 1)]; // Consider the allgather peers since they start from the distant ones and then get closer.
-                if(parent[peer] == this->rank){
+                // Send to peer
+                if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
+                    peer = peers[p][this->num_steps - step - 1];         
+                }else{  
+                    peer = peers[p][step];
+                }
+                if(tree.parent[peer] == this->rank){
                     utofu_stadd_t lcl_addr;
                     if(this->rank == root){
                         lcl_addr = utofu_descriptor->port_info[p].lcl_send_stadd + offset_port + offset_segment;
@@ -161,13 +132,166 @@ int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, i
             remaining -= count_segment;            
         }
 
-        free(reached_at_step);
-        free(parent);
+        destroy_tree(&tree);
         free(peers[p]);
-        free(step_info);
     }
 
-    if(use_tmpbuf && root != this->rank){
+    timer.reset("= swing_bcast_l (writing profile data to file)");
+    return res;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif
+}
+
+int SwingCommon::swing_bcast_l_tmpbuf(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.bcast_config.algo_family == SWING_ALGO_FAMILY_SWING || env.bcast_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.bcast_config.algo == SWING_BCAST_ALGO_BINOMIAL_TREE);
+#endif
+#ifdef FUGAKU
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_bcast_l (init)");
+    Timer timer("swing_bcast_l (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+    size_t max_count;
+    if(env.segment_size){
+        max_count = floor(env.segment_size / dtsize);
+    }else{
+        max_count = floor(MAX_PUTGET_SIZE / dtsize);
+    }    
+
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*env.num_ports);    
+    size_t tmpbuf_size = count*dtsize;
+    
+    timer.reset("= swing_bcast_utofu (utofu buf reg)"); 
+    // Also the root sends from tmbuf because it needs to permute the sendbuf
+    if(tmpbuf_size > env.prealloc_size){
+        if(this->rank == root){
+            swing_utofu_reg_buf(this->utofu_descriptor, buffer, count*dtsize, NULL, 0, NULL, 0, env.num_ports); 
+        }else{            
+            posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+            free_tmpbuf = true;    
+            // Use tmpbuf as recvbuf
+            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, tmpbuf, tmpbuf_size, NULL, 0, env.num_ports);                         
+        }
+
+        timer.reset("= swing_bcast_utofu (utofu buf exch)");           
+        if(env.utofu_add_ag){
+            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        }else{
+            // TODO: Probably need to do this for all the ports for torus with different dimensions size
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers[0]);
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
+            if(mp != -1 && mp != 0){
+                peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
+                compute_peers(this->rank, mp, env.bcast_config.algo_family, this->scc_real, peers[mp]);
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+            }
+        }            
+    }else{
+        if(this->rank == root){
+            swing_utofu_reg_buf(this->utofu_descriptor, buffer, count*dtsize, NULL, 0, NULL, 0, env.num_ports); 
+        }else{
+            swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
+        }
+        tmpbuf = env.prealloc_buf;
+        // Store the rmt_temp_stadd of all the other ranks
+        for(size_t i = 0; i < env.num_ports; i++){
+            this->utofu_descriptor->port_info[i].rmt_recv_stadd = temp_buffers[i];
+            this->utofu_descriptor->port_info[i].lcl_recv_stadd = lcl_temp_stadd[i];
+        }
+    }
+
+    uint partition_size = count / env.num_ports;
+    uint remaining = count % env.num_ports;        
+    int res = MPI_SUCCESS; 
+
+#pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+    for(size_t p = 0; p < env.num_ports; p++){
+        swing_tree_t tree = get_tree(root, p, env.bcast_config.algo_family, env.bcast_config.distance_type, this->scc_real);
+        // Compute the peers of this port if I did not do it yet
+        if(peers[p] == NULL){
+            peers[p] = (uint*) malloc(sizeof(uint)*this->num_steps);
+            compute_peers(this->rank, p, env.bcast_config.algo_family, this->scc_real, peers[p]);
+        }        
+        timer.reset("= swing_bcast_l (computing trees)");
+
+        uint peer;        
+
+        size_t count_port = partition_size + (p < remaining ? 1 : 0);
+        size_t offset_port = 0;
+        for(size_t j = 0; j < p; j++){
+            offset_port += partition_size + (j < remaining ? 1 : 0);
+        }
+        offset_port *= dtsize;
+
+        // Pipeline the recv with the first send
+        size_t remaining = count_port;
+        size_t bytes_to_send = 0, count_segment, offset_segment = 0;
+        size_t issued_sends = 0, issued_recvs = 0;
+        while(remaining){
+            count_segment = remaining < max_count ? remaining : max_count;
+            bytes_to_send = count_segment*dtsize;
+
+            timer.reset("= swing_bcast_l (waiting recv)");
+            int receiving_step;
+            if(root != this->rank){        
+                receiving_step = tree.reached_at_step[this->rank];
+                // Receive the data from the root    
+                swing_utofu_wait_recv(utofu_descriptor, p, 0, issued_recvs);
+                issued_recvs++;
+            }else{
+                receiving_step = -1;
+            }
+        
+            // Now perform all the subsequent steps            
+            issued_sends = 0;
+            for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
+                // Send to peer
+                if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
+                    peer = peers[p][this->num_steps - step - 1];         
+                }else{  
+                    peer = peers[p][step];
+                }
+                if(tree.parent[peer] == this->rank){
+                    utofu_stadd_t lcl_addr;
+                    if(this->rank == root){
+                        lcl_addr = utofu_descriptor->port_info[p].lcl_send_stadd + offset_port + offset_segment;
+                    }else{
+                        lcl_addr = utofu_descriptor->port_info[p].lcl_recv_stadd + offset_port + offset_segment;
+                    }
+                    utofu_stadd_t rmt_addr = utofu_descriptor->port_info[p].rmt_recv_stadd[peer] + offset_port + offset_segment;                                        
+                    swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, bytes_to_send, rmt_addr, 0);                                         
+                    ++issued_sends;                    
+                }
+            }
+            // Wait all the sends for this segment before moving to the next one
+            timer.reset("= swing_bcast_l (waiting all sends)");
+            swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
+
+            offset_segment += bytes_to_send;
+            remaining -= count_segment;            
+        }
+
+        destroy_tree(&tree);
+        free(peers[p]);
+        if(free_tmpbuf){
+            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, p);
+        }
+    }
+
+    if(root != this->rank){
         timer.reset("= swing_bcast_l (final memcpy)");
         memcpy(buffer, tmpbuf, count*dtsize);
     }
@@ -204,7 +328,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers);
 
     size_t port = 0;
-    swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
+    swing_tree_t tree = get_tree(root, port, env.bcast_config.algo_family, env.bcast_config.distance_type, this->scc_real);
 
     timer.reset("= swing_bcast_l_mpi (actual sendrecvs)");
 
@@ -225,7 +349,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
         // Send to peer
         uint peer;
-        if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
             peer = peers[this->num_steps - step - 1];         
         }else{  
             peer = peers[step];
@@ -240,6 +364,7 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Waitall(posted_send, requests_s, MPI_STATUSES_IGNORE);
     
     timer.reset("= swing_bcast_l_mpi (writing profile data to file)");
+    destroy_tree(&tree);
     free(peers);
     return MPI_SUCCESS;
 }

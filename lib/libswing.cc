@@ -70,8 +70,6 @@ static void init_env(swing_env_t* env, MPI_Comm comm){
     env->scatter_config.distance_type = SWING_DISTANCE_INCREASING;
     env->gather_config.distance_type = SWING_DISTANCE_DECREASING;
     env->reduce_config.distance_type = SWING_DISTANCE_INCREASING;
-
-    env->bcast_config.tmp_threshold = 0;
 }
 
 static inline void read_env(MPI_Comm comm){
@@ -410,6 +408,8 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             if(strcmp(env_str, "BINOMIAL_TREE") == 0){
                 env.bcast_config.algo = SWING_BCAST_ALGO_BINOMIAL_TREE;
+            }else if(strcmp(env_str, "BINOMIAL_TREE_TMPBUF") == 0){
+                env.bcast_config.algo = SWING_BCAST_ALGO_BINOMIAL_TREE_TMPBUF;
             }else if(strcmp(env_str, "SCATTER_ALLGATHER") == 0){
                 env.bcast_config.algo = SWING_BCAST_ALGO_SCATTER_ALLGATHER;
             }else{
@@ -530,11 +530,6 @@ static inline void read_env(MPI_Comm comm){
             }else{
                 env.reduce_config.distance_type = SWING_DISTANCE_DECREASING;
             }
-        }
-
-        env_str = getenv("LIBSWING_BCAST_TMP_THRESHOLD");
-        if(env_str){
-            env.bcast_config.tmp_threshold = atoi(env_str);
         }
 
         if(env.prealloc_size){
@@ -1243,6 +1238,13 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
                         return swing_common->swing_bcast_l(buffer, count, datatype, root, comm);
                     }else{
                         return swing_common->swing_bcast_l_mpi(buffer, count, datatype, root, comm);
+                    }
+                }
+                case SWING_BCAST_ALGO_BINOMIAL_TREE_TMPBUF:{
+                    if(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        return swing_common->swing_bcast_l_tmpbuf(buffer, count, datatype, root, comm);
+                    }else{
+                        assert("Invalid value for LIBSWING_BCAST_ALGO_LAYER" && 0);
                     }
                 }
                 default:

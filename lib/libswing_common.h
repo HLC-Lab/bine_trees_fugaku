@@ -113,6 +113,7 @@ typedef enum {
 
 typedef enum {
     SWING_BCAST_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+    SWING_BCAST_ALGO_BINOMIAL_TREE_TMPBUF, // Binomial tree with tmpbuf (avoids sending the rmtaddr of the recvbuf but needs a final memcpy)
     SWING_BCAST_ALGO_SCATTER_ALLGATHER, // Scatter + allgather
 } swing_bcast_algo_t;
 
@@ -162,7 +163,6 @@ typedef struct {
     swing_algo_layer_t algo_layer;
     swing_bcast_algo_t algo;
     swing_distance_type_t distance_type;
-    size_t tmp_threshold;
 } swing_bcast_config_t;
 
 typedef struct {
@@ -578,6 +578,7 @@ class SwingCommon {
         int swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
         
         int swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_tmpbuf(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
