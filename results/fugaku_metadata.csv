@@ -10,3 +10,11 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_03_16___17_18_15,5,4x4x4,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_03_16___17_18_15,6,4x4x4,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_03_16___17_18_15,7,4x4x4,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_16___21_50_44,0,8x8x8,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_16___21_50_44,1,8x8x8,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_16___21_50_44,2,8x8x8,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___21_50_44,3,8x8x8,ALLTOALL,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___21_50_44,4,8x8x8,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___21_50_44,5,8x8x8,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_16___21_50_44,6,8x8x8,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_16___21_50_44,7,8x8x8,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
