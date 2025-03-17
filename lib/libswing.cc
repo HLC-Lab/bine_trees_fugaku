@@ -538,7 +538,7 @@ static inline void read_env(MPI_Comm comm){
 
         swing_common = new SwingCommon(comm, env);
 
-#ifdef DEBUG
+#if 0
         // TODO: Dump env
         int rank;
         MPI_Comm_rank(comm, &rank);
@@ -1245,6 +1245,13 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
                         return swing_common->swing_bcast_l_tmpbuf(buffer, count, datatype, root, comm);
                     }else{
                         assert("Invalid value for LIBSWING_BCAST_ALGO_LAYER" && 0);
+                    }
+                }
+                case SWING_BCAST_ALGO_SCATTER_ALLGATHER:{
+                    if(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        return swing_common->swing_bcast_scatter_allgather(buffer, count, datatype, root, comm);
+                    }else{
+                        return swing_common->swing_bcast_scatter_allgather_mpi(buffer, count, datatype, root, comm);
                     }
                 }
                 default:

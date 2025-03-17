@@ -253,8 +253,8 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     for(size_t step = 0; step < (uint) this->num_steps; step++){
         if(root != this->rank && step == receiving_step){       
             uint peer = tree.parent[this->rank];
-            size_t min_block_r = tree.remapped_ranks[peer];
-            size_t max_block_r = tree.remapped_ranks_max[peer];            
+            size_t min_block_r = tree.remapped_ranks[this->rank];
+            size_t max_block_r = tree.remapped_ranks_max[this->rank];            
             size_t num_blocks = (max_block_r - min_block_r) + 1; 
             DPRINTF("Rank %d receiving %d elems from %d at step %d\n", this->rank, num_blocks*recvcount, peer, step);
             MPI_Recv(tmpbuf + min_block_r*recvcount*dtsize, num_blocks*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm, MPI_STATUS_IGNORE);
@@ -268,8 +268,8 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
                 peer = peers[port][step];
             }
             if(tree.parent[peer] == this->rank){
-                size_t min_block_s = tree.remapped_ranks[this->rank];
-                size_t max_block_s = tree.remapped_ranks_max[this->rank];            
+                size_t min_block_s = tree.remapped_ranks[peer];
+                size_t max_block_s = tree.remapped_ranks_max[peer];            
                 size_t num_blocks = (max_block_s - min_block_s) + 1; 
                 DPRINTF("Rank %d sending %d elems to %d at step %d\n", this->rank, num_blocks*recvcount, peer, step);
                 MPI_Send(tmpbuf + min_block_s*recvcount*dtsize, num_blocks*recvcount, sendtype, peer, TAG_SWING_SCATTER, comm);
