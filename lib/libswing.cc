@@ -1025,6 +1025,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                 case SWING_ALLREDUCE_ALGO_B:
                 case SWING_ALLREDUCE_ALGO_B_CONT:
                 case SWING_ALLREDUCE_ALGO_B_COALESCE:{
+                    assert(env.allreduce_config.distance_type == SWING_DISTANCE_INCREASING); // See notes. Doing with decreasing with lead to 0 and 1 having different trees and would not work.
                     assert(count >= swing_common->get_num_ports()*swing_common->get_size());
                     int dtsize;
                     MPI_Type_size(datatype, &dtsize);
@@ -1248,7 +1249,8 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
                     }
                 }
                 case SWING_BCAST_ALGO_SCATTER_ALLGATHER:{
-                    if(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                    assert(env.bcast_config.distance_type == SWING_DISTANCE_INCREASING); // See notes
+                    if(env.bcast_config.algo_layer == SWING_ALGO_LAYER_UTOFU){                        
                         return swing_common->swing_bcast_scatter_allgather(buffer, count, datatype, root, comm);
                     }else{
                         return swing_common->swing_bcast_scatter_allgather_mpi(buffer, count, datatype, root, comm);

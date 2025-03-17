@@ -52,6 +52,9 @@ do
                     echo "Running ${COLLECTIVE} ${ALGO} with n=2x8x2.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2x8x2  mpirun -n 32 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=4x4x4.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=4x4x4  mpirun -n 64 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
                     if [ "${ALGO}" != "SCATTER_ALLGATHER" ]
                     then
                         echo "Running ${COLLECTIVE} ${ALGO} with n=6x6.."

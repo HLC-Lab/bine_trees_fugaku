@@ -206,18 +206,18 @@ static inline void allocate_buffers(const char* collective, size_t count, size_t
         fprintf(stderr, "Unknown collective %s\n", collective);
         exit(-1);
     }
-    *sendbuf = (char*) malloc(dtsize*send_count);
-    
-    if(!strcmp(collective, "MPI_Bcast")){
-        *recvbuf = *sendbuf;
-        *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
-    }else{
-        *recvbuf = (char*) malloc(dtsize*recv_count);
-        *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
-    }
+    *sendbuf = (char*) malloc(dtsize*send_count);    
+    *recvbuf = (char*) malloc(dtsize*recv_count);
+    *recvbuf_validation = (char*) malloc(dtsize*recv_count); 
+
     // Initialize sendbuf with random values
-    for(size_t i = 0; i < dtsize*send_count; i++){
-        (*sendbuf)[i] = rand() % 1024;
+    // For ranks != root (i.e., rank 0 in our case), sendbuf only makes sense for collectives different from bcast and scatter
+    if((rank == 0) || (strcmp(collective, "MPI_Bcast") && strcmp(collective, "MPI_Scatter"))){
+        for(size_t i = 0; i < dtsize*send_count; i++){
+            (*sendbuf)[i] = rand() % 1024;
+        }        
+    }else{
+        memset(*sendbuf, 0, dtsize*send_count);
     }
 }
 
@@ -268,7 +268,6 @@ int main(int argc, char** argv){
 
     char *sendbuf, *recvbuf, *recvbuf_validation; // To check correctness of results
     allocate_buffers(collective, count, comm_size, dtsize, &sendbuf, &recvbuf, &recvbuf_validation, rank);
-
     r = run_collective(RUN_TYPE_VALIDATION, collective, sendbuf, recvbuf_validation, count, dt, op, comm_size);
     if(r != MPI_SUCCESS){
         fprintf(stderr, "Rank %d: Validation failed with error %d\n", rank, r);
@@ -276,6 +275,9 @@ int main(int argc, char** argv){
     }
     if(!strcmp(collective, "MPI_Bcast")){
         memcpy(recvbuf_validation, sendbuf, dtsize*count);
+        if(rank != 0){
+            memset(sendbuf, 0, dtsize*count);   
+        }
     }
 
 #ifdef FUGAKU
@@ -285,7 +287,6 @@ int main(int argc, char** argv){
     //assert(read_tnr_stats(tnr_start)==0);
 #endif
 
-    
     for(i = -warmup; i < iterations; i++){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
@@ -300,6 +301,9 @@ int main(int argc, char** argv){
         if(i >= 0){
             samples[i] = (MPI_Wtime() - start_time);
         }
+    }
+    if(!strcmp(collective, "MPI_Bcast")){
+        memcpy(recvbuf, sendbuf, dtsize*count);
     }
 
     size_t final_buffer_count = count;

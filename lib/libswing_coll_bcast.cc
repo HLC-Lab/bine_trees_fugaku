@@ -387,6 +387,7 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     assert(env.bcast_config.algo_family == SWING_ALGO_FAMILY_SWING || env.bcast_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
     assert(env.bcast_config.algo_layer == SWING_ALGO_LAYER_MPI);
     assert(env.bcast_config.algo == SWING_BCAST_ALGO_SCATTER_ALLGATHER);
+    assert(env.bcast_config.distance_type == SWING_DISTANCE_INCREASING);
 #endif
     assert(env.num_ports == 1);
     assert(count / env.num_ports >= this->size);
@@ -401,22 +402,10 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
-    // The root still needs a tmpbuf since it cannot receive into buffer (it is the const sendbuf)
-    char* tmpbuf;
-    bool free_tmpbuf = false;
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
-    size_t tmpbuf_size = count*dtsize;
-    
+   
     timer.reset("= swing_bcast_scatter_allgather_mpi (utofu buf reg)"); 
-
-    // Also the root sends from tmbuf because it needs to permute the sendbuf
-    if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
-        free_tmpbuf = true;           
-    }else{
-        tmpbuf = env.prealloc_buf;
-    }
 
     int res = MPI_SUCCESS; 
 
@@ -428,7 +417,6 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     }        
     timer.reset("= swing_bcast_scatter_allgather_mpi (computing trees)");
     swing_tree_t tree = get_tree(root, port, env.bcast_config.algo_family, env.bcast_config.distance_type, this->scc_real);
-    // TODO Use two distance-opposite trees for scatter and allgather ???
 
     /*************************/
     /*        Scatter        */
@@ -443,7 +431,7 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     DPRINTF("[%d] Step from root: %d\n", this->rank, receiving_step);
     timer.reset("= swing_bcast_scatter_allgather_mpi (waiting recv)");
 
-    size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
+    size_t tmpbuf_offset_port = ((count*dtsize) / env.num_ports) * port;
     uint my_remapped_rank = tree.remapped_ranks[rank];
 
     DPRINTF("[%d] My remapped rank is %d\n", this->rank, my_remapped_rank);
@@ -456,7 +444,7 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
             size_t max_block_r = tree.remapped_ranks_max[this->rank];            
             size_t num_blocks = (max_block_r - min_block_r) + 1; 
             DPRINTF("Rank %d receiving %d elems from %d at step %d\n", this->rank, num_blocks*sendcount, peer, step);
-            MPI_Recv(tmpbuf + tmpbuf_offset_port + min_block_r*sendcount*dtsize, num_blocks*sendcount, datatype, peer, TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);
+            MPI_Recv(buffer + tmpbuf_offset_port + min_block_r*sendcount*dtsize, num_blocks*sendcount, datatype, peer, TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);
         }
 
         if(step >= receiving_step + 1){
@@ -471,21 +459,13 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
                 size_t max_block_s = tree.remapped_ranks_max[peer];            
                 size_t num_blocks = (max_block_s - min_block_s) + 1; 
                 DPRINTF("Rank %d sending %d elems to %d at step %d\n", this->rank, num_blocks*sendcount, peer, step);
-                if(this->rank == root){
-                    MPI_Send((char*) buffer + tmpbuf_offset_port + min_block_s*sendcount*dtsize, num_blocks*sendcount, datatype, peer, TAG_SWING_BCAST, comm);
-                }else{
-                    MPI_Send(tmpbuf + tmpbuf_offset_port + min_block_s*sendcount*dtsize, num_blocks*sendcount, datatype, peer, TAG_SWING_BCAST, comm);
-                }
+                MPI_Send((char*) buffer + tmpbuf_offset_port + min_block_s*sendcount*dtsize, num_blocks*sendcount, datatype, peer, TAG_SWING_BCAST, comm);
             }
         }
         // Wait all the sends for this segment before moving to the next one
         timer.reset("= swing_bcast_scatter_allgather_mpi (waiting all sends)");
     }
     
-    if(this->rank == root){
-        memcpy(tmpbuf, buffer, sendcount*dtsize);
-    }
-
     /*************************/
     /*        Allgather      */
     /*************************/
@@ -495,9 +475,9 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     for(size_t step = 0; step < (uint) this->num_steps; step++){        
         uint peer;
         if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
-            peer = peers[port][this->num_steps - step - 1];                               
-        }else{  
             peer = peers[port][step];
+        }else{              
+            peer = peers[port][this->num_steps - step - 1];                               
         }
 
         size_t count_to_sendrecv = num_blocks*sendcount;
@@ -508,11 +488,13 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
         // i.e., I need to set to 0 the least significant step bits
         min_block_r = tree.remapped_ranks[peer] & ~((1 << step) - 1);
 
+        //printf("Rank %d Step %d peer %d min_block_r %d min_block_resident %d\n", this->rank, step, peer, min_block_r, min_block_resident);
+
         // Always send from the beginning of the buffer
         // and receive in the remaining part.
         timer.reset("= swing_bcast_scatter_allgather_mpi (sendrecv)");        
-        MPI_Sendrecv(tmpbuf + tmpbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
-                     tmpbuf + tmpbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
+        MPI_Sendrecv(buffer + tmpbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
+                     buffer + tmpbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
                      comm, MPI_STATUS_IGNORE);                                   
 
         min_block_resident = std::min(min_block_resident, min_block_r);
@@ -520,9 +502,6 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     }
 
     free(peers[port]);    
-    if(free_tmpbuf){
-        free(tmpbuf);
-    }
     destroy_tree(&tree);
     timer.reset("= swing_bcast_scatter_allgather_mpi (writing profile data to file)");
     return res;
