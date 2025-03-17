@@ -12,35 +12,6 @@
 #include "fugaku/swing_utofu.h"
 #endif
 
-// TODO: Rely on trees as for the other collectives.
-
-static void dfs_reversed(int* coord_rank, size_t step, size_t num_steps, uint32_t* reached_at_step, uint32_t* parent, uint port, swing_algo_family_t algo, SwingCoordConverter* scc, bool allgather_schedule, swing_step_info_t* step_info){
-    for(size_t i = step; i < num_steps; i++){
-        int real_step;
-        if(allgather_schedule){
-            real_step = num_steps - 1 - i; // We consider allgather schedule
-        }else{
-            real_step = i;
-        }
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-        get_peer_c(coord_rank, real_step, port, step_info, algo, scc->dimensions_num, scc->dimensions, peer_rank);
-        
-        uint32_t rank = scc->getIdFromCoord(peer_rank);
-        if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
-            parent[rank] = scc->getIdFromCoord(coord_rank);
-            reached_at_step[rank] = i;
-        }
-        dfs_reversed(peer_rank, i + 1, num_steps, reached_at_step, parent, port, algo, scc, allgather_schedule, step_info);
-    }
-}
-
-static void get_step_from_root(int* coord_root, uint32_t* reached_at_step, uint32_t* parent, size_t num_steps, uint port, uint dimensions_num, uint* dimensions, swing_algo_family_t algo, bool allgather_schedule, swing_step_info_t* step_info){
-    SwingCoordConverter scc(dimensions, dimensions_num);
-    dfs_reversed(coord_root, 0, num_steps, reached_at_step, parent, port, algo, &scc, allgather_schedule, step_info);
-    parent[scc.getIdFromCoord(coord_root)] = UINT32_MAX;
-    reached_at_step[scc.getIdFromCoord(coord_root)] = 0; // To avoid sending the step for myself at a wrong value
-}
-
 int SwingCommon::swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -232,32 +203,17 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     uint* peers = (uint*) malloc(sizeof(uint)*this->num_steps);
     compute_peers(this->rank, 0, env.bcast_config.algo_family, this->scc_real, peers);
 
-    // Not actually needed, is just to use the get_peer, should be refactored
-    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc_real->retrieve_coord_mapping(this->rank, coord);
-    int res = MPI_SUCCESS; 
-
-    int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    this->scc_real->getCoordFromId(root, coord_root);
+    size_t port = 0;
+    swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
 
     timer.reset("= swing_bcast_l_mpi (actual sendrecvs)");
-    uint32_t* reached_at_step = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-    uint32_t* parent = (uint32_t*) malloc(sizeof(uint32_t)*this->size);
-    for(size_t i = 0; i < this->size; i++){
-        reached_at_step[i] = this->num_steps;
-        parent[i] = UINT32_MAX;
-    }
-    swing_step_info_t* step_info = compute_step_info(0, this->scc_real, env.dimensions_num, env.dimensions);
-    get_step_from_root(coord_root, reached_at_step, parent, this->num_steps, 0, env.dimensions_num, env.dimensions, env.bcast_config.algo_family, true, step_info);
-    free(step_info);    
-    int receiving_step = reached_at_step[this->rank];
-    int peer;
+
+    int receiving_step;
     if(root != this->rank){        
-        // Receive the data from the root    
-        peer = peers[(this->num_steps - receiving_step - 1)]; // Consider the allgather peers since they start from the distant ones and then get closer.
-        assert(peer == parent[this->rank]); 
-        DPRINTF("[%d] Receiving from %d\n", rank, peer);
-        res = MPI_Recv(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);                    
+        // Receive the data from the parent    
+        receiving_step = tree.reached_at_step[this->rank];
+        DPRINTF("[%d] Receiving from %d\n", rank, tree.parent[this->rank]);
+        int res = MPI_Recv(buffer, count, datatype, tree.parent[this->rank], TAG_SWING_BCAST, comm, MPI_STATUS_IGNORE);                    
         if(res != MPI_SUCCESS){DPRINTF("[%d] Error on recv\n", rank); return res;}                
     }else{
         receiving_step = -1;
@@ -267,10 +223,16 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Request requests_s[LIBSWING_MAX_STEPS];
     size_t posted_send = 0;
     for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
-        peer = peers[(this->num_steps - step - 1)]; // Consider the allgather peers since they start from the distant ones and then get closer.
-        if(parent[peer] == this->rank){
+        // Send to peer
+        uint peer;
+        if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+            peer = peers[this->num_steps - step - 1];         
+        }else{  
+            peer = peers[step];
+        }
+        if(tree.parent[peer] == this->rank){
             DPRINTF("[%d] Sending to %d\n", rank, peer);
-            res = MPI_Isend(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, &(requests_s[posted_send]));
+            int res = MPI_Isend(buffer, count, datatype, peer, TAG_SWING_BCAST, comm, &(requests_s[posted_send]));
             if(res != MPI_SUCCESS){DPRINTF("[%d] Error on isend\n", rank); return res;}
             ++posted_send;
         }
@@ -278,10 +240,8 @@ int SwingCommon::swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatyp
     MPI_Waitall(posted_send, requests_s, MPI_STATUSES_IGNORE);
     
     timer.reset("= swing_bcast_l_mpi (writing profile data to file)");
-    free(reached_at_step);
-    free(parent);
     free(peers);
-    return res;
+    return MPI_SUCCESS;
 }
 
 int SwingCommon::swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){

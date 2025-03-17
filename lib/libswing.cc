@@ -67,7 +67,7 @@ static void init_env(swing_env_t* env, MPI_Comm comm){
     env->reduce_scatter_config.distance_type = SWING_DISTANCE_INCREASING;
     env->bcast_config.distance_type = SWING_DISTANCE_DECREASING;    
     env->alltoall_config.distance_type = SWING_DISTANCE_INCREASING;
-    env->scatter_config.distance_type = SWING_DISTANCE_DECREASING;
+    env->scatter_config.distance_type = SWING_DISTANCE_INCREASING;
     env->gather_config.distance_type = SWING_DISTANCE_DECREASING;
     env->reduce_config.distance_type = SWING_DISTANCE_INCREASING;
 

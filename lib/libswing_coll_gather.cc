@@ -81,7 +81,17 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             compute_peers(this->rank, port, env.gather_config.algo_family, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_gather_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type, this->scc_real);
+        // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
+        // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
+        // e.g., for 4 nodes I have an increasing distance tree as follows:
+        //       0
+        //      / \
+        //     3   1
+        //          \
+        //           2
+        // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
+        // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
+        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -110,9 +120,9 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 // Receive from peer                
                 uint peer;
                 if(env.gather_config.distance_type == SWING_DISTANCE_DECREASING){
-                    peer = peers[port][step];                               
+                    peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
-                    peer = peers[port][this->num_steps - step - 1];
+                    peer = peers[port][step];                      
                 }
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
@@ -214,7 +224,17 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
             compute_peers(this->rank, port, env.gather_config.algo_family, this->scc_real, peers[port]);
         }        
         timer.reset("= swing_gather_mpi (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type, this->scc_real);
+        // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
+        // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
+        // e.g., for 4 nodes I have an increasing distance tree as follows:
+        //       0
+        //      / \
+        //     3   1
+        //          \
+        //           2
+        // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
+        // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
+        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -239,11 +259,11 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             if(step < sending_step){
                 // Receive from peer
-                uint peer;
+                uint peer;                
                 if(env.gather_config.distance_type == SWING_DISTANCE_DECREASING){
-                    peer = peers[port][step];                               
+                    peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
-                    peer = peers[port][this->num_steps - step - 1];
+                    peer = peers[port][step];                      
                 }
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
