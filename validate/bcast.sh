@@ -18,6 +18,21 @@ export LIBSWING_BCAST_ALGO_LAYER="UTOFU"
 FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
 [ "${FUNC_NAME}" == "swing_bcast_l" ] || { echo "ERROR: Wrong function called for ${LIBSWING_BCAST_ALGO_FAMILY} ${LIBSWING_BCAST_ALGO} ${LIBSWING_BCAST_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
+
+# Check that I call the right functions
+export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
+export LIBSWING_BCAST_ALGO="SCATTER_ALLGATHER" 
+export LIBSWING_BCAST_ALGO_LAYER="MPI" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_bcast_scatter_allgather_mpi" ] || { echo "ERROR: Wrong function called for ${LIBSWING_BCAST_ALGO_FAMILY} ${LIBSWING_BCAST_ALGO} ${LIBSWING_BCAST_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
+# Check that I call the right functions
+export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
+export LIBSWING_BCAST_ALGO="SCATTER_ALLGATHER" 
+export LIBSWING_BCAST_ALGO_LAYER="UTOFU" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_bcast_scatter_allgather" ] || { echo "ERROR: Wrong function called for ${LIBSWING_BCAST_ALGO_FAMILY} ${LIBSWING_BCAST_ALGO} ${LIBSWING_BCAST_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
 # Now check correctness
 for ALGO in "${ALGORITHMS[@]}"
 do        

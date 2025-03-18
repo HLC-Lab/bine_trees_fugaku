@@ -452,6 +452,8 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             if(strcmp(env_str, "BINOMIAL_TREE") == 0){
                 env.reduce_config.algo = SWING_REDUCE_ALGO_BINOMIAL_TREE;
+            }else if(strcmp(env_str, "REDUCE_SCATTER_GATHER") == 0){
+                env.reduce_config.algo = SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER;
             }else{
                 assert("Invalid value for LIBSWING_REDUCE_ALGO" && 0);
             }
@@ -1428,6 +1430,12 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
                         return swing_common->swing_reduce_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
                     }else{
                         return swing_common->swing_reduce_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
+                    }
+                case SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER:
+                    if(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        return swing_common->swing_reduce_redscat_gather_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
+                    }else{
+                        return swing_common->swing_reduce_redscat_gather_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
                     }
                 default:
                     assert("Invalid value for LIBSWING_REDUCE_ALGO" && 0);

@@ -135,6 +135,7 @@ typedef enum {
 
 typedef enum {
     SWING_REDUCE_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+    SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER, // Reduce-scatter + gather
 } swing_reduce_algo_t;
 
 typedef struct {
@@ -597,6 +598,8 @@ class SwingCommon {
         
         int swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
         int swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int swing_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
         
         
         int swing_allgather_utofu_blocks(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
