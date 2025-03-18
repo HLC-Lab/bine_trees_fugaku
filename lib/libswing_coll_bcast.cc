@@ -665,9 +665,27 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
         // Always send from the beginning of the buffer
         // and receive in the remaining part.
         timer.reset("= swing_bcast_scatter_allgather_mpi (sendrecv)");        
-        MPI_Sendrecv((char*) buffer + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
-                     (char*) buffer + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
-                     comm, MPI_STATUS_IGNORE);                                   
+        //MPI_Sendrecv((char*) buffer + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
+        //             (char*) buffer + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, 
+        //             comm, MPI_STATUS_IGNORE);                                   
+        // Do Irecv + send instead of sendrecv
+        MPI_Request req;
+        int wait = 0;
+        // Parts of the blocks I want to send might be already in receiver buffer (since it scattered those blocks)
+        // Receive only if this is something I did not have already
+        if(min_block_r < tree.remapped_ranks[this->rank] || min_block_r + num_blocks - 1 > tree.remapped_ranks_max[this->rank]){
+            MPI_Irecv((char*) buffer + recvbuf_offset_port + min_block_r*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, comm, &req);
+            wait = 1;
+        }
+
+        // Send only if this is something that the peer does not already have
+        if(min_block_resident < tree.remapped_ranks[peer] || min_block_resident + num_blocks - 1 > tree.remapped_ranks_max[peer]){
+            MPI_Send((char*) buffer + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, datatype, peer, TAG_SWING_BCAST, comm);
+        }
+
+        if(wait){
+            MPI_Wait(&req, MPI_STATUS_IGNORE);        
+        }
 
         min_block_resident = std::min(min_block_resident, min_block_r);
         num_blocks *= 2;

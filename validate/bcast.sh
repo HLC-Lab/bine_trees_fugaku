@@ -21,6 +21,13 @@ FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "IN
 # Now check correctness
 for ALGO in "${ALGORITHMS[@]}"
 do        
+    # Set proper distance when algo is scatter-allgather
+    if [ "${ALGO}" == "SCATTER_ALLGATHER" ]
+    then
+        export LIBSWING_BCAST_DISTANCE=INCREASING
+    else
+        unset LIBSWING_BCAST_DISTANCE
+    fi
     for TYPE in "INT32"
     do
         for COUNT in ${COUNTS[@]}
