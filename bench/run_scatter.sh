@@ -118,19 +118,38 @@ do
     do
         if [ $actual_count -ge $PORTS ]; then
             export LIBSWING_NUM_PORTS=${PORTS}
-            # Run swing
+            # Run swing (INCREASING)
             export LIBSWING_SCATTER_ALGO_FAMILY="SWING" 
             export LIBSWING_SCATTER_ALGO_LAYER="UTOFU" 
-            export LIBSWING_SCATTER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"    
+            export LIBSWING_SCATTER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"  
+            export LIBSWING_SCATTER_DISTANCE=INCREASING  
             for SEGMENT_SIZE in 0 #4096 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
                     LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_SCATTER_ALGO_FAMILY}-${LIBSWING_SCATTER_ALGO}-${LIBSWING_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    ALGO_FNAME=${LIBSWING_SCATTER_ALGO_FAMILY}-${LIBSWING_SCATTER_ALGO}-INC-${LIBSWING_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
+            unset LIBSWING_SCATTER_DISTANCE
+
+
+            # Run swing (DECREASING)
+            export LIBSWING_SCATTER_ALGO_FAMILY="SWING" 
+            export LIBSWING_SCATTER_ALGO_LAYER="UTOFU" 
+            export LIBSWING_SCATTER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"  
+            export LIBSWING_SCATTER_DISTANCE=DECREASING  
+            for SEGMENT_SIZE in 0 #4096 65536 1048576
+            do                
+                if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+                    ALGO_FNAME=${LIBSWING_SCATTER_ALGO_FAMILY}-${LIBSWING_SCATTER_ALGO}-DEC-${LIBSWING_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                fi
+            done
+            unset LIBSWING_SCATTER_DISTANCE
         
             # Run recdoub
             export LIBSWING_SCATTER_ALGO_FAMILY="RECDOUB" 
