@@ -392,7 +392,10 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
     // In case count not divisible by num ports, the first port will for sure have the largest blocks.
     // Thus, it is enough to check the count of the first block of the first port to know the largest block.
     // TODO: This work for reduce_block, generalize it to reduce
-    size_t tmpbuf_size = count * dtsize * 2; // I need two buffers since the non-root ranks do not have the recvbuf
+    size_t count_per_rank_per_port = count / (env.num_ports * this->size);
+    size_t count_per_rank_per_port_ceil = ceil(count / ((float) env.num_ports * this->size));
+    size_t tmpbuf_size = count * dtsize; 
+    tmpbuf_size += count_per_rank_per_port_ceil * env.num_ports * this->size; // I need two buffers since the non-root ranks do not have the recvbuf
     
     timer.reset("= swing_reduce_redscat_gather_utofu (utofu buf reg)"); 
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
@@ -441,7 +444,6 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
         timer.reset("= swing_reduce_redscat_gather_utofu (computing trees)");
         swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
 
-        size_t count_per_rank_per_port = count / (env.num_ports * this->size);
         size_t offset_port = count_per_rank_per_port * this->size * port * dtsize;
         size_t min_block_s, max_block_s;
         size_t min_block_r, max_block_r;
@@ -451,6 +453,7 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
         /******************/
         /* Reduce-Scatter */
         /******************/
+        size_t offset_step = 0; // At each step we write at a diffent offset so that different ranks writing to the same destination rank do not overwrite each other
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
             if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
@@ -488,23 +491,25 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
             }else{
                 lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd + offset_s;
             }
-            rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_tmpbuf2 + offset_s; 
+            rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_tmpbuf2 + offset_step /*+ offset_s*/; 
 
             size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_send*dtsize, rmt_addr, step); 
             swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
             swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             
             if(step == 0){
-                reduce_local((char*) sendbuf + offset_r, tmpbuf2 + offset_r, tmpbuf + offset_r, count_to_recv, datatype, op);
+                reduce_local((char*) sendbuf + offset_r, tmpbuf2 + offset_step /*+ offset_r*/, tmpbuf + offset_r, count_to_recv, datatype, op);
             }else{
                 // Rank 0 in the last step receives directly in recvbuf since that
                 // data is finalize and will not move anymore.
                 if(step == this->num_steps - 1 && rank == root){
-                    reduce_local(tmpbuf + offset_r, tmpbuf2 + offset_r, (char*) recvbuf + offset_r, count_to_recv, datatype, op);
+                    reduce_local(tmpbuf + offset_r, tmpbuf2 + offset_step /*+ offset_r*/, (char*) recvbuf + offset_r, count_to_recv, datatype, op);
                 }else{
-                    reduce_local(tmpbuf2 + offset_r, tmpbuf + offset_r, count_to_recv, datatype, op);
+                    reduce_local(tmpbuf2 + offset_step /*+ offset_r*/, tmpbuf + offset_r, count_to_recv, datatype, op);
                 }                
             }
+            // We need to consider a worst case where the last block (that is larger) has always been sent
+            offset_step += (max_block_s - min_block_s) * count_per_rank_per_port_ceil;
         }    
 
         /**********/

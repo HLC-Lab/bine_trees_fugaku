@@ -79,8 +79,8 @@ do
     export LIBSWING_ALLTOALL_ALGO_FAMILY="DEFAULT" 
     export LIBSWING_ALLTOALL_ALGO_LAYER="MPI" 
 
-    coll_tuned_prealloc_size=1027 # This is in MiB (1 GiB + 3MiB)
-    PREALLOC_SIZE=1073741824 # 1 GiB
+    coll_tuned_prealloc_size=1539 # This is in MiB (1.5 GiB + 3MiB)
+    PREALLOC_SIZE=1610612736 # 1.5 GiB
     
     # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
     # TODO: Maybe I should prealloc only for large ALLTOALL?
