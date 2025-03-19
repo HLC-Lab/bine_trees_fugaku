@@ -1433,7 +1433,16 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
                     }
                 case SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER:
                     if(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-                        return swing_common->swing_reduce_redscat_gather_utofu(sendbuf, recvbuf, count, datatype, op, root, comm);
+                        int dtsize;
+                        MPI_Type_size(datatype, &dtsize);
+                        BlockInfo** blocks_info = get_blocks_info(count, swing_common, dtsize);
+                        int r = swing_common->swing_reduce_redscat_gather_utofu(sendbuf, recvbuf, count, datatype, op, root, comm, blocks_info);
+                        // Free blocks_info
+                        for(size_t p = 0; p < swing_common->get_num_ports(); p++){
+                            free(blocks_info[p]);
+                        }
+                        free(blocks_info);
+                        return r;
                     }else{
                         return swing_common->swing_reduce_redscat_gather_mpi(sendbuf, recvbuf, count, datatype, op, root, comm);
                     }

@@ -218,6 +218,7 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t
     for(size_t i = desc->port_info[port].completed_send; i < expected_count; i++){
         swing_utofu_wait_send(desc, port);
     }    
+    desc->port_info[port].completed_send = 0;
 }
 
 // uTofu guarantees that the data sent from a given source to a given destination is received in order, as long as it uses the same VCQ 
