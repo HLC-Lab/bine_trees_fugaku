@@ -525,9 +525,21 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
             
             DPRINTF("[%d] Sending/receiving %d bytes from %d\n", this->rank, count_to_sendrecv*dtsize, peer);
             // In the notifications for isend/recv we do step+1 rather than step because one receive step was already done in the scatter phase
-            size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
-            swing_utofu_wait_recv(utofu_descriptor, port, step + 1, issued_sends - 1);
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends); 
+            size_t issued_sends = 0;
+            // Send only if this is something that the peer does not already have
+            if(min_block_resident < tree.remapped_ranks[peer] || min_block_resident + num_blocks - 1 > tree.remapped_ranks_max[peer]){
+                issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
+            }
+            
+            // Receive only if this is something I did not have already
+            if(min_block_r < tree.remapped_ranks[this->rank] || min_block_r + num_blocks - 1 > tree.remapped_ranks_max[this->rank]){
+                size_t segments_max_put_size = ceil((count_to_sendrecv*dtsize) / ((float) MAX_PUTGET_SIZE));
+                swing_utofu_wait_recv(utofu_descriptor, port, step + 1, segments_max_put_size - 1);
+            }
+
+            if(issued_sends){
+                swing_utofu_wait_sends(utofu_descriptor, port, issued_sends); 
+            }
             utofu_descriptor->port_info[port].completed_send = 0;                               
 
             min_block_resident = std::min(min_block_resident, min_block_r);

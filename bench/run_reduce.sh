@@ -170,7 +170,26 @@ do
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
+            done            
+        fi
+
+        actual_count=$((n / p))
+        if [ $actual_count -ge $PORTS ]; then
+            # Run swing binomial tree
+            export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
+            export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
+            export LIBSWING_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
+            export LIBSWING_REDUCE_DISTANCE="INCREASING"
+            for SEGMENT_SIZE in 0 #4096 65536 1048576
+            do                
+                if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                    ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                fi
             done
+            unset LIBSWING_REDUCE_DISTANCE
         fi
     done
     echo " ${GREEN}[Done]${NC}"
