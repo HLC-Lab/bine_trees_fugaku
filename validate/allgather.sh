@@ -1,5 +1,5 @@
 #!/bin/bash
-declare -a ALGORITHMS=("VEC_DOUBLING_CONT_PERMUTE")
+declare -a ALGORITHMS=("VEC_DOUBLING_CONT_SEND" "VEC_DOUBLING_CONT_PERMUTE")
 declare -a FAMILIES=("SWING")
 declare -a COUNTS=("131072")
 COLLECTIVE="MPI_Allgather"
@@ -17,6 +17,20 @@ export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_PERMUTE"
 export LIBSWING_ALLGATHER_ALGO_LAYER="UTOFU" 
 FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
 [ "${FUNC_NAME}" == "swing_allgather_utofu_contiguous" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLGATHER_ALGO_FAMILY} ${LIBSWING_ALLGATHER_ALGO} ${LIBSWING_ALLGATHER_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
+# Check that I call the right functions
+export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
+export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_SEND" 
+export LIBSWING_ALLGATHER_ALGO_LAYER="MPI" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_allgather_send_mpi" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLGATHER_ALGO_FAMILY} ${LIBSWING_ALLGATHER_ALGO} ${LIBSWING_ALLGATHER_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+
+# Check that I call the right functions
+export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
+export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_SEND" 
+export LIBSWING_ALLGATHER_ALGO_LAYER="UTOFU" 
+FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
+[ "${FUNC_NAME}" == "swing_allgather_send_utofu" ] || { echo "ERROR: Wrong function called for ${LIBSWING_ALLGATHER_ALGO_FAMILY} ${LIBSWING_ALLGATHER_ALGO} ${LIBSWING_ALLGATHER_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
 # Now check correctness
 for ALGO in "${ALGORITHMS[@]}"
@@ -41,6 +55,9 @@ do
 
                     echo "Running ${COLLECTIVE} ${ALGO} with n=2x8x2.."
                     LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=2x8x2  mpirun -n 32 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
+
+                    echo "Running ${COLLECTIVE} ${ALGO} with n=4x4x4.."
+                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=4x4x4  mpirun -n 64 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }
 
 #                    echo "Running ${COLLECTIVE} ${ALGO} with n=6x6.."
 #                    LIBSWING_ALGO=${ALGO} LIBSWING_DIMENSIONS=6x6  mpirun -n 36 --oversubscribe ./bench/bench_validate ${COLLECTIVE} ${TYPE} ${COUNT} ${ITERATIONS} 2>&1 > /dev/null || { echo 'FAIL' ; exit 1; }

@@ -629,6 +629,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
     assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
     assert(env.reduce_config.algo == SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
 #endif
+    assert(env.reduce_config.distance_type == SWING_DISTANCE_INCREASING); // For now, we only support decreasing distance
     assert(this->size > 2); // To work for two nodes we need to fix the tmpbuf/recvbuf in reduce_local below
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_redscat_gather_mpi (init)");
     Timer timer("swing_reduce_redscat_gather_mpi (init)");
@@ -741,7 +742,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
         }else{
             sending_step = this->num_steps - 1 - tree.reached_at_step[this->rank];
         }
-        DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
+        DPRINTF("[%d] Sending step: %d parent: %d\n", this->rank, sending_step, tree.parent[this->rank]);
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             if(step < sending_step){
                 // Receive from peer
