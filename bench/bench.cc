@@ -93,9 +93,6 @@ void print_tnr_stats(uint64_t reading[NUM_TNR][PA_LEN], uint rank){
 }
 #endif
 
-
-
-
 void voidop(void *invec, void *inoutvec, int *len, MPI_Datatype *datatype){
     return;
 }

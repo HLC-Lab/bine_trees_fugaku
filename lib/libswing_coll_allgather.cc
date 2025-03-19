@@ -348,7 +348,7 @@ int SwingCommon::swing_allgather_mpi(const void *sendbuf, int sendcount, MPI_Dat
     }
 }
 
-int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
     assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
@@ -356,20 +356,122 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
     assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
 #endif
 #ifdef FUGAKU
+    assert(env.num_ports == 1); // TODO: Implement the case where env.num_ports > 1. It would require memcpys, so probably does not make sense ... (just use cont_permute ...)
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_utofu_cont_send (init)");
+    Timer timer("swing_allgather_utofu_cont_send (init)");
+    int dtsize;
+    MPI_Type_size(sendtype, &dtsize);    
 
+    // We don't need a tmpbuf since we do not need to reorder
+    // We can do everything with recvbuf
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*env.num_ports);
+
+    size_t port = 0;
+    // Compute the peers of this port if I did not do it yet
+    if(peers[port] == NULL){
+        peers[port] = (uint*) malloc(sizeof(uint)*(this->num_steps)); 
+        compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
+    }        
+    timer.reset("= swing_allgather_utofu_cont_send (computing trees)");
+    // We need to invert everything for the usual reason of the allgather etc...
+    // The remapping must be the same for all the ranks so all trees must be built for the same rank (0 in this case)
+    uint root = 0;
+    swing_tree_t tree = get_tree(root, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    uint peer_send;
+    for(size_t i = 0; i < this->size; i++){
+        if(tree.remapped_ranks[i] == rank){
+            peer_send = i;
+            break;
+        }
+    }            
+
+    int res = MPI_SUCCESS; 
+    DPRINTF("[%d] Permuting send. Sending to %d and receiving from %d\n", rank, peer_send, tree.remapped_ranks[rank]); 
+    timer.reset("= swing_allgather_utofu_contiguous (utofu buf reg+exch)");   
+    swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, ((size_t) recvcount)*dtsize*this->size, NULL, 0, env.num_ports); 
+    // + 1 because of the peer I talk to at the beginning to permute
+    swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[port]);                 
+    // I should receive the block I am remapped to from the rank I am remapped to,
+    // and send my block to the rank it is remapped as my rank (used the inverse remapping) 
+    // i.e., send to inverse_remapping[rank] and received from remapped_ranks[rank]
+    // Rank 0 does not need to do anything because it is 0 also in the remapped tree
+    if(rank != root){
+        // Send my addresses to tree.remapped_ranks[rank]
+        // and receive the addresses of peer_send
+        uint64_t sbuffer[2] = {this->utofu_descriptor->port_info[port].lcl_recv_stadd, this->utofu_descriptor->port_info[port].lcl_temp_stadd};
+        uint64_t rbuffer[2];
+        MPI_Request req;
+        MPI_Isend(sbuffer, 2, MPI_UINT64_T, tree.remapped_ranks[rank], 0, MPI_COMM_WORLD, &req);
+        MPI_Recv(rbuffer, 2, MPI_UINT64_T, peer_send, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Wait(&req, MPI_STATUS_IGNORE);
+        this->utofu_descriptor->port_info[port].rmt_recv_stadd[peer_send] = rbuffer[0];
+        this->utofu_descriptor->port_info[port].rmt_temp_stadd[peer_send] = rbuffer[1];
+        assert(tree.remapped_ranks[peer_send] == rank);
+        utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd;
+        utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer_send] + tree.remapped_ranks[peer_send]*sendcount*dtsize;
+        size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer_send]), port, peer_send, lcl_addr, sendcount*dtsize, rmt_addr, 0);
+        swing_utofu_wait_recv(utofu_descriptor, port, 0, issued_sends - 1);
+        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+    }else{
+        memcpy(recvbuf, sendbuf, sendcount*dtsize);
+    }
+    
+    DPRINTF("[%d] Permutation done\n", rank); 
+    
+    size_t num_blocks = 1;
+    size_t min_block_resident = tree.remapped_ranks[this->rank];
+    size_t min_block_r;        
+    for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        uint peer;            
+        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            peer = peers[port][this->num_steps - step - 1];                         
+        }else{  
+            peer = peers[port][step];
+        }
+
+        size_t count_to_sendrecv = num_blocks*sendcount;
+
+        // The data I am going to receive contains the block
+        // with id equal to the remapped rank of my peer,
+        // and is aligned to a power of 2^step
+        // Thus, I need to do proper masking to get the block id
+        // i.e., I need to set to 0 the least significant step bits
+        min_block_r = tree.remapped_ranks[peer] & ~((1 << step) - 1);
+
+        utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + min_block_resident*sendcount*dtsize;
+        utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + min_block_resident*sendcount*dtsize;;
+
+        DPRINTF("[%d] Sending/receiving %d bytes to %d offset %d\n", this->rank, count_to_sendrecv*dtsize, peer, min_block_resident);
+
+        // step + 1 because I did already a transmission before starting with the actual steps
+        size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
+        swing_utofu_wait_recv(utofu_descriptor, port, step + 1, issued_sends - 1);
+        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+                        
+        min_block_resident = std::min(min_block_resident, min_block_r);
+        num_blocks *= 2;
+    }         
+    free(peers[port]);
+    destroy_tree(&tree);
+    timer.reset("= swing_allgather_utofu_cont_send (writing profile data to file)");
+    return res;
 #else
     assert("uTofu not supported");
     return MPI_ERR_OTHER;
 #endif
 }
 
-int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
     assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
     assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
     assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
 #endif
+    assert(env.num_ports == 1);
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_mpi_cont_send (init)");
@@ -384,63 +486,64 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
 
     int res = MPI_SUCCESS; 
 
-    for(size_t port = 0; port < env.num_ports; port++){
-        // Compute the peers of this port if I did not do it yet
-        if(peers[port] == NULL){
-            peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
-            compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
-        }        
-        timer.reset("= swing_allgather_mpi_cont_send (computing trees)");
-        // We need to invert everything for the usual reason of the allgather etc...
-        // The remapping must be the same for all the ranks so all trees must be built for the same rank (0 in this case)
-        swing_tree_t tree = get_tree(0, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
-        size_t remapped_rank = tree.remapped_ranks[rank];
-        uint* inverse_remapping = (uint*) malloc(sizeof(uint)*this->size);
-        for(size_t i = 0; i < this->size; i++){
-            inverse_remapping[tree.remapped_ranks[i]] = i;
-        }
-        
-        // I should receive the block I am remapped to from the rank I am remapped to,
-        // and send my block to the rank it is remapped as my rank (used the inverse remapping) 
-        // i.e., send to inverse_remapping[rank] and received from remapped_ranks[rank]
-        printf("[%d] Remap: Sending to %d and receiving from %d\n", rank, inverse_remapping[rank], remapped_rank);
-        MPI_Sendrecv((char*) sendbuf + blocks_info[port][0].offset            , blocks_info[port][0].count            , sendtype, inverse_remapping[rank], TAG_SWING_ALLGATHER, 
-                     (char*) recvbuf + blocks_info[port][remapped_rank].offset, blocks_info[port][remapped_rank].count, sendtype, remapped_rank          , TAG_SWING_ALLGATHER, 
-                     comm, MPI_STATUS_IGNORE);
-        free(inverse_remapping);
-        
-        size_t recvbuf_offset_port = ((recvcount*dtsize) / env.num_ports) * port;        
-        size_t num_blocks = 1;
-        size_t min_block_resident = tree.remapped_ranks[this->rank];
-        size_t min_block_r;        
-        for(size_t step = 0; step < (uint) this->num_steps; step++){        
-            uint peer;            
-            if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
-                peer = peers[port][this->num_steps - step - 1];                         
-            }else{  
-                peer = peers[port][step];
-            }
+    size_t port = 0;
 
-            size_t count_to_sendrecv = num_blocks*sendcount;
-            // The data I am going to receive contains the block
-            // with id equal to the remapped rank of my peer,
-            // and is aligned to a power of 2^step
-            // Thus, I need to do proper masking to get the block id
-            // i.e., I need to set to 0 the least significant step bits
-            min_block_r = tree.remapped_ranks[peer] & ~((1 << step) - 1);
-
-
-            printf("[%d] Sending to %d and receiving from %d\n", rank, peer, peer);
-            MPI_Sendrecv((char*) recvbuf + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
-                         (char*) recvbuf + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
-                         comm, MPI_STATUS_IGNORE);     
-                         
-            min_block_resident = std::min(min_block_resident, min_block_r);
-            num_blocks *= 2;
-        }         
-        free(peers[port]);
-        destroy_tree(&tree);
+    // Compute the peers of this port if I did not do it yet
+    if(peers[port] == NULL){
+        peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
+        compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
+    }        
+    timer.reset("= swing_allgather_mpi_cont_send (computing trees)");
+    // We need to invert everything for the usual reason of the allgather etc...
+    // The remapping must be the same for all the ranks so all trees must be built for the same rank (0 in this case)
+    swing_tree_t tree = get_tree(0, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    size_t remapped_rank = tree.remapped_ranks[rank];
+    uint* inverse_remapping = (uint*) malloc(sizeof(uint)*this->size);
+    for(size_t i = 0; i < this->size; i++){
+        inverse_remapping[tree.remapped_ranks[i]] = i;
     }
+    
+    // I should receive the block I am remapped to from the rank I am remapped to,
+    // and send my block to the rank it is remapped as my rank (used the inverse remapping) 
+    // i.e., send to inverse_remapping[rank] and received from remapped_ranks[rank]
+    DPRINTF("[%d] Remap: Sending to %d and receiving from %d\n", rank, inverse_remapping[rank], remapped_rank);
+    MPI_Sendrecv((char*) sendbuf                                 , sendcount, sendtype, inverse_remapping[rank], TAG_SWING_ALLGATHER, 
+                 (char*) recvbuf + remapped_rank*sendcount*dtsize, sendcount, sendtype, remapped_rank          , TAG_SWING_ALLGATHER, 
+                 comm, MPI_STATUS_IGNORE);
+    free(inverse_remapping);
+    
+    size_t recvbuf_offset_port = ((recvcount*dtsize) / env.num_ports) * port;        
+    size_t num_blocks = 1;
+    size_t min_block_resident = tree.remapped_ranks[this->rank];
+    size_t min_block_r;        
+    for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        uint peer;            
+        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            peer = peers[port][this->num_steps - step - 1];                         
+        }else{  
+            peer = peers[port][step];
+        }
+
+        size_t count_to_sendrecv = num_blocks*sendcount;
+        // The data I am going to receive contains the block
+        // with id equal to the remapped rank of my peer,
+        // and is aligned to a power of 2^step
+        // Thus, I need to do proper masking to get the block id
+        // i.e., I need to set to 0 the least significant step bits
+        min_block_r = tree.remapped_ranks[peer] & ~((1 << step) - 1);
+
+
+        DPRINTF("[%d] Sending to %d and receiving from %d\n", rank, peer, peer);
+        MPI_Sendrecv((char*) recvbuf + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+                     (char*) recvbuf + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+                        comm, MPI_STATUS_IGNORE);     
+                        
+        min_block_resident = std::min(min_block_resident, min_block_r);
+        num_blocks *= 2;
+    }         
+    free(peers[port]);
+    destroy_tree(&tree);
+
     timer.reset("= swing_allgather_mpi_cont_send (writing profile data to file)");
     return res;
 }

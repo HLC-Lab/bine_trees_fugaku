@@ -1167,8 +1167,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             switch(env.allgather_config.algo){
-                case SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE:
-                case SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND:{
+                case SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE:{
                     // We first split the data by block, and then by port (i.e., we split each block in num_ports parts). 
                     // This is the opposite of what we do in allreduce.
                     // Allocate blocks_info
@@ -1177,7 +1176,6 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                         blocks_info[p] = (BlockInfo*) malloc(sizeof(BlockInfo)*swing_common->get_size());
                     }
                     size_t count_so_far = 0;
-                    size_t my_offset = 0;
                     int dtsize;
                     MPI_Type_size(sendtype, &dtsize);
                     for(size_t i = 0; i < (size_t) swing_common->get_size(); i++){
@@ -1193,34 +1191,20 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                             blocks_info[p][i].offset = offset_port;
                             DPRINTF("[%d] Port %d Offset %d Count %d\n", swing_common->get_rank(), p, offset_port, count_port);
                         }
-
-                        if(i == (size_t) swing_common->get_rank()){
-                            my_offset = block_offset;
-                        }
                         count_so_far += recvcount;
                     }
 
                     // Copy my data in the right place in the recvbuf
-                    memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
+                    //memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
                     size_t count = swing_common->get_size()*recvcount*dtsize;
 
                     int res;
                     //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);    
-                    if(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE){                
-                        if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-                            res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-                        }else{
-                            res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-                        }        
-                    }else if(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND){
-                        if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-                            res = swing_common->swing_allgather_send_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-                        }else{
-                            res = swing_common->swing_allgather_send_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
-                        }        
+                    if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
                     }else{
-                        assert("Invalid value for LIBSWING_ALLGATHER_ALGO" && 0);
-                    }
+                        res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+                    }        
 
                     // Free blocks_info
                     for(size_t p = 0; p < swing_common->get_num_ports(); p++){
@@ -1228,6 +1212,15 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                     }
                     free(blocks_info);        
                     return res;
+                }
+                case SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND:{
+                    int res;
+                    if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
+                        res = swing_common->swing_allgather_send_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+                    }else{
+                        res = swing_common->swing_allgather_send_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+                    }  
+                    return res;      
                 }
                 default:
                     assert("Invalid value for LIBSWING_ALLGATHER_ALGO" && 0);
