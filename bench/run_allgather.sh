@@ -83,9 +83,8 @@ do
     PREALLOC_SIZE=1610612736 # 1.5 GiB
     
     # ATTENTION: Showing decision process adds non-negligible overhead (for small vectors). Use it with care.
-    # TODO: Maybe I should prealloc only for large ALLGATHER?
     # Also if it is for bcast, according to the documentation should be helpful even for allgather if all the counts are equal
-    EXTRA_MCAS="-mca coll_tuned_bcast_same_count=1" #"-mca mpi_print_stats 1 -mca coll_select_show_decision_process 2" #"-mca coll_base_reduce_commute_safe 1"
+    EXTRA_MCAS="-mca coll_tuned_bcast_same_count 1" #"-mca mpi_print_stats 1 -mca coll_select_show_decision_process 2" #"-mca coll_base_reduce_commute_safe 1"
 
     ## Do a run just to print the decision process
     DEFAULT_ALGO="default"
@@ -132,12 +131,39 @@ do
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
-
-            # Run swing CONT_SEND (only works for 1 port)
+            
             if [ $PORTS -eq 1 ]; then
+                # Run swing CONT_SEND (only works for 1 port)
                 export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
                 export LIBSWING_ALLGATHER_ALGO_LAYER="UTOFU" 
                 export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_SEND"
+                for SEGMENT_SIZE in 0 #4096 65536 1048576
+                do                
+                    if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+                        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+                        ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                    fi
+                done          
+
+                # Run the single-port MPI versions
+                export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
+                export LIBSWING_ALLGATHER_ALGO_LAYER="MPI" 
+                export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_SEND"
+                for SEGMENT_SIZE in 0 #4096 65536 1048576
+                do                
+                    if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+                        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+                        ALGO_FNAME=${LIBSWING_ALLGATHER_ALGO_FAMILY}-${LIBSWING_ALLGATHER_ALGO}-${LIBSWING_ALLGATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                    fi
+                done          
+
+                export LIBSWING_ALLGATHER_ALGO_FAMILY="SWING" 
+                export LIBSWING_ALLGATHER_ALGO_LAYER="MPI" 
+                export LIBSWING_ALLGATHER_ALGO="VEC_DOUBLING_CONT_PERMUTE"
                 for SEGMENT_SIZE in 0 #4096 65536 1048576
                 do                
                     if [ $SEGMENT_SIZE -lt $total_msg_size ]; then

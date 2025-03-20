@@ -449,6 +449,7 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
         // This might create unbalance, but simplifies the logic/code
 
         // Now perform all the subsequent steps       
+        size_t issued_sends = 0;
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             if(root != this->rank && step == receiving_step){       
                 size_t min_block_r = tree.remapped_ranks[this->rank];
@@ -480,13 +481,9 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
                         recvcnt += (count % (env.num_ports * this->size));
                     }
                     DPRINTF("Rank %d sending %d elems to %d at step %d\n", this->rank, recvcnt, peer, step);
-                    size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, recvcnt*dtsize, rmt_addr, 0);
-                    swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
-                    utofu_descriptor->port_info[port].completed_send = 0;
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, recvcnt*dtsize, rmt_addr, 0);
                 }
             }
-            // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_bcast_scatter_allgather (waiting all sends)");
         }
         
         /*************************/
@@ -525,10 +522,9 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
             
             DPRINTF("[%d] Sending/receiving %d bytes from %d\n", this->rank, count_to_sendrecv*dtsize, peer);
             // In the notifications for isend/recv we do step+1 rather than step because one receive step was already done in the scatter phase
-            size_t issued_sends = 0;
             // Send only if this is something that the peer does not already have
             if(min_block_resident < tree.remapped_ranks[peer] || min_block_resident + num_blocks - 1 > tree.remapped_ranks_max[peer]){
-                issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
             }
             
             // Receive only if this is something I did not have already
@@ -537,14 +533,13 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
                 swing_utofu_wait_recv(utofu_descriptor, port, step + 1, segments_max_put_size - 1);
             }
 
-            if(issued_sends){
-                swing_utofu_wait_sends(utofu_descriptor, port, issued_sends); 
-            }
             utofu_descriptor->port_info[port].completed_send = 0;                               
 
             min_block_resident = std::min(min_block_resident, min_block_r);
             num_blocks *= 2;
         }
+        timer.reset("= swing_bcast_scatter_allgather (waiting all sends)");
+        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
 
         free(peers[port]);    
         destroy_tree(&tree);

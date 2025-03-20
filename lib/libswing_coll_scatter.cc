@@ -120,8 +120,8 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
         DPRINTF("My remapped rank is %d\n", my_remapped_rank);
 
         // Now perform all the subsequent steps                    
-        for(size_t step = 0; step < (uint) this->num_steps; step++){
-            issued_sends = 0;
+        issued_sends = 0;
+        for(size_t step = 0; step < (uint) this->num_steps; step++){            
             // Compute the range to send/recv
             if(step >= receiving_step + 1){
                 uint peer;
@@ -138,10 +138,10 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
                     utofu_stadd_t rmt_addr = utofu_descriptor->port_info[p].rmt_temp_stadd[peer] + tmpbuf_offset_port + min_block_s*blocks_info[p][0].count*dtsize;
                     size_t tmpcnt = blocks_info[p][0].count*blocks_to_send; // All blocks for this port have the same size
                     issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, 0);                                                             
-                    swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
                 }
             }
         }    
+        swing_utofu_wait_sends(utofu_descriptor, p, issued_sends);
         free(peers[p]);
         destroy_tree(&tree);
 
