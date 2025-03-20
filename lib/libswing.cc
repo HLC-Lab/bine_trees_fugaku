@@ -1202,7 +1202,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                     //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);    
                     if(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS){
                         if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-                            res = swing_common->swing_allgather_blocks_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+                            res = swing_common->swing_allgather_blocks_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
                         }else{
                             res = swing_common->swing_allgather_blocks_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
                         }  
