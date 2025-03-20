@@ -547,3 +547,120 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
     timer.reset("= swing_allgather_mpi_cont_send (writing profile data to file)");
     return res;
 }
+
+int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+#endif
+#ifdef FUGAKU
+#else
+    assert("uTofu not supported");
+    return MPI_ERR_OTHER;
+#endif
+}
+
+int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+#endif    
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_blocks_mpi (init)");
+    Timer timer("swing_allgather_blocks_mpi (init)");
+    int dtsize;
+    MPI_Type_size(sendtype, &dtsize);    
+
+    // We don't need a tmpbuf since we do not need to reorder
+    // We can do everything with recvbuf
+    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    memset(peers, 0, sizeof(uint*)*env.num_ports);
+
+    int res = MPI_SUCCESS; 
+
+    size_t port = 0;
+
+    // Compute the peers of this port if I did not do it yet
+    if(peers[port] == NULL){
+        peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
+        compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
+    }        
+    timer.reset("= swing_allgather_blocks_mpi (computing trees)");
+    swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+
+    memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
+    MPI_Request* reqs_send = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size);
+    MPI_Request* reqs_recv = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size);
+
+    char* resident_blocks = (char*) calloc(this->size, sizeof(char));
+    resident_blocks[this->rank] = 1;
+
+    size_t issued_sends = 0, issued_recvs = 0;
+    for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        uint peer;            
+        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            peer = peers[port][this->num_steps - step - 1];                         
+        }else{  
+            peer = peers[port][step];
+        }
+
+        issued_recvs = 0;
+        swing_tree_t tree_peer = get_tree(peer, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        for(size_t block = 0; block < this->size; block++){
+            char send_block = 0, recv_block = 0;
+            // Check first if I actually need to send something to that peer
+            // (for non-p2 cases)
+            if(tree_peer.parent[rank] == peer){
+                if(tree_peer.subtree_roots[block] == rank){
+                    send_block = 1;
+                }            
+            }
+            // Check first if I actually need to recv something from that peer
+            // (for non-p2 cases)
+            if(tree.parent[peer] == rank){
+                if(tree.subtree_roots[block] == peer){
+                    recv_block = 1;
+                }
+            }
+
+            // TODO: This does not work for some non p2 cases. You should use compute_block_step from libswing_common.cc rather than get_tree
+            // The issue is how we disconnect the nodes, which should be done based on the starting step rather than arrival step.
+            if(send_block && resident_blocks[block]){ // Sometimes (e.g., on a 6x6 torus) it might turn out that I need to both send and recv a block at the same time in the last step.
+                //if(resident_blocks[block] == 0){
+                //    printf("[%d] Error: block %d is not resident\n", rank, block);
+                //    //exit(1);    
+                //}
+                ////assert(resident_blocks[block] == 1);
+                DPRINTF("[%d] Step %d Sending block %d to %d\n", this->rank, step, block, peer);
+                MPI_Isend((char*) recvbuf + block*sendcount*dtsize, sendcount, sendtype, peer, TAG_SWING_ALLGATHER, comm, &reqs_send[issued_sends]);
+                ++issued_sends;
+            }
+
+            if(recv_block){
+                DPRINTF("[%d] Step %d Receiving block %d from %d\n", this->rank, step, block, peer);
+                MPI_Irecv((char*) recvbuf + block*recvcount*dtsize, recvcount, recvtype, peer, TAG_SWING_ALLGATHER, comm, &reqs_recv[issued_recvs]);
+                ++issued_recvs;
+                resident_blocks[block] = 1;
+            }
+
+        }
+        destroy_tree(&tree_peer);
+        MPI_Waitall(issued_recvs, reqs_recv, MPI_STATUSES_IGNORE);
+        DPRINTF("[%d] All receives waited\n", this->rank);
+    }             
+    MPI_Waitall(issued_sends, reqs_send, MPI_STATUSES_IGNORE);
+    DPRINTF("[%d] All sends waited\n", this->rank);
+    free(peers[port]);
+    destroy_tree(&tree);
+    free(reqs_send);
+    free(reqs_recv);
+    free(resident_blocks);
+
+    timer.reset("= swing_allgather_blocks_mpi (writing profile data to file)");
+    return res;
+}

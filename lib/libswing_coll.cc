@@ -114,10 +114,12 @@ void get_peer_c(int* coord_rank, size_t step, uint port, swing_step_info_t* step
  * @param algo (IN) The algorithm to use (SWING or RECDOUB)
  * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
  * @param scc (IN) The SwingCoordConverter object
+ * @param subtree_root (IN) The rank of the root of the subtree (i.e., one of the immediate children of the root)
  * @param reached_at_step (OUT) An array of size scc->size to store the step at which a node is reached
  * @param parent (OUT) An array of size scc->size to store the parent of a node
+ * @param subtree_roots (OUT) An array of size scc->size to store the rank of the root of the subtree to which i belongs. The root of such a subtree will be a children of coord_root.
  */
-static void build_tree(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t* parent, swing_step_info_t* step_info){
+static void build_tree(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t subtree_root, uint32_t* parent, swing_step_info_t* step_info, uint32_t* subtree_roots){
     for(size_t i = step; i < scc->num_steps; i++){
         int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
@@ -132,8 +134,19 @@ static void build_tree(int* coord_root, size_t step, uint port, swing_algo_famil
         if(parent[rank] == UINT32_MAX || i < reached_at_step[rank]){
             parent[rank] = scc->getIdFromCoord(coord_root);
             reached_at_step[rank] = i;
+            if(step == 0){
+                // If this is a children of the actual root, it is rooted in itself
+                subtree_roots[rank] = rank;
+            }else{
+                subtree_roots[rank] = subtree_root;
+            }
         }
-        build_tree(peer_rank, i + 1, port, algo, dist_type, scc, reached_at_step, parent, step_info);
+        uint32_t actual_subtree_root = subtree_root;
+        if(step == 0){
+            // If I am actually the root, I can change the subroot_rank
+            actual_subtree_root = rank;
+        }
+        build_tree(peer_rank, i + 1, port, algo, dist_type, scc, reached_at_step, actual_subtree_root, parent, step_info, subtree_roots);
     }
 }
 
@@ -328,21 +341,23 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
         int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         scc->getCoordFromId(root, coord_root);
         swing_tree_t tree;
-        uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*4); // Do one single malloc rather than 4
+        uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*5); // Do one single malloc rather than 5
         tree.parent = buffer;
         tree.reached_at_step = buffer + scc->size;
         tree.remapped_ranks = buffer + scc->size*2;
         tree.remapped_ranks_max = buffer + scc->size*3;
+        tree.subtree_roots = buffer + scc->size*4;
         for(size_t i = 0; i < scc->size; i++){
             tree.parent[i] = UINT32_MAX;
             tree.reached_at_step[i] = scc->num_steps;
         }
-        
+               
         // Compute the basic tree informations (parent and reached_at_step)
         swing_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
-        build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, tree.parent, step_info);    
+        build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, 0, tree.parent, step_info, tree.subtree_roots);    
         tree.parent[root] = UINT32_MAX;
         tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
+        tree.subtree_roots[root] = UINT32_MAX;
 
         // Now that we have a loopless tree, do a DFS to compute the remapped rank
         uint next_rank = scc->size - 1;
