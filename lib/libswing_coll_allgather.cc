@@ -558,8 +558,8 @@ int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_blocks_utofu (init)");
     Timer timer("swing_allgather_blocks_utofu (init)");
+    timer.reset("= swing_allgather_blocks_utofu (serial fraction)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
@@ -568,7 +568,6 @@ int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount
     uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
-    timer.reset("= swing_allgather_blocks_utofu (utofu buf exch)");           
     swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
     if(env.utofu_add_ag){
         swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
@@ -588,10 +587,15 @@ int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount
         }
     }
 
+    //timer.reset("= swing_allgather_blocks_utofu (memcpy)");           
+    memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
+
     int res = MPI_SUCCESS; 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t port = 0; port < env.num_ports; port++){
+        //Timer timer("swing_allgather_blocks_utofu (init)");
         // Compute the peers of this port if I did not do it yet
+        timer.reset("= swing_allgather_blocks_utofu (computing peers)");
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
@@ -599,46 +603,128 @@ int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount
         timer.reset("= swing_allgather_blocks_utofu (computing trees)");
         swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
 
-        memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
-
-        char* resident_blocks = (char*) calloc(this->size, sizeof(char));
-        resident_blocks[this->rank] = 1;
-
+        // resident_blocks[i] == 0 => block i is not resident
+        // resident_blocks[i] == 1 => we must wait for block i to be received
+        // resident_blocks[i] == 2 => block i has been received
+        char* resident_blocks = (char*) calloc(this->size, sizeof(char)); 
+        
+        timer.reset("= swing_allgather_blocks_utofu (first send)");
         size_t issued_sends = 0, issued_recvs = 0;
-        for(size_t step = 0; step < (uint) this->num_steps; step++){        
+        // Do send for the first step, and compute what to receive
+        uint peer;            
+        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            peer = peers[port][this->num_steps - 0 - 1];                         
+        }else{  
+            peer = peers[port][0];
+        }
+        
+        utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][this->rank].offset;
+        utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][this->rank].offset;
+        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
+        resident_blocks[this->rank] = 2;
+        resident_blocks[peer] = 1;
+
+        size_t bytes_to_recv = blocks_info[port][peer].count*dtsize;
+        size_t segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
+        issued_recvs = segments_max_put_size;
+        size_t expected_recv = segments_max_put_size;
+
+        // For each step, I wait for the blocks that were supposed to be received in the previous step
+        // and I send each of those blocks, as well as the other blocks that were already resident.
+        for(size_t step = 1; step < (uint) this->num_steps; step++){        
+            issued_recvs = 0;
+            timer.reset("= swing_allgather_blocks_utofu (step " + std::to_string(step) + ")");
             uint peer;            
             if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                         
             }else{  
                 peer = peers[port][step];
             }
-
-            issued_recvs = 0;
+            
+            #if 0
             for(size_t block = 0; block < this->size; block++){
-                if(resident_blocks[block]){
-                    utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
-                    utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                if(resident_blocks[block] == 1){
+                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    // We must wait for this block (from previous step)                    
+                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
+                    // What's the ID of the next recv?
+                    bytes_to_recv = blocks_info[port][peer].count*dtsize;
+                    segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));                    
+                    expected_recv += segments_max_put_size;
+                    resident_blocks[block] = 2;
                 }
                 
-                if(tree.subtree_roots[block] == peer){
-                    // How much will the block be segmented?
-                    size_t bytes_to_recv = blocks_info[port][block].count*dtsize;
-                    size_t segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
-                    issued_recvs += segments_max_put_size;
-                    resident_blocks[block] = 1;
+                if(resident_blocks[block] == 2){
+                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    // Block is here, send it
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
+                    rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                 }
             }
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_recvs - 1);
-            DPRINTF("[%d] All receives waited\n", this->rank);
-        }             
+            #else
+
+            char push_every = 4; //this->size;
+            uint posted_sends = 0;
+
+            for(size_t block = 0; block < this->size; block++){
+                if(resident_blocks[block] == 2){
+                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    // Block is here, send it
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
+                    rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
+                    ++posted_sends;
+
+                    if(posted_sends % push_every == 0){
+                        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                    }else{
+                        issued_sends += swing_utofu_isend_delayed(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                    }
+                }                
+            }
+            // Just to push all the posted sends (0-byte put) (unless I didn't do it already for the last send)
+            if(posted_sends % push_every){
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);
+            }
+
+            for(size_t block = 0; block < this->size; block++){
+                if(resident_blocks[block] == 1){
+                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    // We must wait for this block (from previous step)                    
+                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
+                    expected_recv += segments_max_put_size;
+                    resident_blocks[block] = 2;
+
+                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    // Block is here, send it
+                    lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
+                    rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);                    
+                }            
+                
+                if(tree.subtree_roots[block] == peer){
+                    issued_recvs += segments_max_put_size;
+                    resident_blocks[block] = 1; // Wait for this block at the next step
+                }                
+            }
+
+            #endif            
+            // How much will the block be segmented?
+            expected_recv = segments_max_put_size;            
+        }    
+
+        timer.reset("= swing_allgather_blocks_utofu (last recvs waiting)");
+        // Now wait for all the recvs that were issued in the last step.
+        swing_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs - 1);
+        DPRINTF("[%d] All receives waited\n", this->rank);
+
         swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         DPRINTF("[%d] All sends waited\n", this->rank);
         free(peers[port]);
         destroy_tree(&tree);
         free(resident_blocks);
-    }
-    timer.reset("= swing_allgather_blocks_utofu (writing profile data to file)");
+        timer.reset("= swing_allgather_blocks_utofu (writing profile data to file)");
+    }    
     return res;
 #else
     assert("uTofu not supported");

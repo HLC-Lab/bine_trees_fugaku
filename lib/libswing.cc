@@ -1194,10 +1194,8 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                         count_so_far += recvcount;
                     }
 
-                    // Copy my data in the right place in the recvbuf
-                    //memcpy(((char*) recvbuf) + my_offset, sendbuf, sendcount*dtsize);
-                    size_t count = swing_common->get_size()*recvcount*dtsize;
 
+                    size_t count = swing_common->get_size()*recvcount*dtsize;
                     int res;
                     //res = swing_common->swing_coll_b(sendbuf, recvbuf, count, sendtype, op, comm, blocks_info, SWING_ALLGATHER);    
                     if(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS){

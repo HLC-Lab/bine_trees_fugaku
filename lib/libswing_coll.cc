@@ -335,8 +335,17 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
     key.port = port;
     key.algo = algo;
     key.dist_type = dist_type;
-    if(comm_info.find(key) != comm_info.end()){
-        return comm_info[key].tree;
+    bool found = false;
+    swing_tree_t tree_to_return;
+#pragma omp critical
+{
+    found = comm_info.find(key) != comm_info.end();
+    if(found){
+        tree_to_return = comm_info[key].tree;
+    }
+}
+    if(found){
+        return tree_to_return;
     }else{
         int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
         scc->getCoordFromId(root, coord_root);
