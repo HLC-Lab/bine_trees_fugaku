@@ -36,3 +36,4 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_03_21___00_33_23,5,128,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_03_21___00_33_23,6,128,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_21___00_33_23,7,128,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_21___21_25_38,0,8x8x8,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
