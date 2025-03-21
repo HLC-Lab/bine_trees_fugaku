@@ -33,6 +33,7 @@ static void init_env(swing_env_t* env, MPI_Comm comm){
     env->prealloc_size = 0;
     env->prealloc_buf = NULL;
     env->utofu_add_ag = 0;
+    env->use_threads = 0;
 
     env->allreduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
     env->allgather_config.algo_family = SWING_ALGO_FAMILY_SWING;
@@ -104,6 +105,11 @@ static inline void read_env(MPI_Comm comm){
         if(env_str){
             env.utofu_add_ag = atoi(env_str);
         }
+
+        env_str = getenv("LIBSWING_USE_THREADS");
+        if(env_str){
+            env.use_threads = atoi(env_str);
+        }        
 
         env_str = getenv("LIBSWING_DIMENSIONS");
         if(env_str){
@@ -1206,9 +1212,9 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
                         }  
                     }else if(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE){
                         if(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
-                            res = swing_common->swing_allgather_utofu(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+                            res = swing_common->swing_allgather_utofu_contiguous(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
                         }else{
-                            res = swing_common->swing_allgather_mpi(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+                            res = swing_common->swing_allgather_mpi_contiguous(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
                         }        
                     }
 
