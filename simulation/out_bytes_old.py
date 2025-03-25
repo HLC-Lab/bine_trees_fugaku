@@ -52,7 +52,7 @@ def get_outgoing_bytes_step(step, start_group, end_group, vector_size, algo, fam
             if peer < start_group or peer > end_group:
                 outgoing_bytes_step += get_bytes_sent_at_step(step, vector_size, algo, num_nodes)
         return outgoing_bytes_step        
-    elif family == "bruck"
+    elif family == "bruck":
         for node in range(start_group, end_group + 1):
             # Start from distant nodes
             if algo == "allgather":
@@ -62,9 +62,8 @@ def get_outgoing_bytes_step(step, start_group, end_group, vector_size, algo, fam
             if peer < start_group or peer > end_group:
                 outgoing_bytes_step += get_bytes_sent_at_step(step, vector_size, algo, num_nodes)
         return outgoing_bytes_step            
-
     else:
-        exit("Unknown family")
+        exit("Unknown family " + family)
     
     return outgoing_bytes_step
 
@@ -79,8 +78,20 @@ def main():
     args = parser.parse_args()
     
 
-    outgoing_bytes = {"swing": 0, "recdoub": 0, "sparbit": 0, "bruck": 0}
-    dist_om = {"swing": [], "recdoub": [], "sparbit": [], "bruck": []}
+    outgoing_bytes = {}
+    dist_om = {}
+
+    families = []
+    if args.algo == "reduce-scatter":
+        families = ["swing", "recdoub", "sparbit"]
+    elif args.algo == "allgather":
+        families = ["swing", "recdoub", "bruck", "sparbit"]
+    else:
+        exit("Unknown algorithm " + args.algo)
+    
+    for family in families:
+        outgoing_bytes[family] = 0
+        dist_om[family] = []
 
     for start_group in range(0, args.num_nodes):
         for end_group in range(start_group, args.num_nodes):
@@ -90,16 +101,16 @@ def main():
             # For this specific fully connected group, compute the number
             # of outgoing bytes at each step
             for step in range(0, ceil(log2(args.num_nodes))):
-                for family in ["swing", "recdoub", "sparbit", "bruck"]:
-                    outgoing_bytes[family] += get_outgoing_bytes_step(step, start_group, end_group, args.vector_size, args.algo, args.num_nodes, family)
+                for family in families:
+                    outgoing_bytes[family] += get_outgoing_bytes_step(step, start_group, end_group, args.vector_size, args.algo, family, args.num_nodes)
 
-            for family in ["swing", "recdoub", "sparbit", "bruck"]:
-                dist_om[family].append(outgoing_bytes["family"])
+            for family in families:
+                dist_om[family].append(outgoing_bytes[family])
 
     #print("Worst group (recdoub) is from", worst_group_start, "to", worst_group_end, "with", worst_group_out_rd, "outgoing bytes (vs. Swing with", worst_group_out_sw, "outgoing bytes)")
 
     # Plot kdplot of dist_om_swing vs. dist_om_recdoub with Seaborn (save to file)    
-    for family in ["swing", "recdoub", "sparbit", "bruck"]:
+    for family in families:
         sns.kdeplot(dist_om[family], label=family, cut=0)
     plt.xlabel("Outgoing bytes")
     plt.ylabel("Density")
@@ -109,33 +120,43 @@ def main():
     plt.clf()
 
     # Plot also CDF using seaborn
-    for family in ["swing", "recdoub", "sparbit", "bruck"]:
+    for family in families:
         sns.kdeplot(dist_om[family], label=family, cumulative=True)
     plt.xlabel("Outgoing bytes")
     plt.ylabel("Density")
+    # Set log x-scale
+    plt.xscale("log")
     #plt.title("Swing vs. Recdoub")
     plt.legend()
-    plt.savefig("cdf_" + args.algo + "_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
+    plt.savefig(args.algo + "_cdf_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
     plt.clf()
 
     # Plot the percentage reduction of swing over all the other algorithms
-    for family in ["recdoub", "sparbit", "bruck"]:
+    for family in families:
+        if family == "swing":
+            continue
         percentage_reduction = np.array(dist_om[family]) / np.array(dist_om["swing"])
         sns.kdeplot(percentage_reduction, cut=0, label=family)
     plt.xlabel("Percentage reduction of Swing over other algos")
     plt.ylabel("Density")
+    # Set legend
+    plt.legend()
     #plt.title("Swing vs. Recdoub")
-    plt.savefig("reduction_" + args.algo + "_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
+    plt.savefig(args.algo + "_reduction_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
     plt.clf()
 
     # and also CDF
-    for family in ["recdoub", "sparbit", "bruck"]:
+    for family in families:
+        if family == "swing":
+            continue
         percentage_reduction = np.array(dist_om[family]) / np.array(dist_om["swing"])
         sns.kdeplot(percentage_reduction, cumulative=True, label=family)
     plt.xlabel("Percentage reduction of Swing over other algos")
     plt.ylabel("Density")
+    # Set legend
+    plt.legend()
     #plt.title("Swing vs. Recdoub")
-    plt.savefig("reduction_cdf_" + args.algo + "_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
+    plt.savefig(args.algo + "_reduction_cdf_" + str(args.num_nodes) + "_" + str(args.vector_size) + ".png")
     plt.clf()
 
 if __name__ == "__main__":
