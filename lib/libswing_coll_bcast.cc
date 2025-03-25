@@ -446,46 +446,55 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
         size_t sendcount = count / (env.num_ports * this->size);
         size_t recvbuf_offset_port = sendcount * this->size * port * dtsize;
         // The last port of the last block might be bigger.
-        // This might create unbalance, but simplifies the logic/code
+        // This might create unbalance, but simplifies the logic/code        
 
-        // Now perform all the subsequent steps       
-        size_t issued_sends = 0;
-        for(size_t step = 0; step < (uint) this->num_steps; step++){
-            if(root != this->rank && step == receiving_step){       
-                size_t min_block_r = tree.remapped_ranks[this->rank];
-                size_t max_block_r = tree.remapped_ranks_max[this->rank];            
-                size_t blocks_to_recv = (max_block_r - min_block_r) + 1; 
-                size_t bytes_to_recv = sendcount*blocks_to_recv*dtsize; // All blocks for this port have the same size
-                if(max_block_r == this->size - 1 && port == env.num_ports - 1){
-                    bytes_to_recv += (count % (env.num_ports * this->size))*dtsize;
-                }
-                size_t segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
-                swing_utofu_wait_recv(utofu_descriptor, port, 0, segments_max_put_size - 1);
+        // I first receive my block (which always the one with minimum offset among those I am going to receive)
+        size_t next_recv_id = 0; 
+        if(root != this->rank){       
+            size_t min_block_r = tree.remapped_ranks[this->rank];            
+            size_t bytes_to_recv = sendcount*dtsize; 
+            if(min_block_r == this->size - 1 && port == env.num_ports - 1){
+                bytes_to_recv += (count % (env.num_ports * this->size))*dtsize;
             }
+            next_recv_id = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
+            swing_utofu_wait_recv(utofu_descriptor, port, 0, next_recv_id - 1);
+        }
 
-            if(step >= receiving_step + 1){
-                uint peer;
-                if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
-                    peer = peers[port][this->num_steps - step - 1];
-                }else{  
-                    peer = peers[port][step];
-                }
-                if(tree.parent[peer] == this->rank){
-                    size_t min_block_s = tree.remapped_ranks[peer];
-                    size_t max_block_s = tree.remapped_ranks_max[peer];            
-                    size_t blocks_to_send = (max_block_s - min_block_s) + 1;                 
-                    utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + recvbuf_offset_port + min_block_s*sendcount*dtsize;
-                    utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + recvbuf_offset_port + min_block_s*sendcount*dtsize;
-                    size_t recvcnt = sendcount*blocks_to_send;
+        // And then I am going to receive all the blocks I have to send
+        size_t issued_sends = 0;
+        for(size_t step = receiving_step + 1; step < (uint) this->num_steps; step++){
+            uint peer;
+            if(env.bcast_config.distance_type == SWING_DISTANCE_DECREASING){
+                peer = peers[port][this->num_steps - step - 1];
+            }else{  
+                peer = peers[port][step];
+            }
+            if(tree.parent[peer] == this->rank){
+                size_t min_block_s = tree.remapped_ranks[peer];
+                size_t max_block_s = tree.remapped_ranks_max[peer];            
+                // Receive block-by-block all the data that this child needs,
+                // and forward to it
+                for(size_t block = min_block_s; block <= max_block_s; block++){
+                    size_t recvcnt = sendcount;
                     if(max_block_s == this->size - 1 && port == env.num_ports - 1){
                         recvcnt += (count % (env.num_ports * this->size));
                     }
+
+                    // Receive a block
+                    if(root != this->rank){
+                        next_recv_id += ceil((recvcnt*dtsize) / ((float) MAX_PUTGET_SIZE));
+                        swing_utofu_wait_recv(utofu_descriptor, port, 0, next_recv_id - 1);
+                    }
+
+                    // And forward it to peer
+                    utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + recvbuf_offset_port + block*sendcount*dtsize;
+                    utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + recvbuf_offset_port + block*sendcount*dtsize;
                     DPRINTF("Rank %d sending %d elems to %d at step %d\n", this->rank, recvcnt, peer, step);
                     issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, recvcnt*dtsize, rmt_addr, 0);
                 }
             }
         }
-        
+
         /*************************/
         /*        Allgather      */
         /*************************/

@@ -250,7 +250,7 @@ int main(int argc, char** argv){
     }else if(strcmp(type, "INT32") == 0){
         dt = MPI_INT32_T;
     }else if(strcmp(type, "VOID") == 0){
-        dt = MPI_FLOAT;
+        dt = MPI_INT32_T;
         op = MPI_VOIDOP;
     }else{
         fprintf(stderr, "Unknown type %s\n", type);
@@ -313,11 +313,13 @@ int main(int argc, char** argv){
     if((!strcmp(collective, "MPI_Gather") || !strcmp(collective, "MPI_Reduce")) && rank != 0){
         // On MPI_Gather and MPI_Reduce only rank 0 receives the result
     }else{
-        
-        for(i = 0; i < dtsize*final_buffer_count; i++){
-            if(recvbuf[i] != recvbuf_validation[i]){
-                fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
-                return 1;
+        // Don't validate for VOID op
+        if(strcmp(type, "VOID")){
+            for(i = 0; i < dtsize*final_buffer_count; i++){
+                if(recvbuf[i] != recvbuf_validation[i]){
+                    fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
+                    return 1;
+                }
             }
         }
         /**

@@ -160,8 +160,9 @@ void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype dat
                 inout[i] += in[i];
             }
         }else{
-            fprintf(stderr, "Unknown reduction op\n");
-            exit(EXIT_FAILURE);
+            //fprintf(stderr, "Unknown reduction op\n");
+            //exit(EXIT_FAILURE);
+            // We assume this is the custom VOID operator
         }
     }else if(datatype == MPI_INT){
         const int *in = (const int *)inbuf;
@@ -216,8 +217,9 @@ void reduce_local(const void* inbuf_a, const void* inbuf_b, void* outbuf, int co
                 out[i] = in_a[i] + in_b[i];
             }
         }else{
-            fprintf(stderr, "Unknown reduction op\n");
-            exit(EXIT_FAILURE);
+            //fprintf(stderr, "Unknown reduction op\n");
+            //exit(EXIT_FAILURE);
+            // We assume this is the custom VOID operator
         }
     }else if(datatype == MPI_INT){
         const int *in_a = (const int *)inbuf_a;
