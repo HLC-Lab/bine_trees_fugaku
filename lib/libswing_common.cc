@@ -353,7 +353,7 @@ int SwingCommon::enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype
 
 #define SWING_ALLREDUCE_NOSYNC_THRESHOLD 1024
 
-int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+int SwingCommon::swing_coll_l_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
     assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
@@ -499,6 +499,188 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
                 // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
                 swing_utofu_wait_sends(utofu_descriptor, p, issued_sends); 
 
+#pragma omp critical
+{
+                // If I did not copied during the shrink, in the first step I must send
+                // from sendbuf, receive in tempbuf, and aggregate recvbuf = sendbuf + tempbuf
+                if(step == 0 && !first_copy_done){
+                    reduce_local((char*) sendbuf + offset_port, (char*) tmpbuf + offset_port_tmpbuf, (char*) recvbuf + offset_port, count_port, datatype, op); 
+                }else{
+                    // Otherwise, I send from recvbuf, receive in tmpbuf, and aggregate recvbuf = recvbuf + tmpbuf
+                    reduce_local((char*) tmpbuf + offset_port_tmpbuf, (char*) recvbuf + offset_port, count_port, datatype, op); // TODO: Try to replace again with MPI_Reduce_local ?                
+                }                         
+}
+                DPRINTF("[%d] Step %d completed\n", rank, step);    
+            }    
+            if(free_tmpbuf){
+                swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, p);
+            }    
+        }
+    }
+
+    if(!all_p2_dimensions){
+        timer.reset("= swing_coll_l_utofu (enlarge)");
+        DPRINTF("[%d] Propagating data to extra nodes\n", rank);
+        res = enlarge_non_power_of_two(recvbuf, count, datatype, comm);
+        if(res != MPI_SUCCESS){return res;}
+        DPRINTF("[%d] Data propagated\n", rank);
+    }    
+    timer.reset("= swing_coll_l_utofu (writing profile data to file)");
+    if(free_tmpbuf){
+        free(tmpbuf);
+    }
+    return res;
+#else
+    assert("uTofu not supported");
+    return -1;
+#endif
+}
+
+int SwingCommon::swing_coll_l_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allreduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allreduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allreduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
+    assert(env.allreduce_config.algo == SWING_ALLREDUCE_ALGO_L);    
+#endif
+#ifdef FUGAKU
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_coll_l_utofu (init)");
+    Timer timer("swing_coll_l_utofu (init)");
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);    
+    
+    // Temporary buffer (to avoid overwriting sendbuf)
+    char* tmpbuf;
+    bool free_tmpbuf = false;
+
+    size_t tmpbuf_size;
+    if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
+        tmpbuf_size = count*dtsize;
+    }else{
+        // Since data might be written to a given rank in a different order 
+        // (e.g., rank p-1 might write to rank 0 memory before rank 1 writes)
+        // we allocate a buffer which is num_steps time larger than the original buffer
+        // so that at each step the source rank can write at a different offset.
+        tmpbuf_size = count*dtsize*num_steps_virtual; // In this way each rank writes in a different part of tmpbuf, avoid the need to synchronize
+    }
+
+    if(tmpbuf_size > env.prealloc_size){
+        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        free_tmpbuf = true;
+
+        // TODO: This is because we register the tempbuffer only once and reuse it across the calls
+        // must be fixed in swing_utofu.cc
+        fprintf(stderr, "For the moment, this only works if the preallocd buffer is large enough\n");
+        exit(-1); 
+    }else{
+        tmpbuf = env.prealloc_buf;
+    }
+
+    // The non-idle ranks (i.e., those that lie within a power of two and
+    // execute most of the collective):
+    // - At the first step (either the shrink or the first step of the collective if we are in the power of two case)
+    //   they send the data from sendbuf, and receive in recvbuf. Then they aggregate recvbuf = recvbuf + sendbuf
+    // - In all the other steps, they send data from recvbuf, and receive in tempbuf.
+    //   Then they aggregate recvbuf = recvbuf + tempbuf.
+    // By doing so we can avoid doing a memcpy at the beginning of the execution.
+
+    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    this->scc_real->retrieve_coord_mapping(this->rank, coord);
+
+    int res = MPI_SUCCESS, idle = 0, rank_virtual = rank;        
+    int first_copy_done = 0;
+    if(!all_p2_dimensions){
+        timer.reset("= swing_coll_l_utofu (shrink)");
+        res = shrink_non_power_of_two(sendbuf, recvbuf, tmpbuf, count, datatype, op, comm, &idle, &rank_virtual, &first_copy_done);
+        if(res != MPI_SUCCESS){return res;}
+    }    
+
+    DPRINTF("[%d] Virtual steps: %d Virtual dimensions (%d, %d, %d)\n", rank, num_steps_virtual, this->scc_virtual->dimensions[0], this->scc_virtual->dimensions[1], this->scc_virtual->dimensions[2]);
+
+    if(!idle){
+        if(tmpbuf_size > env.prealloc_size){
+            timer.reset("= swing_coll_l_utofu (utofu buf reg)");        
+            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
+            timer.reset("= swing_coll_l_utofu (utofu buf exch)");           
+            uint* peers = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+            // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
+            // TODO Probably easier/better to do allgather???
+            compute_peers(rank_virtual, 0, env.allreduce_config.algo_family, this->scc_virtual, peers);
+            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+            int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
+            if(mp != -1){
+                compute_peers(rank_virtual, mp, env.allreduce_config.algo_family, this->scc_virtual, peers);
+                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps_virtual, peers); 
+            }
+            free(peers);
+        }else{
+            timer.reset("= swing_coll_l_utofu (utofu buf reg)");        
+            swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
+            timer.reset("= swing_coll_l_utofu (utofu buf reorg)");       
+            for(size_t i = 0; i < env.num_ports; i++){
+                this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
+            }
+        }
+
+        timer.reset("= swing_coll_l_utofu (actual sendrecvs)");
+        uint partition_size = count / env.num_ports;
+        uint remaining = count % env.num_ports;        
+
+        for(size_t p = 0; p < env.num_ports; p++){
+            // Compute the count and the offset of the piece of buffer that is aggregated on this port
+            size_t count_port = partition_size + (p < remaining ? 1 : 0);
+            size_t offset_port = 0;
+            for(size_t j = 0; j < p; j++){
+                offset_port += partition_size + (j < remaining ? 1 : 0);
+            }
+            offset_port *= dtsize;
+
+            // Get the peer
+            if(virtual_peers[p] == NULL){
+                virtual_peers[p] = (uint*) malloc(sizeof(uint)*num_steps_virtual);
+                compute_peers(rank_virtual, p, env.allreduce_config.algo_family, this->scc_virtual, virtual_peers[p]);
+            }
+            for(size_t step = 0; step < (uint) num_steps_virtual; step++){  
+                size_t offset_port_tmpbuf;
+                if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
+                    offset_port_tmpbuf = offset_port;                    
+                }else{
+                    offset_port_tmpbuf = offset_port*this->num_steps + step*count_port*dtsize;
+                }  
+
+                // Schedule all the send and recv
+                //timer.reset("= swing_coll_l_utofu (sendrecv for step " + std::to_string(step) + ")");
+                int coord_peer[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+                int virtual_peer = virtual_peers[p][step];                 
+                this->scc_virtual->retrieve_coord_mapping(virtual_peer, coord_peer); // Get the virtual coordinates of the peer
+                int peer = this->scc_real->getIdFromCoord(coord_peer); // Convert the virtual coordinates to the real rank
+                DPRINTF("[%d] Sending to %d count %d\n", rank, peer, count);
+
+                utofu_stadd_t lcl_addr, rmt_addr;
+                // If I did not copied during the shrink, in the first step I must send
+                // from sendbuf, receive in tempbuf, and aggregate recvbuf = sendbuf + tempbuf
+                if(step == 0 && !first_copy_done){
+                    lcl_addr = utofu_descriptor->port_info[p].lcl_send_stadd + offset_port;
+                }else{
+                    // Otherwise, I send from recvbuf, receive in tmpbuf, and aggregate recvbuf = recvbuf + tmpbuf
+                    lcl_addr = utofu_descriptor->port_info[p].lcl_recv_stadd + offset_port;
+                }
+                rmt_addr = utofu_descriptor->port_info[p].rmt_temp_stadd[peer] + offset_port_tmpbuf;
+
+                size_t issued_sends = 0;
+                if(count*dtsize > SWING_ALLREDUCE_NOSYNC_THRESHOLD){
+                    // Do a 0-byte put to notify I am ready to recv
+                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, 0, rmt_addr, step);                    
+                    // Do a 0-byte recv to check if the peer is ready to recv
+                    swing_utofu_wait_recv(utofu_descriptor, p, step, issued_sends - 1);
+                }
+
+                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[p][peer]), p, peer, lcl_addr, count_port*dtsize, rmt_addr, step);                 
+                swing_utofu_wait_recv(utofu_descriptor, p, step, issued_sends - 1);   
+
+                // I need to wait for the send to complete locally before doing the aggregation, otherwise I could modify the buffer that is being sent
+                swing_utofu_wait_sends(utofu_descriptor, p, issued_sends); 
+
                 // If I did not copied during the shrink, in the first step I must send
                 // from sendbuf, receive in tempbuf, and aggregate recvbuf = sendbuf + tempbuf
                 if(step == 0 && !first_copy_done){
@@ -531,6 +713,14 @@ int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int coun
     assert("uTofu not supported");
     return -1;
 #endif
+}
+
+int SwingCommon::swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    if(env.num_ports > 1){
+        return swing_coll_l_utofu_omp(sendbuf, recvbuf, count, datatype, op, comm);
+    }else{
+        return swing_coll_l_utofu_noomp(sendbuf, recvbuf, count, datatype, op, comm);
+    }
 }
 
 // This works the following way:
@@ -1216,12 +1406,18 @@ int SwingCommon::swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor*
                     // In the first step I receive in recvbuf and I aggregate from sendbuf and recvbuf in recvbuf (at same offsets)
                     size_t sendbuf_offset = recvbuf_offset;
                     swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);
+#pragma omp critical
+{
                     reduce_local((char*) sendbuf + sendbuf_offset, recvbuf_block, count, sendtype, op);
+}
                 }else{
                     // In the other steps I receive in tmpbuf and I aggregate from tmpbuf and recvbuf in recvbuf (for tmbuf we use adjusted offset)
                     size_t tempbuf_offset = utofu_offset_r_start + offset;
                     swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);                    
+#pragma omp critical
+{
                     reduce_local((char*) tempbuf + tempbuf_offset, recvbuf_block, count, sendtype, op); // TODO: Try to replace again with MPI_Reduce_local ?
+}
                 }
             }else{
                 swing_utofu_wait_recv(utofu_descriptor, port, expected_step, expected_segment);
@@ -1515,7 +1711,7 @@ int SwingCommon::swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI
 
     if(coll_type == SWING_REDUCE_SCATTER || coll_type == SWING_ALLREDUCE){
         size_t total_size_bytes = count*dtsize;
-        memcpy(recvbuf, sendbuf, total_size_bytes);  // TODO: If we are going to compare with the non utofu version we should remove this memcpy from here as well.
+        memcpy(recvbuf, sendbuf, total_size_bytes);
     }
     for(size_t collective = 0; collective < collectives_to_run_num; collective++){        
         for(size_t step = 0; step < this->num_steps; step++){                        

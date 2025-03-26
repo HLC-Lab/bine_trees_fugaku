@@ -59,7 +59,7 @@ do
     then
         iterations=10
     else
-        iterations=4
+        iterations=10
     fi
 
     actual_count=$((n / p))

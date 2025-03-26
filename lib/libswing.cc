@@ -33,7 +33,7 @@ static void init_env(swing_env_t* env, MPI_Comm comm){
     env->prealloc_size = 0;
     env->prealloc_buf = NULL;
     env->utofu_add_ag = 0;
-    env->use_threads = 0;
+    env->use_threads = 1;
 
     env->allreduce_config.algo_family = SWING_ALGO_FAMILY_SWING;
     env->allgather_config.algo_family = SWING_ALGO_FAMILY_SWING;

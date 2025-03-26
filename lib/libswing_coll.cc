@@ -337,13 +337,16 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
     key.port = port;
     key.algo = algo;
     key.dist_type = dist_type;
+    key.comm = MPI_COMM_WORLD; // TODO: FIXME
     bool found = false;
     swing_tree_t tree_to_return;
 #pragma omp critical
 {
-    found = comm_info.find(key) != comm_info.end();
+    auto it = comm_info.find(key);
+    found = it != comm_info.end();
     if(found){
-        tree_to_return = comm_info[key].tree;
+        //tree_to_return = comm_info[key].tree;
+        tree_to_return = it->second.tree;
     }
 }
     if(found){
@@ -382,6 +385,53 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
         comm_info[key] = cinfo;
         }
         return tree;
+    }
+}
+
+swing_tree_t* get_tree_fast(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
+    swing_comm_info_key_t key = {root, port, algo, dist_type, MPI_COMM_WORLD}; // TODO: FIXME MPI_COMM_WORLD
+    //swing_comm_info_key_t key;
+    //key.root = root;
+    //key.port = port;
+    //key.algo = algo;
+    //key.dist_type = dist_type;
+    //key.comm = MPI_COMM_WORLD; // TODO: FIXME
+    const std::unordered_map<swing_comm_info_key_t, swing_comm_info_t>::iterator it = comm_info.find(key);
+
+    //auto it = comm_info.find(key);
+    if(it != comm_info.end()){
+        return &(it->second.tree);
+    }else{
+        int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        scc->getCoordFromId(root, coord_root);
+        uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*5); // Do one single malloc rather than 5
+        swing_tree_t tree;
+        tree.parent = buffer;
+        tree.reached_at_step = buffer + scc->size;
+        tree.remapped_ranks = buffer + scc->size*2;
+        tree.remapped_ranks_max = buffer + scc->size*3;
+        tree.subtree_roots = buffer + scc->size*4;
+        for(size_t i = 0; i < scc->size; i++){
+            tree.parent[i] = UINT32_MAX;
+            tree.reached_at_step[i] = scc->num_steps;
+        }
+               
+        // Compute the basic tree informations (parent and reached_at_step)
+        swing_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
+        build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, 0, tree.parent, step_info, tree.subtree_roots);    
+        tree.parent[root] = UINT32_MAX;
+        tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
+        tree.subtree_roots[root] = UINT32_MAX;
+
+        // Now that we have a loopless tree, do a DFS to compute the remapped rank
+        uint next_rank = scc->size - 1;
+        remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks, tree.remapped_ranks_max, step_info);
+        assert(next_rank == UINT32_MAX);
+        free(step_info);
+        swing_comm_info_t cinfo;
+        cinfo.tree = tree;
+        comm_info[key] = cinfo;
+        return &(comm_info[key].tree);
     }
 }
 

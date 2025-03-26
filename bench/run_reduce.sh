@@ -59,7 +59,7 @@ do
     then
         iterations=10
     else
-        iterations=4
+        iterations=10
     fi
     echo -n "Running on "${DIMENSIONS}" (${p} nodes) with count="${n}"..."
     msg_size=$((n * SIZEOF_DATATYPE))        

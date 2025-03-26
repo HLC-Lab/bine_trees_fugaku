@@ -58,7 +58,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
                          const void* send_buffer, size_t length_s, 
                          void* recv_buffer, size_t length_r, 
                          void* temp_buffer, size_t length_t,
-                         uint num_ports){
+                         uint num_ports){    
     for(size_t p = 0; p < num_ports; p++){        
         // register memory regions and get their STADDs
 
@@ -66,7 +66,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
         // Otherwise, register it and cache the STADD
         // Use iterators/find instead of count to avoid multiple lookups
         if(length_s){
-            auto it = desc->port_info[p].registration_cache->find((void*) send_buffer);
+            const std::unordered_map<void*, utofu_stadd_t>::iterator it = desc->port_info[p].registration_cache->find((void*) send_buffer);
             if(it != desc->port_info[p].registration_cache->end()){
                 desc->port_info[p].lcl_send_stadd = it->second;
             }else{
@@ -78,7 +78,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
         // TODO: What if a buffer is freed and then malloced with a different size?
         // We should probably cache the size as well ...
         if(length_r){
-            auto it = desc->port_info[p].registration_cache->find(recv_buffer);
+            const std::unordered_map<void*, utofu_stadd_t>::iterator it = desc->port_info[p].registration_cache->find(recv_buffer);
             if(it != desc->port_info[p].registration_cache->end()){
                 desc->port_info[p].lcl_recv_stadd = it->second;
             }else{
@@ -88,7 +88,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
         }
 
         if(length_t){
-            auto it = desc->port_info[p].registration_cache->find(temp_buffer);
+            const std::unordered_map<void*, utofu_stadd_t>::iterator it = desc->port_info[p].registration_cache->find(temp_buffer);
             if(it != desc->port_info[p].registration_cache->end()){
                 desc->port_info[p].lcl_temp_stadd = it->second;
             }else{
@@ -210,6 +210,39 @@ size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_
     return issued_sends;
 }
 
+
+// send data and confirm its completion
+// returns the number of issued sends
+size_t swing_utofu_isend_piggyback(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+                                   uint port, size_t peer,
+                                   void* lcl_data, size_t length, 
+                                   utofu_stadd_t rmt_addr, uint64_t edata){    
+    size_t remaining = length;
+    size_t bytes_to_send = 0;
+    size_t issued_sends = 0;
+    size_t offset = 0;
+    do{
+        bytes_to_send = remaining < MAX_PIGGYBACK_SIZE ? remaining : MAX_PIGGYBACK_SIZE;
+
+        uintptr_t cbvalue = 0; // for tcq polling; the value is not used
+        // instruct the TNI to perform a Put communication
+        // embed the default communication path coordinates into the received VCQ ID.
+        assert(utofu_set_vcq_id_path(vcq_id, NULL) == UTOFU_SUCCESS);
+
+        // If too many put requests are posted, we need to wait for some of the previous
+        // ones to be over.
+        while(utofu_put_piggyback(desc->port_info[port].vcq_hdl, *vcq_id,
+                                  (char*) lcl_data + offset, rmt_addr + offset, bytes_to_send,
+                                   edata, SWING_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
+                                   swing_utofu_wait_send(desc, port);
+            desc->port_info[port].completed_send += 1;
+        }
+        ++issued_sends;
+        offset += bytes_to_send;
+        remaining -= bytes_to_send;
+    }while(remaining);
+    return issued_sends;
+}
 
 // send data and confirm its completion
 // returns the number of issued sends

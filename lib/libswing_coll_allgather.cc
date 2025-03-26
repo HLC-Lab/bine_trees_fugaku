@@ -70,7 +70,7 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
     }
 
     int res = MPI_SUCCESS; 
-
+    
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t port = 0; port < env.num_ports; port++){
         // Compute the peers of this port if I did not do it yet
@@ -82,7 +82,7 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
         swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type, this->scc_real);
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
-        memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
+        memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);
 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;

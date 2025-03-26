@@ -150,6 +150,8 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 
             DPRINTF("tmpbuf_recv[0] (port %d) at step %d after send: %d \n", port, step, ((char*) tmpbuf_recv_port)[0]);
 
+#pragma omp critical
+{
             if(step == this->num_steps - 1){
                 // To avoid doing a memcpy at the end
                 reduce_local(tmpbuf_recv_port + offset_step_recv, tmpbuf_send_port, (char*) recvbuf + blocks_info[port][0].offset, count_to_sendrecv, datatype, op);
@@ -158,7 +160,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
                 reduce_local(tmpbuf_recv_port + offset_step_recv, tmpbuf_send_port, count_to_sendrecv, datatype, op);
                 DPRINTF("tmpbuf_send[0] (port %d) at step %d after aggr:  %d \n", port, step, ((char*) tmpbuf_send_port)[0]);
             }
-
+}
             offset_step_recv += count_to_sendrecv*dtsize;
         }        
         free(peers[port]);

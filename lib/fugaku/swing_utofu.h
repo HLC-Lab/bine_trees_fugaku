@@ -9,6 +9,7 @@
 
 // TODO: Grab with utofu_caps
 #define MAX_PUTGET_SIZE 16777215
+#define MAX_PIGGYBACK_SIZE 32
 #define UTOFU_NUM_RESERVED_STAGS 256
 #define UTOFU_STAG_ADDR_ALIGNMENT 256
 #define MAX_EDATA 255 // 8 bits
@@ -51,6 +52,9 @@ void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, 
 size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
                          utofu_stadd_t lcl_addr, size_t length, 
                          utofu_stadd_t rmt_addr, uint64_t edata);
+size_t swing_utofu_isend_piggyback(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
+                            void* lcl_data, size_t length, 
+                         utofu_stadd_t rmt_addr, uint64_t edata);                         
 size_t swing_utofu_isend_delayed(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, uint port, size_t peer,
                                 utofu_stadd_t lcl_addr, size_t length, 
                                 utofu_stadd_t rmt_addr, uint64_t edata);

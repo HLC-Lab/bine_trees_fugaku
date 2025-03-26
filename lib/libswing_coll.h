@@ -26,7 +26,7 @@ int get_mirroring_port(int num_ports, uint dimensions_num);
  * @return A swing_tree_t object
  */
 swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc);
-swing_tree_t get_tree_fast(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc);
+swing_tree_t* get_tree_fast(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc);
 void destroy_tree(swing_tree_t* tree);
 
 void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op);

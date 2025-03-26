@@ -224,11 +224,16 @@ struct std::hash<swing_comm_info_key_t>
     // second and third and combine them using XOR
     // and bit shifting:
 
-    return (hash<uint>()(k.root) ^ 
-            hash<uint>()(k.port) ^
-            hash<uint>()(k.algo) ^
-            hash<uint>()(k.dist_type) ^
-            hash<void*>()((void*) k.comm));
+    //return (hash<uint>()(k.root) ^ 
+    //        hash<uint>()(k.port) ^
+    //        hash<uint>()(k.algo) ^
+    //        hash<uint>()(k.dist_type) ^
+    //        hash<void*>()((void*) k.comm));
+    return ((k.root) ^ 
+            (k.port) ^
+            (k.algo) ^
+            (k.dist_type) ^
+            ((uint64_t) k.comm));    
   }
 };
 
@@ -553,6 +558,8 @@ class SwingCommon {
         
         int swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
         int swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int swing_coll_l_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int swing_coll_l_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
     public:
         // Constructor
         // @param comm (IN): the communicator
@@ -585,7 +592,11 @@ class SwingCommon {
         /************ BCAST ************/
         /*******************************/                
         int swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_l_tmpbuf(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_tmpbuf_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int swing_bcast_l_tmpbuf_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
         int swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
@@ -615,6 +626,8 @@ class SwingCommon {
         /************ REDUCE ************/
         /********************************/        
         int swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
         int swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
         int swing_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info);
         int swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
