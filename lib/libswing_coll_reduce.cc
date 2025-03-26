@@ -556,7 +556,59 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
     }
 
 }
-    
+
+#if 0
+
+static uint32_t btonb(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t nbtob(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+#endif
+  int size, rank, dtsize;
+  MPI_Comm_size(comm, &size);
+  MPI_Comm_rank(comm, &rank);
+  MPI_Type_size(dt, &dtsize);
+  void* tmpbuf = malloc(count*dtsize);
+  if(rank != root){
+    recvbuf = malloc(count*dtsize);
+  }
+  memcpy(recvbuf, sendbuf, count*dtsize);
+  int vrank = mod(rank - root, size); // mod computes math modulo rather than reminder
+  int mask = 0x1;
+  while(mask < size){
+    int partner = btonb(vrank) ^ ((mask << 1) - 1);
+    partner = mod(nbtob(partner) + root, size);      
+    int mask_lsbs = (mask << 2) - 1; // Mask with step + 2 LSBs set to 1
+    int lsbs = btonb(vrank) & mask_lsbs; // Extract k LSBs
+    int equal_lsbs = (lsbs == 0 || lsbs == mask_lsbs);
+
+    if(!equal_lsbs || ((mask << 1) >= size && (rank != root))){
+        MPI_Send(recvbuf, count, dt, partner, 0, comm);
+        break;
+    }else{
+      MPI_Recv(tmpbuf, count, dt, partner, 0, comm, MPI_STATUS_IGNORE);
+      MPI_Reduce_local(tmpbuf, recvbuf, count, dt, op);
+    }
+    mask <<= 1;
+  }
+  return MPI_SUCCESS;
+}
+#else
 int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -680,7 +732,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
     timer.reset("= swing_reduce_mpi (writing profile data to file)");
     return res;
 }
-
+#endif
 
 int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info){
 #ifdef VALIDATE
