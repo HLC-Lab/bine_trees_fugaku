@@ -1,0 +1,9 @@
+timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_version,CUDA,output_level,MPI_Op,notes
+2025_03_26___19_49_06,0,2x2x2,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_26___19_49_06,1,2x2x2,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_03_26___19_49_06,2,2x2x2,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_26___19_49_06,3,2x2x2,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_26___19_49_06,4,2x2x2,ALLTOALL,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_26___19_49_06,5,2x2x2,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_26___19_49_06,6,2x2x2,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_03_26___19_49_06,7,2x2x2,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
