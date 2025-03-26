@@ -114,6 +114,7 @@ do
     #######################
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    export LIBSWING_UTOFU_ADD_AG=1
     for PORTS in ${PORTS_LIST//,/ }
     do
         if [ $actual_count -ge $PORTS ]; then
@@ -151,19 +152,19 @@ do
             done
             unset LIBSWING_SCATTER_DISTANCE
         
-            # Run recdoub
-            export LIBSWING_SCATTER_ALGO_FAMILY="RECDOUB" 
-            export LIBSWING_SCATTER_ALGO_LAYER="UTOFU" 
-            export LIBSWING_SCATTER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"    
-            for SEGMENT_SIZE in 0 #4096 65536 1048576
-            do                
-                if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_SCATTER_ALGO_FAMILY}-${LIBSWING_SCATTER_ALGO}-${LIBSWING_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-                fi
-            done
+#            # Run recdoub
+#            export LIBSWING_SCATTER_ALGO_FAMILY="RECDOUB" 
+#            export LIBSWING_SCATTER_ALGO_LAYER="UTOFU" 
+#            export LIBSWING_SCATTER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"    
+#            for SEGMENT_SIZE in 0 #4096 65536 1048576
+#            do                
+#                if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+#                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+#                    ALGO_FNAME=${LIBSWING_SCATTER_ALGO_FAMILY}-${LIBSWING_SCATTER_ALGO}-${LIBSWING_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+#                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+#                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+#                fi
+#            done
         fi
     done
     echo " ${GREEN}[Done]${NC}"

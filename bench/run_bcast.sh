@@ -88,8 +88,15 @@ do
     ALGO_FNAME=default-${DEFAULT_ALGO}
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-    
-    for DEFAULT_ALGO in "split_binary_tree" "binary_tree" "binomial" # "basic-linear" "pipeline" "chain"
+
+    # Disable uTofu barrier for non-default-default algos
+    if [ $n -le 12 ]
+    then
+        # Append -mca coll ^tbi to EXTRA_MCAS
+        EXTRA_MCAS="${EXTRA_MCAS} -mca coll ^tbi"
+    fi
+
+    for DEFAULT_ALGO in "split_binary_tree" "binary_tree" "binomial" "basic-linear" "pipeline" "chain"
     do        
         LIBSWING_BCAST_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_bcast_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
@@ -131,25 +138,26 @@ do
     #######################
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    export LIBSWING_UTOFU_ADD_AG=1
     for PORTS in ${PORTS_LIST//,/ }
     do
         export LIBSWING_NUM_PORTS=${PORTS}
         
-        if [ $PORTS -eq 1 ]; then
-            # Run swing binomial tree
-            export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
-            export LIBSWING_BCAST_ALGO_LAYER="MPI" 
-            export LIBSWING_BCAST_ALGO="BINOMIAL_TREE"    
-            for SEGMENT_SIZE in 0 #4096 65536 1048576
-            do                
-                if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_BCAST_ALGO_FAMILY}-${LIBSWING_BCAST_ALGO}-${LIBSWING_BCAST_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-                fi
-            done
-        fi
+        #if [ $PORTS -eq 1 ]; then
+        #    # Run swing binomial tree
+        #    export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
+        #    export LIBSWING_BCAST_ALGO_LAYER="MPI" 
+        #    export LIBSWING_BCAST_ALGO="BINOMIAL_TREE"    
+        #    for SEGMENT_SIZE in 0 #4096 65536 1048576
+        #    do                
+        #        if [ $SEGMENT_SIZE -lt $msg_size ]; then
+        #            LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+        #            ALGO_FNAME=${LIBSWING_BCAST_ALGO_FAMILY}-${LIBSWING_BCAST_ALGO}-${LIBSWING_BCAST_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+        #            mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+        #            if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+        #        fi
+        #    done
+        #fi
         
         if [ $n -ge $PORTS ]; then            
             # Run swing binomial tree

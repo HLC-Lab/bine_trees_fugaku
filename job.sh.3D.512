@@ -1,0 +1,13 @@
+#!/bin/sh
+#PJM -L  "node=8x8x8:torus"
+#PJM -L  "rscgrp=large"
+#PJM -L  "elapse=05:00:00"
+#PJM -g hp240454
+#PJM --mpi  "rank-map-bynode=YZX"
+#PJM --mpi "max-proc-per-node=1"
+
+DIMENSIONS="8x8x8" # Must be equal to the one specified above
+
+pushd bench
+./run_all.sh -d ${DIMENSIONS} -p 1,3,6 -c allreduce,reduce_scatter,allgather,alltoall,scatter,gather,reduce,bcast
+popd

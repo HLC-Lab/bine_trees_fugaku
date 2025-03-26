@@ -287,6 +287,21 @@ int main(int argc, char** argv){
     for(i = -warmup; i < iterations; i++){
         //usleep(1);
         MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+//        if(rank == 0){
+//            #define INTERVAL 1000 // Microseconds
+//            struct timespec ts;
+//            clock_gettime(CLOCK_MONOTONIC, &ts);
+//            long current_us = (ts.tv_sec * 1000000L + ts.tv_nsec / 1000L);
+//            while (1) {
+//                clock_gettime(CLOCK_MONOTONIC, &ts);            
+//                if ((ts.tv_sec * 1000000L + ts.tv_nsec / 1000L) - current_us > INTERVAL) {
+//                    break;  // Exit the loop when the condition is met
+//                }
+//            }        
+//        }
+
         double start_time = MPI_Wtime();
         // Run the collective
         r = run_collective(RUN_TYPE_BENCHMARK, collective, sendbuf, recvbuf, count, dt, op, comm_size);
@@ -348,12 +363,17 @@ int main(int argc, char** argv){
     //print_tnr_stats(tnr_diff, rank);
 #endif    
 
-    PMPI_Reduce(samples, samples_all, iterations, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    //for(i = 0; i < iterations; i++){
+    //    printf("%f\n", samples[i]);
+    //}
+
+    PMPI_Reduce(samples, samples_all, iterations, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if(rank == 0){ 
         printf("highest\n");
         double avg_iteration = 0.0;
         for(i = 0; i < iterations; i++){
-            samples_all[i] /= comm_size;
+            //samples_all[i] /= comm_size;
             printf("%" PRId64"\n", (int64_t)(samples_all[i] * 1e9));
             avg_iteration += samples_all[i];
         }

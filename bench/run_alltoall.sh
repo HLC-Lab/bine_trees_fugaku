@@ -113,6 +113,7 @@ do
     #######################
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    export LIBSWING_UTOFU_ADD_AG=1
     for PORTS in ${PORTS_LIST//,/ } # TODO Multiport alltoall not implemented yet
     do
         # Check if the number of elements is enough to run the algorithm

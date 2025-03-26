@@ -116,9 +116,15 @@ do
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     
+    # Disable uTofu barrier for non-default-default algos
+    if [ $n -le 12 ]
+    then
+        # Append -mca coll ^tbi to EXTRA_MCAS
+        EXTRA_MCAS="${EXTRA_MCAS} -mca coll ^tbi"
+    fi
+
     # Decision rules can be found at /opt/FJSVxtclanga/.common/MECA030/etc/fjmpi-dectree.conf (but you can access it only on computing nodes after doing pjsub)
     # We do not use uTofu barrier when we force the algo (we use it only for default_default)
-    # Shall we use -mca coll ^tbi on these?
     if [ $n -le 512 ]; then
         for DEFAULT_ALGO in "basic_linear"
         do
@@ -176,6 +182,7 @@ do
     ###################################
     export LIBSWING_DIMENSIONS=${DIMENSIONS} 
     export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    export LIBSWING_UTOFU_ADD_AG=1
     for PORTS in ${PORTS_LIST//,/ }
     do
         export LIBSWING_NUM_PORTS=${PORTS}        
@@ -214,41 +221,41 @@ do
         fi
     done
 
-    PORTS=1
-    export LIBSWING_NUM_PORTS=${PORTS}
-    # Run lat optimal recdoub
-    export LIBSWING_ALLREDUCE_ALGO_FAMILY="RECDOUB" 
-    export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
-    export LIBSWING_ALLREDUCE_ALGO="L"    
-    MIN_ELEMS=$((PORTS))
-    if [ "$n" -ge "$MIN_ELEMS" ]; then
-        for SEGMENT_SIZE in 0 4096 65536 1048576
-        do                
-            if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-            fi
-        done
-    fi
-
-    # Run bw optimal recdoub
-    export LIBSWING_ALLREDUCE_ALGO_FAMILY="RECDOUB" 
-    export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
-    export LIBSWING_ALLREDUCE_ALGO="B_CONT"    
-    MIN_ELEMS=$((PORTS * p))
-    if [ "$n" -ge "$MIN_ELEMS" ]; then
-        for SEGMENT_SIZE in 0 4096 65536 1048576
-        do                
-            if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations} 
-                ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-            fi
-        done
-    fi
+#    PORTS=1
+#    export LIBSWING_NUM_PORTS=${PORTS}
+#    # Run lat optimal recdoub
+#    export LIBSWING_ALLREDUCE_ALGO_FAMILY="RECDOUB" 
+#    export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
+#    export LIBSWING_ALLREDUCE_ALGO="L"    
+#    MIN_ELEMS=$((PORTS))
+#    if [ "$n" -ge "$MIN_ELEMS" ]; then
+#        for SEGMENT_SIZE in 0 4096 65536 1048576
+#        do                
+#            if [ $SEGMENT_SIZE -lt $msg_size ]; then
+#                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+#                ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+#                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+#                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+#            fi
+#        done
+#    fi
+#
+#    # Run bw optimal recdoub
+#    export LIBSWING_ALLREDUCE_ALGO_FAMILY="RECDOUB" 
+#    export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
+#    export LIBSWING_ALLREDUCE_ALGO="B_CONT"    
+#    MIN_ELEMS=$((PORTS * p))
+#    if [ "$n" -ge "$MIN_ELEMS" ]; then
+#        for SEGMENT_SIZE in 0 4096 65536 1048576
+#        do                
+#            if [ $SEGMENT_SIZE -lt $msg_size ]; then
+#                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations} 
+#                ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+#                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+#                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+#            fi
+#        done
+#    fi
     echo " ${GREEN}[Done]${NC}"
 done
 

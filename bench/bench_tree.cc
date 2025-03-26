@@ -25,7 +25,7 @@ int main(int argc, char** argv){
         // Get current timestamp
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
-        swing_tree_t t = get_tree(i, 0, SWING_ALGO_FAMILY_SWING, SWING_DISTANCE_DECREASING, scc);
+        swing_tree_t t = get_tree(i % num_ranks, 0, SWING_ALGO_FAMILY_SWING, SWING_DISTANCE_DECREASING, scc);
         clock_gettime(CLOCK_MONOTONIC, &end);
         uint64_t elapsed = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
         elapsed_total += elapsed;      
