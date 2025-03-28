@@ -1,0 +1,14 @@
+#!/bin/sh
+#PJM -L  "node=64x64:torus"
+#PJM -L  "rscgrp=large"
+#PJM -L  "elapse=04:00:00"
+#PJM -g hp240454
+#PJM --mpi  "rank-map-bynode=YX"
+#PJM --mpi "max-proc-per-node=1"
+
+DIMENSIONS="64x64" # Must be equal to the one specified above
+
+pushd bench
+./run_all.sh -d ${DIMENSIONS} -p 1,2,4,6 -c allreduce,reduce_scatter,allgather,scatter,gather,reduce,bcast,alltoall
+popd
+
