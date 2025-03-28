@@ -744,6 +744,17 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
 #ifdef FUGAKU
     assert(this->size > 2); // To work for two nodes we need to fix the tmpbuf/recvbuf in reduce_local below
     assert(env.reduce_config.distance_type == SWING_DISTANCE_INCREASING); // For now, we only support decreasing distance
+
+    if(!is_power_of_two(this->size)){
+        return MPI_ERR_OTHER;
+    }
+
+    for(size_t i = 0; i < this->scc_real->dimensions_num; i++){
+        if(!is_power_of_two(this->scc_real->dimensions[i])){
+            return MPI_ERR_OTHER;
+        }
+    }
+
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_redscat_gather_utofu (init)");
     Timer timer("swing_reduce_redscat_gather_utofu (init)");
     int dtsize;

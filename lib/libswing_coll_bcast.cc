@@ -693,6 +693,17 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
 #endif
     assert(count / env.num_ports >= this->size);
 
+    if(!is_power_of_two(this->size)){
+        return MPI_ERR_OTHER;
+    }
+
+    for(size_t i = 0; i < this->scc_real->dimensions_num; i++){
+        if(!is_power_of_two(this->scc_real->dimensions[i])){
+            return MPI_ERR_OTHER;
+        }
+    }
+
+    
     // Extra goes to last block (makes things simpler even if it might add a bit of unbalance)
 
     //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_bcast_scatter_allgather (init)");
