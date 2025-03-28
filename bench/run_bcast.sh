@@ -92,6 +92,10 @@ do
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     end_time=$(date +%s)
     max_duration=$(( (end_time - start_time) * 2 ))
+    # If max duration is less than 1 seconds, set it to 3 seconds
+    if [ $max_duration -le 1 ]; then
+        max_duration=3
+    fi
     echo "Running defaults for at most ${max_duration} seconds"
 
     # Disable uTofu barrier for non-default-default algos
