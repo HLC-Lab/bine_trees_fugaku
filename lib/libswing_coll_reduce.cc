@@ -982,6 +982,174 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
 #endif
 }
 
+#if 1
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
+}
+
+static inline uint32_t get_rank_negabinary_representation(uint32_t rank, uint32_t size){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = ceil_log2(size);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = btonb(rank);
+        }
+        if(in_range(rank - size, num_bits)){
+            nbb = btonb(rank - size);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = btonb(-rank);
+        }
+        if(in_range(-rank + size, num_bits)){
+            nbb = btonb(-rank + size);
+        }
+    }
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nbb;
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nba;
+    }else{ // Check MSB
+        if(nba & (80000000 >> (32 - num_bits))){
+            return nba;
+        }else{
+            return nbb;
+        }
+    }
+}
+
+static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
+    uint32_t remap_rank = get_rank_negabinary_representation(rank, size);    
+    remap_rank = remap_rank ^ (remap_rank >> 1);
+    size_t num_bits = ceil_log2(size);
+    remap_rank = reverse(remap_rank) >> (32 - num_bits);
+    return remap_rank;
+}
+
+int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
+#endif
+  assert(root == 0); // TODO: Generalize
+  int size, rank, dtsize;
+  MPI_Comm_size(comm, &size);
+  MPI_Comm_rank(comm, &rank);
+  MPI_Type_size(dt, &dtsize);
+  int* displs = (int*) malloc(size*sizeof(int));
+  int* step_to_send = (int*) malloc(size*sizeof(int));
+  int* recvcounts = (int*) malloc(size*sizeof(int));
+  int count_per_rank = count / size;
+  int rem = count % size;
+  for(int i = 0; i < size; i++){
+    displs[i] = count_per_rank*i + (i < rem ? i : rem);
+    recvcounts[i] = count_per_rank + (i < rem ? 1 : 0);
+  }
+  
+  void* tmpbuf = malloc(count*dtsize);
+  void* resbuf;
+  
+  if(rank == root){
+    resbuf = recvbuf;
+  }else{
+    resbuf = malloc(count*dtsize);
+  }
+  memcpy(resbuf, sendbuf, count*dtsize);
+
+  int mask = 0x1;
+  int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
+  int block_first_mask = ~(inverse_mask - 1);
+  int vrank = (rank % 2) ? rank : -rank;
+  int remapped_rank = remap_rank(rank, size);
+  
+  /***** Reduce_scatter *****/
+  while(mask < size){
+    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    if(rank % 2 == 0){
+        partner = nbtob(partner);
+    }else{
+        partner = -nbtob(partner);
+    }
+    partner = mod(partner, size);      
+
+    // For sure I need to send my (remapped) partner's data
+    // the actual start block however must be aligned to 
+    // the power of two
+    int send_block_first = remap_rank(partner, size) & block_first_mask;
+    int send_block_last = send_block_first + inverse_mask - 1;
+    int send_count = displs[send_block_last] - displs[send_block_first] + recvcounts[send_block_last];
+    // Something similar for the block to recv.
+    // I receive my block, but aligned to the power of two
+    int recv_block_first = remapped_rank & block_first_mask;
+    int recv_block_last = recv_block_first + inverse_mask - 1;
+    int recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
+
+    MPI_Sendrecv((char*) resbuf + displs[send_block_first]*dtsize, send_count, dt, partner, 0,
+                 (char*) tmpbuf + displs[recv_block_first]*dtsize, recv_count, dt, partner, 0, comm, MPI_STATUS_IGNORE);
+    MPI_Reduce_local((char*) tmpbuf + displs[recv_block_first]*dtsize, (char*) resbuf + displs[recv_block_first]*dtsize, recv_count, dt, op);
+
+    mask <<= 1;
+    inverse_mask >>= 1;
+    block_first_mask >>= 1;
+  }
+
+  /***** Gather *****/
+  mask >>= 1;
+  inverse_mask = 0x1;
+  block_first_mask = ~0x0;
+  while(mask > 0){
+    //vrank = mod(rank - root, size);
+    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    if(rank % 2 == 0){
+        partner = nbtob(partner);
+    }else{
+        partner = -nbtob(partner);
+    }
+    partner = mod(partner + root, size); 
+
+    // Only the one with 0 in the i-th bit starting from the left (i is the step) survives
+    if(btonb(vrank) & mask){
+        int send_block_first = remapped_rank & block_first_mask;
+        int send_block_last = send_block_first + inverse_mask - 1;
+        int send_count = displs[send_block_last] - displs[send_block_first] + recvcounts[send_block_last];    
+        MPI_Send((char*) resbuf + displs[send_block_first]*dtsize, send_count, dt, partner, 0, comm);
+        break;
+    }else{
+        // Something similar for the block to recv.
+        // I receive my partner's block, but aligned to the power of two
+        int recv_block_first = remap_rank(partner, size) & block_first_mask;
+        int recv_block_last = recv_block_first + inverse_mask - 1;
+        int recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
+        MPI_Recv((char*) resbuf + displs[recv_block_first]*dtsize, recv_count, dt, partner, 0, comm, MPI_STATUS_IGNORE);                
+    }
+
+    mask >>= 1;
+    inverse_mask <<= 1;
+    block_first_mask <<= 1;
+  }  
+  free(tmpbuf);
+  if(rank != root){
+    free(resbuf);
+  }
+  free(displs);
+  return MPI_SUCCESS;
+}
+
+#else
 int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -1157,3 +1325,4 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
     timer.reset("= swing_reduce_redscat_gather_mpi (writing profile data to file)");
     return res;
 }
+#endif
