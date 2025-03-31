@@ -184,6 +184,93 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
 #endif
 }
 
+
+#if 1 // Only works for single-dimensional networks (not on torus)
+static uint32_t btonb(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t nbtob(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype dt, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
+  assert(sendcount == recvcount && dt == recvtype);
+  int size, rank, dtsize;
+  MPI_Comm_size(comm, &size);
+  MPI_Comm_rank(comm, &rank);
+  MPI_Type_size(dt, &dtsize);
+  if(rank != root){
+    recvbuf = malloc(recvcount*size*dtsize);
+  }
+  memcpy((char*) recvbuf + rank*recvcount*dtsize, sendbuf, recvcount*dtsize);
+  // I have the blocks in range [min_block_resident, max_block_resident]
+  size_t min_block_resident = rank, max_block_resident = rank;
+  int vrank = mod(rank - root, size); // mod computes math modulo rather than reminder
+  int extension_direction = 1; // Down
+  if(rank % 2){
+    extension_direction = -1; // Up
+  }
+  int mask = 0x1;
+  while(mask < size){
+    int partner = btonb(vrank) ^ ((mask << 1) - 1);
+    partner = mod(nbtob(partner) + root, size);      
+    int mask_lsbs = (mask << 2) - 1; // Mask with step + 2 LSBs set to 1
+    int lsbs = btonb(vrank) & mask_lsbs; // Extract k LSBs
+    int equal_lsbs = (lsbs == 0 || lsbs == mask_lsbs);
+
+    if(!equal_lsbs || ((mask << 1) >= size && (rank != root))){
+      if(max_block_resident >= min_block_resident){
+        // Single send
+        MPI_Send((char*) recvbuf + min_block_resident*recvcount*dtsize, recvcount*(max_block_resident - min_block_resident + 1), dt, partner, 0, comm);
+      }else{
+        // Wrapped send
+        MPI_Send((char*) recvbuf + min_block_resident*recvcount*dtsize, recvcount*((size - 1) - min_block_resident + 1), dt, partner, 0, comm);
+        MPI_Send((char*) recvbuf                                      , recvcount*(max_block_resident + 1)             , dt, partner, 0, comm);
+      }
+      break;
+    }else{
+      // Determine if I extend the data I have up or down
+      size_t recv_start, recv_end; // Receive [recv_start, recv_end]
+      if(extension_direction == 1){
+        recv_start = mod(max_block_resident + 1, size);
+        recv_end = mod(max_block_resident + mask, size);
+        max_block_resident = recv_end;
+      }else{
+        recv_end = mod(min_block_resident - 1, size);
+        recv_start = mod(min_block_resident - mask, size);
+        min_block_resident = recv_start;
+      }
+      if(recv_end >= recv_start){ 
+        // Single recv
+        MPI_Recv((char*) recvbuf + recv_start*recvcount*dtsize, recvcount*(recv_end - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
+      }else{
+        // Wrapped recv
+        MPI_Recv((char*) recvbuf + recv_start*recvcount*dtsize, recvcount*((size - 1) - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
+        MPI_Recv((char*) recvbuf                              , recvcount*(recv_end + 1)               , dt, partner, 0, comm, MPI_STATUS_IGNORE);
+      }
+
+      extension_direction *= -1;
+    }
+    mask <<= 1;
+  }
+  if(rank != root){
+    free(recvbuf);
+  }
+  return MPI_SUCCESS;
+}
+#else
 int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -312,3 +399,4 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
     timer.reset("= swing_gather_mpi (writing profile data to file)");
     return res;
 }
+#endif

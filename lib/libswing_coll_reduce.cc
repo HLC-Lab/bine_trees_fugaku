@@ -557,8 +557,7 @@ int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int coun
 
 }
 
-#if 0
-
+#if 1
 static uint32_t btonb(int32_t bin) {
     if (bin > 0x55555555) throw std::overflow_error("value out of range");
     const uint32_t mask = 0xAAAAAAAA;
@@ -598,6 +597,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
     int equal_lsbs = (lsbs == 0 || lsbs == mask_lsbs);
 
     if(!equal_lsbs || ((mask << 1) >= size && (rank != root))){
+    //if(!equal_lsbs){
         MPI_Send(recvbuf, count, dt, partner, 0, comm);
         break;
     }else{
@@ -606,6 +606,10 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
     }
     mask <<= 1;
   }
+  if(rank != root){
+    free(recvbuf);
+  }
+  free(tmpbuf);
   return MPI_SUCCESS;
 }
 #else
