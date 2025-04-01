@@ -4,6 +4,7 @@
 #include <sched.h>
 #include <omp.h>
 #include <unistd.h>
+#include <strings.h>
 
 #include "libswing_common.h"
 #include "libswing_coll.h"
@@ -1051,7 +1052,6 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
   MPI_Comm_rank(comm, &rank);
   MPI_Type_size(dt, &dtsize);
   int* displs = (int*) malloc(size*sizeof(int));
-  int* step_to_send = (int*) malloc(size*sizeof(int));
   int* recvcounts = (int*) malloc(size*sizeof(int));
   int count_per_rank = count / size;
   int rem = count % size;
@@ -1078,13 +1078,12 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
   
   /***** Reduce_scatter *****/
   while(mask < size){
-    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    int partner;
     if(rank % 2 == 0){
-        partner = nbtob(partner);
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
     }else{
-        partner = -nbtob(partner);
-    }
-    partner = mod(partner, size);      
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
+    }     
 
     // For sure I need to send my (remapped) partner's data
     // the actual start block however must be aligned to 
@@ -1111,18 +1110,21 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
   mask >>= 1;
   inverse_mask = 0x1;
   block_first_mask = ~0x0;
+  int receiving_mask;
+  // I send in the step corresponding to the position (starting from right)
+  // of the first 1 in my remapped rank -- this indicates the step when the data reaches me in a scatter
+  receiving_mask = 0x1 << (ffs(remapped_rank) - 1); // ffs starts counting from 1, thus -1
+  
   while(mask > 0){
-    //vrank = mod(rank - root, size);
-    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    int partner;
     if(rank % 2 == 0){
-        partner = nbtob(partner);
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
     }else{
-        partner = -nbtob(partner);
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
     }
-    partner = mod(partner + root, size); 
 
     // Only the one with 0 in the i-th bit starting from the left (i is the step) survives
-    if(btonb(vrank) & mask){
+    if(inverse_mask & receiving_mask){
         int send_block_first = remapped_rank & block_first_mask;
         int send_block_last = send_block_first + inverse_mask - 1;
         int send_count = displs[send_block_last] - displs[send_block_first] + recvcounts[send_block_last];    

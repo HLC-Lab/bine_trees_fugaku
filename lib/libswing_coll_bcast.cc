@@ -4,6 +4,7 @@
 #include <sched.h>
 #include <omp.h>
 #include <unistd.h>
+#include <strings.h>
 
 #include "libswing_common.h"
 #include "libswing_coll.h"
@@ -928,6 +929,173 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
 #endif
 }
 
+
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
+}
+
+static inline uint32_t get_rank_negabinary_representation(uint32_t rank, uint32_t size){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = ceil_log2(size);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = btonb(rank);
+        }
+        if(in_range(rank - size, num_bits)){
+            nbb = btonb(rank - size);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = btonb(-rank);
+        }
+        if(in_range(-rank + size, num_bits)){
+            nbb = btonb(-rank + size);
+        }
+    }
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nbb;
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nba;
+    }else{ // Check MSB
+        if(nba & (80000000 >> (32 - num_bits))){
+            return nba;
+        }else{
+            return nbb;
+        }
+    }
+}
+
+static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
+    uint32_t remap_rank = get_rank_negabinary_representation(rank, size);    
+    remap_rank = remap_rank ^ (remap_rank >> 1);
+    size_t num_bits = ceil_log2(size);
+    remap_rank = reverse(remap_rank) >> (32 - num_bits);
+    return remap_rank;
+}
+int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_Datatype dt, int root, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.bcast_config.algo_family == SWING_ALGO_FAMILY_SWING || env.bcast_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.bcast_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.bcast_config.algo == SWING_BCAST_ALGO_SCATTER_ALLGATHER);
+    assert(env.bcast_config.distance_type == SWING_DISTANCE_INCREASING);
+#endif
+    assert(root == 0); // TODO: Generalize
+    int size, rank, dtsize;
+    MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Type_size(dt, &dtsize);
+
+    int* displs = (int*) malloc(size*sizeof(int));
+    int* recvcounts = (int*) malloc(size*sizeof(int));
+    int count_per_rank = count / size;
+    int rem = count % size;
+    for(int i = 0; i < size; i++){
+      displs[i] = count_per_rank*i + (i < rem ? i : rem);
+      recvcounts[i] = count_per_rank + (i < rem ? 1 : 0);
+    }
+
+    int mask = 0x1;
+    int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
+    int block_first_mask = ~(inverse_mask - 1);
+    int vrank = (rank % 2) ? rank : -rank;
+    int remapped_rank = remap_rank(rank, size);
+    int receiving_mask = inverse_mask << 1; // Root never receives. By having a large mask inverse_mask will always be < receiving_mask
+    // I receive in the step corresponding to the position (starting from right)
+    // of the first 1 in my remapped rank -- this indicates the step when the data reaches me
+    if(rank != root){
+        receiving_mask = 0x1 << (ffs(remapped_rank) - 1); // ffs starts counting from 1, thus -1
+    }
+    
+    /***** Scatter *****/
+    int recvd = (root == rank);
+    while(mask < size){
+      int partner;
+      if(rank % 2 == 0){
+          partner = mod(rank + nbtob((mask << 1) - 1), size); 
+      }else{
+          partner = mod(rank - nbtob((mask << 1) - 1), size); 
+      }
+  
+      // For sure I need to send my (remapped) partner's data
+      // the actual start block however must be aligned to 
+      // the power of two
+      int send_block_first = remap_rank(partner, size) & block_first_mask;
+      int send_block_last = send_block_first + inverse_mask - 1;
+      int send_count = displs[send_block_last] - displs[send_block_first] + recvcounts[send_block_last];
+      // Something similar for the block to recv.
+      // I receive my block, but aligned to the power of two
+      int recv_block_first = remapped_rank & block_first_mask;
+      int recv_block_last = recv_block_first + inverse_mask - 1;
+      int recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
+      
+      if(recvd){
+        MPI_Send((char*) buffer + displs[send_block_first]*dtsize, send_count, dt, partner, 0, comm);
+      }else if(inverse_mask == receiving_mask || partner == root){
+        MPI_Recv((char*) buffer + displs[recv_block_first]*dtsize, recv_count, dt, partner, 0, comm, MPI_STATUS_IGNORE);
+        recvd = 1;
+      }
+  
+      mask <<= 1;
+      inverse_mask >>= 1;
+      block_first_mask >>= 1;
+    }
+    
+    /***** Allgather *****/  
+    mask >>= 1;
+    inverse_mask = 0x1;
+    block_first_mask = ~0x0;
+    while(mask > 0){
+      int spartner, rpartner;
+      int send_block_first = 0, send_block_last = 0, send_count = 0, recv_block_first = 0, recv_block_last = 0, recv_count = 0;
+      int partner;
+      if(rank % 2 == 0){
+          partner = mod(rank + nbtob((mask << 1) - 1), size); 
+      }else{
+          partner = mod(rank - nbtob((mask << 1) - 1), size); 
+      }
+      
+      rpartner = (inverse_mask < receiving_mask) ? MPI_PROC_NULL : partner;
+      spartner = (inverse_mask == receiving_mask) ? MPI_PROC_NULL : partner;
+
+      if(spartner != MPI_PROC_NULL){
+        send_block_first = remapped_rank & block_first_mask;
+        send_block_last = send_block_first + inverse_mask - 1;
+        send_count = displs[send_block_last] - displs[send_block_first] + recvcounts[send_block_last];    
+      }
+      if(rpartner != MPI_PROC_NULL){
+        recv_block_first = remap_rank(rpartner, size) & block_first_mask;
+        recv_block_last = recv_block_first + inverse_mask - 1;
+        recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
+      }
+      MPI_Sendrecv((char*) buffer + displs[send_block_first]*dtsize, send_count, dt, spartner, 0, 
+                   (char*) buffer + displs[recv_block_first]*dtsize, recv_count, dt, rpartner, 0, comm, MPI_STATUS_IGNORE);
+  
+      mask >>= 1;
+      inverse_mask <<= 1;
+      block_first_mask <<= 1;
+    }   
+
+
+    free(displs);
+    free(recvcounts);
+    return MPI_SUCCESS;    
+}
+
+
+#if 0
 // We do not need to reorder the data since it is not just a scatter or not just an allgather
 // Thus, for the scatter we can just use the continuous version. For the allgather also (unless it is not power of 2 -- TODO)
 int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
@@ -1079,3 +1247,4 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     timer.reset("= swing_bcast_scatter_allgather_mpi (writing profile data to file)");
     return res;
 }
+#endif
