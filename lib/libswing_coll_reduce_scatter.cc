@@ -284,16 +284,14 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
   int mask = 0x1;
   int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
   int block_first_mask = ~(inverse_mask - 1);
-  int vrank = (rank % 2) ? rank : -rank;
   int remapped_rank = remap_rank(rank, size);
   while(mask < size){
-    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    int partner;
     if(rank % 2 == 0){
-        partner = nbtob(partner);
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
     }else{
-        partner = -nbtob(partner);
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
     }
-    partner = mod(partner, size);      
 
     // For sure I need to send my (remapped) partner's data
     // the actual start block however must be aligned to 
@@ -306,7 +304,6 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
     int recv_block_first = remapped_rank & block_first_mask;
     int recv_block_last = recv_block_first + inverse_mask - 1;
     int recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
-
     MPI_Sendrecv((char*) resbuf + displs[send_block_first]*dtsize, send_count, dt, partner, 0,
                  (char*) tmpbuf + displs[recv_block_first]*dtsize, recv_count, dt, partner, 0, comm, MPI_STATUS_IGNORE);
     MPI_Reduce_local((char*) tmpbuf + displs[recv_block_first]*dtsize, (char*) resbuf + displs[recv_block_first]*dtsize, recv_count, dt, op);
@@ -330,7 +327,7 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 }
 #endif
 
-#if 1
+#if 0
 // Version with permute at the beginning
 int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
@@ -363,16 +360,14 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
   int mask = 0x1;
   int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
   int block_first_mask = ~(inverse_mask - 1);
-  int vrank = (rank % 2) ? rank : -rank;
   int remapped_rank = remap_rank(rank, size);
   while(mask < size){
-    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    int partner;
     if(rank % 2 == 0){
-        partner = nbtob(partner);
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
     }else{
-        partner = -nbtob(partner);
-    }
-    partner = mod(partner, size);      
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
+    } 
 
     // For sure I need to send my (remapped) partner's data
     // the actual start block however must be aligned to 
@@ -385,7 +380,7 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
     int recv_block_first = remapped_rank & block_first_mask;
     int recv_block_last = recv_block_first + inverse_mask - 1;
     int recv_count = displs[recv_block_last] - displs[recv_block_first] + recvcounts[recv_block_last];
-
+    
     MPI_Sendrecv((char*) resbuf + displs[send_block_first]*dtsize, send_count, dt, partner, 0,
                  (char*) tmpbuf + displs[recv_block_first]*dtsize, recv_count, dt, partner, 0, comm, MPI_STATUS_IGNORE);
     MPI_Reduce_local((char*) tmpbuf + displs[recv_block_first]*dtsize, (char*) resbuf + displs[recv_block_first]*dtsize, recv_count, dt, op);
@@ -405,7 +400,7 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 }
 #endif
 
-#if 0
+#if 1
 // Version with send block-by-block
 int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
@@ -436,17 +431,15 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
   int mask = 0x1;
   int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
   int block_first_mask = ~(inverse_mask - 1);
-  int vrank = (rank % 2) ? rank : -rank;
   int remapped_rank = remap_rank(rank, size);
   MPI_Request* reqs = (MPI_Request*) malloc(size*sizeof(MPI_Request));  
   while(mask < size){
-    int partner = btonb(vrank) ^ ((mask << 1) - 1); 
+    int partner;
     if(rank % 2 == 0){
-        partner = nbtob(partner);
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
     }else{
-        partner = -nbtob(partner);
-    }
-    partner = mod(partner, size);      
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
+    }   
 
     // For sure I need to send my (remapped) partner's data
     // the actual start block however must be aligned to 
