@@ -310,6 +310,245 @@ int SwingCommon::swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int co
 #endif
 }
 
+static uint32_t btonb(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t nbtob(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
+}
+
+static inline uint32_t get_rank_negabinary_representation(uint32_t rank, uint32_t size){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = ceil_log2(size);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = btonb(rank);
+        }
+        if(in_range(rank - size, num_bits)){
+            nbb = btonb(rank - size);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = btonb(-rank);
+        }
+        if(in_range(-rank + size, num_bits)){
+            nbb = btonb(-rank + size);
+        }
+    }
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nbb;
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nba;
+    }else{ // Check MSB
+        if(nba & (80000000 >> (32 - num_bits))){
+            return nba;
+        }else{
+            return nbb;
+        }
+    }
+}
+
+static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
+    uint32_t remap_rank = get_rank_negabinary_representation(rank, size);    
+    remap_rank = remap_rank ^ (remap_rank >> 1);
+    size_t num_bits = ceil_log2(size);
+    remap_rank = reverse(remap_rank) >> (32 - num_bits);
+    return remap_rank;
+}
+
+// Function to calculate a Mersenne number (2^n - 1)
+uint32_t mersenne(int n) {
+    return (1UL << n + 1) - 1;
+}
+
+// Function that computes the remapped rank when using distance-doubling
+// (e.g., in a bcast tree or reduce tree).
+// We know that in distance-doubling trees each rank does
+// r XOR a Mersenne number (i.e., 2^k - 1 -- like 111, 11, 1111, etc...).
+// Thus, if we decompose a number into the XOR of Mersenne numbers,
+// then we know the sequence of steps that a rank took to reach that rank.
+// We remap the bine tree to a standard distance-halving binary tree
+// i.e., if we know a number is decomposed as 11 XOR 1111, we know that 
+// it has been reached through the second and fourth step. 
+// Thus, we remap it to 10 XOR 1000, since those would be the second and
+// fourth steps in a traditional distance-halving binomial tree.
+int remap_distance_doubling(uint32_t num) {
+    int remapped = 0;
+    while (num > 0) {
+        int k = 0;
+        uint32_t temp = num;
+
+        // Find the highest set bit (position k)
+        while (temp > 1) {
+            temp >>= 1;
+            k++;
+        }
+
+        uint32_t m = mersenne(k);
+
+        remapped ^= (0x1 << k); // Set the k-th bit in the remapped number
+
+        num ^= m; // XOR the Mersenne number with the remaining number
+        if(num == 0){
+          break;
+        }
+    }
+    return remapped;
+}
+
+int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {    
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.alltoall_config.algo_family == SWING_ALGO_FAMILY_SWING);
+    assert(env.alltoall_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.alltoall_config.algo == SWING_ALLTOALL_ALGO_LOG);
+#endif
+    int rank, size, dtsize;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    MPI_Type_size(datatype, &dtsize);    
+
+    uint* resident_block;  // resident_block[i] contains the id of a block that is resident in the current rank (for i < num_resident_blocks)
+    uint* resident_block_next;  // resident_block_next[i] contains the id of a block that is resident in the current rank in the next step (for i < num_resident_blocks_next)
+    size_t num_resident_blocks = size;
+    size_t num_resident_blocks_next = 0;
+    size_t tmpbuf_size = count*dtsize*size + sizeof(uint)*size + sizeof(uint)*size;
+    char* tmpbuf = (char*) malloc(tmpbuf_size);
+    resident_block = (uint*) (tmpbuf + count*dtsize*size);
+    resident_block_next = (uint*) (tmpbuf + count*dtsize*size + sizeof(uint)*size);
+
+    // At the beginning I only have my blocks
+    for(size_t i = 0; i < size; i++){
+        resident_block[i] = i;
+    }
+
+    memcpy(tmpbuf, sendbuf, count*dtsize*size);
+    size_t min_block_s, max_block_s;
+
+    // We use recvbuf to receive/send the data, and tmpbuf to organize the data to send at the next step
+    // By doing so, we avoid a copy form tmpbuf to recvbuf at the end
+    int mask = 0x1;
+    int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
+    int block_first_mask = ~(inverse_mask - 1);
+    int vrank = (rank % 2) ? rank : -rank;
+    int remapped_rank = remap_rank(rank, size);
+    
+    while(mask < size){
+        int partner;
+        if(rank % 2 == 0){
+            partner = mod(rank + nbtob((mask << 1) - 1), size); 
+        }else{
+            partner = mod(rank - nbtob((mask << 1) - 1), size); 
+        }     
+        int min_block_s = remap_rank(partner, size) & block_first_mask;
+        int max_block_s = min_block_s + inverse_mask - 1;
+
+        size_t block_recvd_cnt = 0, block_send_cnt = 0;
+        size_t offset_send = 0, offset_keep = 0;
+        num_resident_blocks_next = 0;
+        for(size_t i = 0; i < this->size; i++){
+            uint block = resident_block[i % num_resident_blocks];
+            // Shall I send this block? Check the negabinary thing    
+            uint remap_block = remap_rank(block, size);
+            size_t offset = i*count*dtsize;
+            
+            // I move to the beginning of tmpbuf the blocks I want to keep,
+            // and I move to recvbuf the blocks I want to send.
+            if(remap_block >= min_block_s && remap_block <= max_block_s){                
+                memcpy((char*) recvbuf + offset_send, tmpbuf + offset, count*dtsize);
+                offset_send += count*dtsize;                
+                block_send_cnt++;
+            }else{
+                // Copy the blocks we are not sending to the second half of recvbuf
+                if(offset != offset_keep){
+                    memcpy(tmpbuf + offset_keep, tmpbuf + offset, count*dtsize);
+                }
+                offset_keep += count*dtsize;                
+                block_recvd_cnt++;
+
+                resident_block_next[num_resident_blocks_next] = block;
+                num_resident_blocks_next++;
+            }
+        }
+        assert(block_recvd_cnt == size/2);
+        assert(block_send_cnt == size/2);
+        
+        num_resident_blocks /= 2;
+
+        // I receive data in the second half of tmpbuf (the first half contains the blocks I am keeping from previous iteration)
+        int r = MPI_Sendrecv((char*) recvbuf, count*block_send_cnt, datatype,
+                             partner, 0,
+                             tmpbuf + (size / 2)*count*dtsize, count*block_send_cnt, datatype,
+                             partner, 0, 
+                             comm, MPI_STATUS_IGNORE);
+        
+        if(r != MPI_SUCCESS){
+            return r;
+        }      
+
+        // Update resident blocks
+        memcpy(resident_block, resident_block_next, sizeof(uint)*num_resident_blocks);
+
+        mask <<= 1;
+        inverse_mask >>= 1;
+        block_first_mask >>= 1;        
+    }
+
+    // Now I need to permute tmpbuf into recvbuf
+    // Since I always received the new block on the right, and moved the blocks
+    // I wanted to keep to the left, they are now sorted in the same order they reached this
+    // rank from their corresponding source ranks. 
+    // I.e., I should consider the "reverse tree" (with this rank at the bottom and all the other ranks on top),
+    // which represent how the data arrived here.
+    // This tree is basically the opposite that I used to send the data
+    // I should consider the decreasing tree, and viceversa.
+    for(size_t i = 0; i < size; i++){
+        int rotated_i = 0;
+        if((rank % 2) == 0){            
+            rotated_i = mod(i - rank, size);
+        }else{
+            rotated_i = mod(rank - i, size);
+        }
+        int repr = 0;
+        if(in_range(rotated_i, ceil(log2(size)))){
+            repr = btonb(rotated_i);
+        }else{
+            repr = btonb(rotated_i - size);
+        }                            
+        int index = remap_distance_doubling(repr);
+        //printf("[%d] i=%d index: %d vs %d\n", rank, i, index, x);
+
+        size_t offset_src = index*count*dtsize;
+        size_t offset_dst = i*count*dtsize;
+        memcpy((char*) recvbuf + offset_dst, ((char*) tmpbuf) + offset_src, count*dtsize);
+    }    
+    free(tmpbuf);
+    return MPI_SUCCESS;
+}
+
+
+#if 0
 int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm) {
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -456,3 +695,4 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
     destroy_tree(&tree);
     return MPI_SUCCESS;
 }
+#endif
