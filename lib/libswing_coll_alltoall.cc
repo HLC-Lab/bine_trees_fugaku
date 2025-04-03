@@ -393,26 +393,17 @@ uint32_t mersenne(int n) {
 // it has been reached through the second and fourth step. 
 // Thus, we remap it to 10 XOR 1000, since those would be the second and
 // fourth steps in a traditional distance-halving binomial tree.
+//
+// To compute the Mersenne decomposition we simply XOR with the largest
+// Mersenne number we can (e.g., if decomposing 101, we XOR with 111).
+// Then, we keep applying the same process to the remaining number,
+// until we reach 0.
 int remap_distance_doubling(uint32_t num) {
     int remapped = 0;
     while (num > 0) {
-        int k = 0;
-        uint32_t temp = num;
-
-        // Find the highest set bit (position k)
-        while (temp > 1) {
-            temp >>= 1;
-            k++;
-        }
-
-        uint32_t m = mersenne(k);
-
+        int k = 31 - __builtin_clz(num); // Find the position of the highest set bit
         remapped ^= (0x1 << k); // Set the k-th bit in the remapped number
-
-        num ^= m; // XOR the Mersenne number with the remaining number
-        if(num == 0){
-          break;
-        }
+        num ^= mersenne(k); // XOR the Mersenne number with the remaining number
     }
     return remapped;
 }
@@ -461,8 +452,8 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
         }else{
             partner = mod(rank - nbtob((mask << 1) - 1), size); 
         }     
-        int min_block_s = remap_rank(partner, size) & block_first_mask;
-        int max_block_s = min_block_s + inverse_mask - 1;
+        min_block_s = remap_rank(partner, size) & block_first_mask;
+        max_block_s = min_block_s + inverse_mask - 1;
 
         size_t block_recvd_cnt = 0, block_send_cnt = 0;
         size_t offset_send = 0, offset_keep = 0;
@@ -508,7 +499,9 @@ int SwingCommon::swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int coun
         }      
 
         // Update resident blocks
-        memcpy(resident_block, resident_block_next, sizeof(uint)*num_resident_blocks);
+        uint* tmp = resident_block_next;
+        resident_block_next = resident_block;
+        resident_block = tmp;
 
         mask <<= 1;
         inverse_mask >>= 1;
