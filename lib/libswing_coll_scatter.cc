@@ -199,14 +199,7 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     MPI_Comm_rank(comm, &rank);
     MPI_Type_size(dt, &dtsize);
     // Tempbuffer
-    char *tmpbuf, *sbuf, *rbuf;
-    if(rank != root){
-        tmpbuf = (char*) malloc(sendcount*size*dtsize);
-        sbuf = (char*) tmpbuf;
-        rbuf = (char*) tmpbuf;
-    }else{
-        sbuf = (char*) sendbuf;
-    }
+    char *tmpbuf = NULL, *sbuf, *rbuf;
 
     int vrank = mod(rank - root, size); // mod computes math modulo rather than reminder
     int halving_direction = 1; // Down -- send bottom half
@@ -237,12 +230,19 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     }
     
     int mask = 0x1 << (int) ceil(log2(size)) - 1;
-    int recvd = (root == rank);
+    int recvd = 0;
+    int sbuf_offset = rank;
+    int is_leaf = 0;
+    if(root == rank){
+        recvd = 1;
+        sbuf = (char*) sendbuf;
+    }
+    int vrank_nb = btonb(vrank);
     while(mask > 0){
-      int partner = btonb(vrank) ^ ((mask << 1) - 1);
+      int partner = vrank_nb ^ ((mask << 1) - 1);
       partner = mod(nbtob(partner) + root, size);      
       int mask_lsbs = (mask << 1) - 1; // Mask with num_steps - step + 1 LSBs set to 1
-      int lsbs = btonb(vrank) & mask_lsbs; // Extract k LSBs
+      int lsbs = vrank_nb & mask_lsbs; // Extract k LSBs
       int equal_lsbs = (lsbs == 0 || lsbs == mask_lsbs);
 
       size_t top_start, top_end, bottom_start, bottom_end;
@@ -267,30 +267,57 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
         min_resident_block = mod(min_resident_block + mask, size);
       }
       if(recvd){
+        //printf("[%d] Sending [%d, %d] to %d\n", rank, send_start, send_end, partner);
         if(send_end >= send_start){
-            // Single send
-            MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*(send_end - send_start + 1), dt, partner, 0, comm);
-          }else{
-            // Wrapped send
-            MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*((size - 1) - send_start + 1), dt, partner, 0, comm);
-            MPI_Send((char*) sbuf                              , sendcount*(send_end + 1)               , dt, partner, 0, comm);
-          }
+          // Single send
+          MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*(send_end - send_start + 1), dt, partner, 0, comm);
+        }else{
+          // Wrapped send
+          MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*((size - 1) - send_start + 1), dt, partner, 0, comm);
+          MPI_Send((char*) sbuf                              , sendcount*(send_end + 1)               , dt, partner, 0, comm);
+        }
       }else if(equal_lsbs){
+        // Setup the buffers to be used from now on
+        // How large should the tmpbuf be?
+        // It must be large enough to hold a number of blocks 
+        // equal to the number of children in the tree rooted in me.
+        size_t num_blocks = mod((recv_end - recv_start + 1), size);
+
+        if(recv_start == recv_end){
+            // I am a leaf and this is the last step, I do not need a tmpbuf
+            rbuf = (char*) recvbuf;
+            is_leaf = 1;
+        }else{
+            tmpbuf = (char*) malloc(recvcount*num_blocks*dtsize);
+            sbuf = (char*) tmpbuf;
+            rbuf = (char*) tmpbuf;
+
+            // Adjust min and max resident blocks
+            min_resident_block = 0;
+            max_resident_block = num_blocks - 1;
+            
+            sbuf_offset = mod(rank - recv_start, size);
+        }
+        
+        //printf("[%d] Receiving [%d, %d] from %d\n", rank, recv_start, recv_end, partner);
+
         if(recv_end >= recv_start){ 
           // Single recv
-          MPI_Recv((char*) rbuf + recv_start*recvcount*dtsize, recvcount*(recv_end - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
+          MPI_Recv((char*) rbuf, recvcount*num_blocks, dt, partner, 0, comm, MPI_STATUS_IGNORE);
         }else{
           // Wrapped recv
-          MPI_Recv((char*) rbuf + recv_start*recvcount*dtsize, recvcount*((size - 1) - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
-          MPI_Recv((char*) rbuf                              , recvcount*(recv_end + 1)               , dt, partner, 0, comm, MPI_STATUS_IGNORE);
+          MPI_Recv((char*) rbuf                                                   , recvcount*((size - 1) - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
+          MPI_Recv((char*) rbuf + (recvcount*((size - 1) - recv_start + 1))*dtsize, recvcount*(recv_end + 1)               , dt, partner, 0, comm, MPI_STATUS_IGNORE);
         }    
         recvd = 1;
       }
       mask >>= 1;
       halving_direction *= -1;
     }
-    memcpy(recvbuf, (char*) sbuf + rank*recvcount*dtsize, recvcount*dtsize);
-    if(rank != root){
+    if(!is_leaf){
+        memcpy(recvbuf, (char*) sbuf + sbuf_offset*recvcount*dtsize, recvcount*dtsize);
+    }
+    if(tmpbuf != NULL){
         free(tmpbuf);
     }
     return MPI_SUCCESS;
