@@ -400,7 +400,7 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 }
 #endif
 
-#if 1
+#if 0
 // Version with send block-by-block
 int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
@@ -494,6 +494,161 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
   free(resbuf);
   free(inverse_remapping);
   free(displs);
+  return MPI_SUCCESS;
+}
+#endif
+
+#if 1
+static inline uint32_t nb_to_nu(uint32_t nb, uint32_t size){
+    return reverse(nb ^ (nb >> 1)) >> 32 - ceil_log2(size);
+}
+
+static inline uint32_t get_nu(uint32_t rank, uint32_t size){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = ceil_log2(size);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = btonb(rank);
+        }
+        if(in_range(rank - size, num_bits)){
+            nbb = btonb(rank - size);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = btonb(-rank);
+        }
+        if(in_range(-rank + size, num_bits)){
+            nbb = btonb(-rank + size);
+        }
+    }
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nb_to_nu(nbb, size);
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nb_to_nu(nba, size);
+    }else{ // Check MSB
+        int nu_a = nb_to_nu(nba, size);
+        int nu_b = nb_to_nu(nbb, size);
+        if(nu_a < nu_b){
+            return nu_a;
+        }else{
+            return nu_b;
+        }
+    }
+}
+
+// Version with send block-by-block that also works for non-power of two
+int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+#endif    
+  int size, rank, dtsize;
+  MPI_Comm_size(comm, &size);
+  MPI_Comm_rank(comm, &rank);
+  MPI_Type_size(dt, &dtsize);
+  int count = 0;
+  int* displs = (int*) malloc(size*sizeof(int));
+  for(int i = 0; i < size; i++){
+    displs[i] = count;
+    count += recvcounts[i];    
+  }
+  
+  void* tmpbuf = malloc(count*dtsize);
+  void* resbuf = malloc(count*dtsize);
+  memcpy(resbuf, sendbuf, count*dtsize);
+  
+  int mask = 0x1;
+  int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
+  int block_first_mask = ~(inverse_mask - 1);
+  MPI_Request* reqs_s = (MPI_Request*) malloc(size*sizeof(MPI_Request));  
+  MPI_Request* reqs_r = (MPI_Request*) malloc(size*sizeof(MPI_Request));  
+  int* blocks_to_recv = (int*) malloc(size*sizeof(int));
+  int next_req_s = 0, next_req_r = 0;
+  int reverse_step = ceil_log2(size) - 1;
+  int last_recv_done = 0;
+  while(mask < size){
+    int partner;
+    if(rank % 2 == 0){
+        partner = mod(rank + nbtob((mask << 1) - 1), size); 
+    }else{
+        partner = mod(rank - nbtob((mask << 1) - 1), size); 
+    }   
+
+    next_req_r = 0;
+    next_req_s = 0;
+
+    // We start from 1 because 0 never sends block 0
+    for(size_t block = 1; block < size; block++){
+        // Get the position of the highest set bit using clz
+        // That gives us the first at which block departs from 0
+        int k = 31 - __builtin_clz(get_nu(block, size));
+        // Check if this must be sent
+        if(k == reverse_step){
+            // 0 would send this block
+            size_t block_to_send, block_to_recv;
+            if(rank % 2 == 0){
+                // I am even, thus I need to shift by rank position to the right
+                block_to_send = mod(block + rank, size);
+                // What to receive? What my partner is sending
+                // Since I am even, my partner is odd, thus I need to mirror it and then shift
+                block_to_recv = mod(partner - block, size);
+            }else{
+                // I am odd, thus I need to mirror it
+                block_to_send = mod(rank - block, size);
+                // What to receive? What my partner is sending
+                // Since I am odd, my partner is even, thus I need to mirror it and then shift   
+                block_to_recv = mod(block + partner, size);
+            }
+
+            if(block_to_send != rank){
+                MPI_Isend((char*) resbuf + displs[block_to_send]*dtsize, recvcounts[block_to_send], dt, partner, 0,
+                           comm, &reqs_s[next_req_s]);
+                ++next_req_s;
+            }
+
+            if(block_to_recv != partner){
+                blocks_to_recv[next_req_r] = block_to_recv;
+                if(mask << 1 >= size){
+                    // Last step, receiving in recvbuf                       
+                    MPI_Irecv((char*) recvbuf, recvcounts[block_to_recv], dt, partner, 0,
+                            comm, &reqs_r[next_req_r]);       
+                    last_recv_done = 1;                             
+                }else{
+                    MPI_Irecv((char*) tmpbuf + displs[block_to_recv]*dtsize, recvcounts[block_to_recv], dt, partner, 0,
+                            comm, &reqs_r[next_req_r]);                
+                }                            
+                ++next_req_r;
+            }
+        }        
+    }
+
+    for(size_t block = 0; block < next_req_r; block++){
+        MPI_Wait(&reqs_r[block], MPI_STATUS_IGNORE);
+        if(mask << 1 >= size){
+            // Last step, received in recvbuf, aggregating from resbuf
+            MPI_Reduce_local((char*) resbuf + displs[blocks_to_recv[block]]*dtsize, (char*) recvbuf                                      , recvcounts[blocks_to_recv[block]], dt, op);
+        }else{
+            MPI_Reduce_local((char*) tmpbuf + displs[blocks_to_recv[block]]*dtsize, (char*) resbuf + displs[blocks_to_recv[block]]*dtsize, recvcounts[blocks_to_recv[block]], dt, op);
+        }
+    }
+    MPI_Waitall(next_req_s, reqs_s, MPI_STATUSES_IGNORE);
+
+    mask <<= 1;
+    inverse_mask >>= 1;
+    block_first_mask >>= 1;
+    reverse_step--;
+  }
+  if(!last_recv_done){
+    memcpy(recvbuf, (char*) resbuf + displs[rank]*dtsize, recvcounts[rank]*dtsize);
+  }
+  free(tmpbuf);
+  free(resbuf);
+  free(displs);
+  free(blocks_to_recv);
   return MPI_SUCCESS;
 }
 #endif
