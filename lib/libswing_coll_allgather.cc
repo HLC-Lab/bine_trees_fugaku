@@ -929,7 +929,7 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
     }
 
     //timer.reset("= swing_allgather_blocks_utofu (memcpy)");           
-    memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
+    //memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
 
     int res = MPI_SUCCESS; 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
@@ -959,11 +959,16 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
             peer = peers[port][0];
         }
         
-        utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][this->rank].offset;
+        utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd       + blocks_info[port][0].offset;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][this->rank].offset;
         issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
         resident_blocks[this->rank] = 2;
         resident_blocks[peer] = 1;
+
+#pragma omp critical
+{
+        memcpy((char*) recvbuf + blocks_info[port][this->rank].offset, (char*) sendbuf +  blocks_info[port][0].offset, blocks_info[port][this->rank].count*dtsize);
+}
 
         size_t bytes_to_recv = blocks_info[port][peer].count*dtsize;
         size_t segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));
@@ -1005,7 +1010,7 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
             }
             #else
 
-            char push_every = 4; //this->size;
+            char push_every = 1; //this->size;
             uint posted_sends = 0;
 
             for(size_t block = 0; block < this->size; block++){

@@ -18,7 +18,7 @@ typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
 
 #define LIBSWING_MAX_SUPPORTED_DIMENSIONS 3 // We support up to 3D torus
 #define LIBSWING_MAX_SUPPORTED_PORTS (LIBSWING_MAX_SUPPORTED_DIMENSIONS*2)
-#define LIBSWING_MAX_STEPS 20 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
+#define LIBSWING_MAX_STEPS 40 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
 #define LIBSWING_MAX_COLLECTIVE_SEQUENCE 2
 #define LIBSWING_TMPBUF_ALIGNMENT 256 // uTofu STag alignment
 

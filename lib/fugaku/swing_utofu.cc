@@ -104,7 +104,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
 void swing_utofu_dereg_buf(swing_utofu_comm_descriptor* desc, void* buffer, int port){
     auto it = desc->port_info[port].registration_cache->find(buffer);
     if(it != desc->port_info[port].registration_cache->end()){
-        utofu_dereg_mem(desc->port_info[port].vcq_hdl, it->second, 0);
+        assert(utofu_dereg_mem(desc->port_info[port].vcq_hdl, it->second, 0) == UTOFU_SUCCESS);
         desc->port_info[port].registration_cache->erase(it);
     }else{
         assert("Buffer not found in registration cache." && 0);
@@ -121,21 +121,21 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
     // Send the local info for my the ports, to all the peers
     for(size_t step = 0; step < num_steps; step++){
         uint peer = peers[step];	
-        MPI_Isend(sbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(reqs[step]));
+        assert(MPI_Isend(sbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, &(reqs[step])) == MPI_SUCCESS);
     }
 
     // Receive the remote info for all the ports, from all the peers
     uint64_t* rbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
     for(size_t step = 0; step < num_steps; step++){
         uint peer = peers[step];
-        MPI_Recv(rbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        assert(MPI_Recv(rbuffer, 2*desc->num_ports, MPI_UINT64_T, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE) == MPI_SUCCESS);
         for(size_t i = 0; i < desc->num_ports; i++){
             // Add an empty entry for the peer
             desc->port_info[i].rmt_recv_stadd[peer] = rbuffer[2*i];
             desc->port_info[i].rmt_temp_stadd[peer] = rbuffer[2*i+1];
         }
     }
-    MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE);    
+    assert(MPI_Waitall(num_steps, reqs, MPI_STATUSES_IGNORE) == MPI_SUCCESS);    
 
     free(sbuffer);
     free(rbuffer);
