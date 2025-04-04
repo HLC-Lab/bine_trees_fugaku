@@ -169,6 +169,161 @@ int SwingCommon::swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Dat
 #endif
 }
 
+
+#if 1
+static uint32_t btonb(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t nbtob(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype dt, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.scatter_config.algo == SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+#endif
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(dt == recvtype); // TODO: Implement the case where sendtype != recvtype
+
+    int size, rank, dtsize;
+    MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Type_size(dt, &dtsize);
+    // Tempbuffer
+    char *tmpbuf = NULL, *sbuf, *rbuf;
+
+    int vrank = mod(rank - root, size); // mod computes math modulo rather than reminder
+    int halving_direction = 1; // Down -- send bottom half
+    if(rank % 2){
+      halving_direction = -1; // Up -- send top half
+    }
+    // The gather started with these directions. Thus this will
+    // be the direction they ended up with if we have an odd number
+    // of steps. If not, invert.
+    if((int) ceil(log2(size)) % 2 == 0){
+        halving_direction *= -1;
+    }
+    
+    // I need to do the opposite of what I did in the gather.
+    // Thus, I need to know where min_resident_block and max_resident_block
+    // ended up after the last step.
+    // Even ranks added 2^0, 2^2, 2^4, ... to max_resident_block
+    //   and subtracted 2^1, 2^3, 2^5, ... from min_resident_block
+    // Odd ranks subtracted 2^0, 2^2, 2^4, ... from min_resident_block
+    //            and added 2^1, 2^3, 2^5, ... to max_resident_block
+    size_t min_resident_block, max_resident_block;
+    if(rank % 2 == 0){        
+        max_resident_block = mod(rank + 0x55555555 & ((0x1 << (int) ceil(log2(size))) - 1), size);
+        min_resident_block = mod(rank - 0xAAAAAAAA & ((0x1 << (int) ceil(log2(size))) - 1), size);
+    }else{
+        min_resident_block = mod(rank - 0x55555555 & ((0x1 << (int) ceil(log2(size))) - 1), size);
+        max_resident_block = mod(rank + 0xAAAAAAAA & ((0x1 << (int) ceil(log2(size))) - 1), size);        
+    }
+    
+    int mask = 0x1 << (int) ceil(log2(size)) - 1;
+    int recvd = 0;
+    int sbuf_offset = rank;
+    int is_leaf = 0;
+    if(root == rank){
+        recvd = 1;
+        sbuf = (char*) sendbuf;
+    }
+    int vrank_nb = btonb(vrank);
+    while(mask > 0){
+      int partner = vrank_nb ^ ((mask << 1) - 1);
+      partner = mod(nbtob(partner) + root, size);      
+      int mask_lsbs = (mask << 1) - 1; // Mask with num_steps - step + 1 LSBs set to 1
+      int lsbs = vrank_nb & mask_lsbs; // Extract k LSBs
+      int equal_lsbs = (lsbs == 0 || lsbs == mask_lsbs);
+
+      size_t top_start, top_end, bottom_start, bottom_end;
+      top_start = min_resident_block;
+      top_end = mod(min_resident_block + mask - 1, size);
+      bottom_start = mod(top_end + 1, size);
+      bottom_end = max_resident_block;
+      size_t send_start, send_end, recv_start, recv_end;
+      if(halving_direction == 1){
+        // Send bottom half [..., size - 1]
+        send_start = bottom_start;
+        send_end = bottom_end;
+        recv_start = top_start;
+        recv_end = top_end;
+        max_resident_block = mod(max_resident_block - mask, size);
+      }else{
+        // Send top half [0, ...]
+        send_start = top_start;
+        send_end = top_end;
+        recv_start = bottom_start;
+        recv_end = bottom_end;
+        min_resident_block = mod(min_resident_block + mask, size);
+      }
+      if(recvd){
+        //printf("[%d] Sending [%d, %d] to %d\n", rank, send_start, send_end, partner);
+        if(send_end >= send_start){
+          // Single send
+          MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*(send_end - send_start + 1), dt, partner, 0, comm);
+        }else{
+          // Wrapped send
+          MPI_Send((char*) sbuf + send_start*sendcount*dtsize, sendcount*((size - 1) - send_start + 1), dt, partner, 0, comm);
+          MPI_Send((char*) sbuf                              , sendcount*(send_end + 1)               , dt, partner, 0, comm);
+        }
+      }else if(equal_lsbs){
+        // Setup the buffers to be used from now on
+        // How large should the tmpbuf be?
+        // It must be large enough to hold a number of blocks 
+        // equal to the number of children in the tree rooted in me.
+        size_t num_blocks = mod((recv_end - recv_start + 1), size);
+
+        if(recv_start == recv_end){
+            // I am a leaf and this is the last step, I do not need a tmpbuf
+            rbuf = (char*) recvbuf;
+            is_leaf = 1;
+        }else{
+            tmpbuf = (char*) malloc(recvcount*num_blocks*dtsize);
+            sbuf = (char*) tmpbuf;
+            rbuf = (char*) tmpbuf;
+
+            // Adjust min and max resident blocks
+            min_resident_block = 0;
+            max_resident_block = num_blocks - 1;
+            
+            sbuf_offset = mod(rank - recv_start, size);
+        }
+        
+        //printf("[%d] Receiving [%d, %d] from %d\n", rank, recv_start, recv_end, partner);
+
+        if(recv_end >= recv_start){ 
+          // Single recv
+          MPI_Recv((char*) rbuf, recvcount*num_blocks, dt, partner, 0, comm, MPI_STATUS_IGNORE);
+        }else{
+          // Wrapped recv
+          MPI_Recv((char*) rbuf                                                   , recvcount*((size - 1) - recv_start + 1), dt, partner, 0, comm, MPI_STATUS_IGNORE);
+          MPI_Recv((char*) rbuf + (recvcount*((size - 1) - recv_start + 1))*dtsize, recvcount*(recv_end + 1)               , dt, partner, 0, comm, MPI_STATUS_IGNORE);
+        }    
+        recvd = 1;
+      }
+      mask >>= 1;
+      halving_direction *= -1;
+    }
+    if(!is_leaf){
+        memcpy(recvbuf, (char*) sbuf + sbuf_offset*recvcount*dtsize, recvcount*dtsize);
+    }
+    if(tmpbuf != NULL){
+        free(tmpbuf);
+    }
+    return MPI_SUCCESS;
+}
+
+#else
 int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -293,3 +448,4 @@ int SwingCommon::swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datat
     timer.reset("= swing_scatter_mpi (writing profile data to file)");
     return res;
 }
+#endif
