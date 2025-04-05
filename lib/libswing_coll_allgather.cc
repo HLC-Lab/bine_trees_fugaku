@@ -1087,6 +1087,153 @@ int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount
 }
 
 
+#if 1
+
+static uint32_t btonb(int32_t bin) {
+    if (bin > 0x55555555) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask + bin) ^ mask;
+}
+
+static int32_t nbtob(uint32_t neg) {
+    //const int32_t even = 0x2AAAAAAA, odd = 0x55555555;
+    //if ((neg & even) > (neg & odd)) throw std::overflow_error("value out of range");
+    const uint32_t mask = 0xAAAAAAAA;
+    return (mask ^ neg) - mask;
+}
+
+static inline uint32_t reverse(uint32_t x){
+    x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
+    x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
+    x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
+    x = ((x >> 8) & 0x00ff00ffu) | ((x & 0x00ff00ffu) << 8);
+    x = ((x >> 16) & 0xffffu) | ((x & 0xffffu) << 16);
+    return x;
+}
+
+
+static inline int in_range(int x, uint32_t nbits){
+    return x >= smallest_negabinary[nbits] && x <= largest_negabinary[nbits];
+}
+
+
+static inline uint32_t nb_to_nu(uint32_t nb, uint32_t size){
+    return reverse(nb ^ (nb >> 1)) >> 32 - ceil_log2(size);
+}
+
+static inline uint32_t get_nu(uint32_t rank, uint32_t size){
+    uint32_t nba = UINT32_MAX, nbb = UINT32_MAX;
+    size_t num_bits = ceil_log2(size);
+    if(rank % 2){
+        if(in_range(rank, num_bits)){
+            nba = btonb(rank);
+        }
+        if(in_range(rank - size, num_bits)){
+            nbb = btonb(rank - size);
+        }
+    }else{
+        if(in_range(-rank, num_bits)){
+            nba = btonb(-rank);
+        }
+        if(in_range(-rank + size, num_bits)){
+            nbb = btonb(-rank + size);
+        }
+    }
+    assert(nba != UINT32_MAX || nbb != UINT32_MAX);
+
+    if(nba == UINT32_MAX && nbb != UINT32_MAX){
+        return nb_to_nu(nbb, size);
+    }else if(nba != UINT32_MAX && nbb == UINT32_MAX){
+        return nb_to_nu(nba, size);
+    }else{ // Check MSB
+        int nu_a = nb_to_nu(nba, size);
+        int nu_b = nb_to_nu(nbb, size);
+        if(nu_a < nu_b){
+            return nu_a;
+        }else{
+            return nu_b;
+        }
+    }
+}
+
+
+int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+#ifdef VALIDATE
+    printf("func_called: %s\n", __func__);
+    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+#endif    
+    assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
+    assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
+    int size, rank, dtsize;
+    MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Type_size(recvtype, &dtsize);
+    memcpy((char*) recvbuf + sendcount*rank*dtsize, sendbuf, sendcount*dtsize);  
+    
+    int mask = 0x1;
+    int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
+    int block_first_mask = ~(inverse_mask - 1);
+    int next_req_s = 0, next_req_r = 0;
+    int step = 0;
+    int last_recv_done = 0;
+    while(inverse_mask > 0){
+      int partner;
+      if(rank % 2 == 0){
+          partner = mod(rank + nbtob((inverse_mask << 1) - 1), size); 
+      }else{
+          partner = mod(rank - nbtob((inverse_mask << 1) - 1), size); 
+      }   
+  
+      next_req_r = 0;
+      next_req_s = 0;
+  
+      // We start from 1 because 0 never sends block 0
+      for(size_t block = 1; block < size; block++){
+          // Get the position of the highest set bit using clz
+          // That gives us the first at which block departs from 0
+          int k = 31 - __builtin_clz(get_nu(block, size));
+          //int k = __builtin_ctz(get_nu(block, size));
+          // Check if this must be sent (recvd in allgather)
+          if(k == step || block == 0){
+              // 0 would send this block
+              size_t block_to_send, block_to_recv;
+              // I invert what to send and what to receive wrt reduce-scatter
+              if(rank % 2 == 0){
+                  // I am even, thus I need to shift by rank position to the right
+                  block_to_recv = mod(block + rank, size);
+                  // What to receive? What my partner is sending
+                  // Since I am even, my partner is odd, thus I need to mirror it and then shift
+                  block_to_send = mod(partner - block, size);
+              }else{
+                  // I am odd, thus I need to mirror it
+                  block_to_recv = mod(rank - block, size);
+                  // What to receive? What my partner is sending
+                  // Since I am odd, my partner is even, thus I need to mirror it and then shift   
+                  block_to_send = mod(block + partner, size);
+              }
+
+              int partner_send = (block_to_send != partner) ? partner : MPI_PROC_NULL;
+              int partner_recv = (block_to_recv != rank)    ? partner : MPI_PROC_NULL;
+
+              MPI_Sendrecv((char*) recvbuf + block_to_send*sendcount*dtsize, sendcount, sendtype, partner_send, 0,
+                           (char*) recvbuf + block_to_recv*recvcount*dtsize, recvcount, recvtype, partner_recv, 0,
+                           comm, MPI_STATUS_IGNORE);
+          }        
+      }
+    
+      mask <<= 1;
+      inverse_mask >>= 1;
+      block_first_mask >>= 1;
+      step++;
+    }
+    return MPI_SUCCESS;
+}
+
+#endif
+
+#if 0
 int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
@@ -1189,3 +1336,4 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     timer.reset("= swing_allgather_blocks_mpi (writing profile data to file)");
     return res;
 }
+#endif

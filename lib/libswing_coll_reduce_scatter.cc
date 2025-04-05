@@ -649,6 +649,8 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
   free(resbuf);
   free(displs);
   free(blocks_to_recv);
+  free(reqs_s);
+  free(reqs_r);
   return MPI_SUCCESS;
 }
 #endif
