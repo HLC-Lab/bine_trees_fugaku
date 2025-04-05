@@ -101,17 +101,17 @@ do
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     end_time=$(date +%s)
-    max_duration=$(( (end_time - start_time) * 2 ))
+    max_duration=$(( (end_time - start_time) * 10 ))
     # If max duration is less than 1 seconds, set it to 3 seconds
     if [ $max_duration -le 1 ]; then
-        max_duration=3
+        max_duration=10
     fi
-    echo "Running defaults for at most ${max_duration} seconds"
+    #echo "Running defaults for at most ${max_duration} seconds"
     
     for DEFAULT_ALGO in "linear" "pairwise" "modified_bruck" "linear_sync" "doublespread" "blacc3d" "blacc6d" "crp"
     do        
         export LIBSWING_ALLTOALL_ALGO_FAMILY="DEFAULT" 
-        timeout $max_duration ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_alltoall_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+        ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_alltoall_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -145,6 +145,16 @@ do
                         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                     fi
                 done
+
+                # Run MPI version
+                export LIBSWING_ALLTOALL_ALGO_FAMILY="SWING" 
+                export LIBSWING_ALLTOALL_ALGO_LAYER="MPI" 
+                export LIBSWING_ALLTOALL_ALGO="LOG"
+                timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+                sleep 2 # To avoid running the next job to early in the case we killed this one
+                ALGO_FNAME=${LIBSWING_ALLTOALL_ALGO_FAMILY}-${LIBSWING_ALLTOALL_ALGO}-${LIBSWING_ALLTOALL_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi                
             fi
         
             # Run Bruck (only if PORTS==1)

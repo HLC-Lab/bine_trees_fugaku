@@ -9,7 +9,7 @@ export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="SWING"
 export LIBSWING_REDUCE_SCATTER_ALGO="VEC_HALVING_CONT_PERMUTE" 
 export LIBSWING_REDUCE_SCATTER_ALGO_LAYER="MPI" 
 FUNC_NAME=$(mpirun -n 4 --oversubscribe ./bench/bench_validate ${COLLECTIVE} "INT32" "131072" "4" 2>/dev/null | grep "func_called" | cut -d ':' -f 2 | head -n 1 | tr -d ' ')
-[ "${FUNC_NAME}" == "swing_reduce_scatter_mpi_contiguous" ] || { echo "ERROR: Wrong function called for ${LIBSWING_REDUCE_SCATTER_ALGO_FAMILY} ${LIBSWING_REDUCE_SCATTER_ALGO} ${LIBSWING_REDUCE_SCATTER_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
+[ "${FUNC_NAME}" == "swing_reduce_scatter_mpi_new" ] || { echo "ERROR: Wrong function called for ${LIBSWING_REDUCE_SCATTER_ALGO_FAMILY} ${LIBSWING_REDUCE_SCATTER_ALGO} ${LIBSWING_REDUCE_SCATTER_ALGO_LAYER}: ${FUNC_NAME}"; exit 1; }
 
 # Check that I call the right functions
 export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="SWING" 

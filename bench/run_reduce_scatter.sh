@@ -102,17 +102,17 @@ do
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     end_time=$(date +%s)
-    max_duration=$(( (end_time - start_time) * 2 ))
+    max_duration=$(( (end_time - start_time) * 10 ))
     # If max duration is less than 1 seconds, set it to 3 seconds
     if [ $max_duration -le 1 ]; then
-        max_duration=3
+        max_duration=10
     fi
-    echo "Running defaults for at most ${max_duration} seconds"    
+    #echo "Running defaults for at most ${max_duration} seconds"    
     
-    for DEFAULT_ALGO in "non-overlapping" "recursive_halving" "ring"
+    for DEFAULT_ALGO in "recursive_halving" "ring" # "non-overlapping" 
     do        
         export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="DEFAULT" 
-        timeout $max_duration ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_scatter_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+        ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_scatter_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -142,23 +142,37 @@ do
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done        
+
+
+            if [ $PORTS -eq 1 ]; then
+                export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="SWING" 
+                export LIBSWING_REDUCE_SCATTER_ALGO_LAYER="MPI" 
+                export LIBSWING_REDUCE_SCATTER_ALGO="VEC_HALVING_CONT_PERMUTE"
+                timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+                sleep 2 # To avoid running the next job to early in the case we killed this one
+                ALGO_FNAME=${LIBSWING_REDUCE_SCATTER_ALGO_FAMILY}-${LIBSWING_REDUCE_SCATTER_ALGO}-${LIBSWING_REDUCE_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+            fi
+
         fi
     done
 
-    PORTS=1
-    # Run recdoub
-    export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="RECDOUB" 
-    export LIBSWING_REDUCE_SCATTER_ALGO_LAYER="UTOFU" 
-    export LIBSWING_REDUCE_SCATTER_ALGO="VEC_HALVING_CONT_PERMUTE"    
-    for SEGMENT_SIZE in 0 #4096 65536 1048576
-    do                
-        if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
-            LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
-            ALGO_FNAME=${LIBSWING_REDUCE_SCATTER_ALGO_FAMILY}-${LIBSWING_REDUCE_SCATTER_ALGO}-${LIBSWING_REDUCE_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
-            mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
-            if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
-        fi
-    done    
+    #PORTS=1
+    #export LIBSWING_NUM_PORTS=${PORTS}
+    ## Run recdoub
+    #export LIBSWING_REDUCE_SCATTER_ALGO_FAMILY="RECDOUB" 
+    #export LIBSWING_REDUCE_SCATTER_ALGO_LAYER="UTOFU" 
+    #export LIBSWING_REDUCE_SCATTER_ALGO="VEC_HALVING_CONT_PERMUTE"    
+    #for SEGMENT_SIZE in 0 #4096 65536 1048576
+    #do                
+    #    if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+    #        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+    #        ALGO_FNAME=${LIBSWING_REDUCE_SCATTER_ALGO_FAMILY}-${LIBSWING_REDUCE_SCATTER_ALGO}-${LIBSWING_REDUCE_SCATTER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+    #        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+    #        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+    #    fi
+    #done    
     echo " ${GREEN}[Done]${NC}"
 done
 

@@ -101,17 +101,17 @@ do
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     end_time=$(date +%s)
-    max_duration=$(( (end_time - start_time) * 2 ))
+    max_duration=$(( (end_time - start_time) * 10 ))
     # If max duration is less than 1 seconds, set it to 3 seconds
     if [ $max_duration -le 1 ]; then
-        max_duration=3
+        max_duration=10
     fi
-    echo "Running defaults for at most ${max_duration} seconds"    
+    #echo "Running defaults for at most ${max_duration} seconds"    
     
-    for DEFAULT_ALGO in "simple" "linear_sync" "binomial" "basic_linear"
+    for DEFAULT_ALGO in "simple" "binomial" #"basic_linear" "linear_sync" 
     do        
         export LIBSWING_GATHER_ALGO_FAMILY="DEFAULT" 
-        timeout $max_duration ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_gather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+        ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_gather_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
         if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -159,25 +159,38 @@ do
                 fi
             done
             unset LIBSWING_GATHER_DISTANCE
-        fi
-    done
 
-    PORTS=1
-    if [ $actual_count -ge $PORTS ]; then
-        # Run recdoub
-        export LIBSWING_GATHER_ALGO_FAMILY="RECDOUB" 
-        export LIBSWING_GATHER_ALGO_LAYER="UTOFU" 
-        export LIBSWING_GATHER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"    
-        for SEGMENT_SIZE in 0 #4096 65536 1048576
-        do                
-            if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
-                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+            if [ $PORTS -eq 1 ]; then
+                export LIBSWING_GATHER_ALGO_FAMILY="SWING" 
+                export LIBSWING_GATHER_ALGO_LAYER="MPI" 
+                export LIBSWING_GATHER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"
+                timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+                sleep 2 # To avoid running the next job to early in the case we killed this one
                 ALGO_FNAME=${LIBSWING_GATHER_ALGO_FAMILY}-${LIBSWING_GATHER_ALGO}-${LIBSWING_GATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                 mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                 if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
             fi
-        done  
-    fi
+
+        fi
+    done
+
+    #PORTS=1
+    #export LIBSWING_NUM_PORTS=${PORTS}
+    #if [ $actual_count -ge $PORTS ]; then
+    #    # Run recdoub
+    #    export LIBSWING_GATHER_ALGO_FAMILY="RECDOUB" 
+    #    export LIBSWING_GATHER_ALGO_LAYER="UTOFU" 
+    #    export LIBSWING_GATHER_ALGO="BINOMIAL_TREE_CONT_PERMUTE"    
+    #    for SEGMENT_SIZE in 0 #4096 65536 1048576
+    #    do                
+    #        if [ $SEGMENT_SIZE -lt $total_msg_size ]; then
+    #            LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}                    
+    #            ALGO_FNAME=${LIBSWING_GATHER_ALGO_FAMILY}-${LIBSWING_GATHER_ALGO}-${LIBSWING_GATHER_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+    #            mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+    #            if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+    #        fi
+    #    done  
+    #fi
     echo " ${GREEN}[Done]${NC}"
 done
 
