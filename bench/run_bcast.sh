@@ -204,7 +204,7 @@ do
                 export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
                 export LIBSWING_BCAST_ALGO_LAYER="MPI" 
                 export LIBSWING_BCAST_ALGO="BINOMIAL_TREE"
-                timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+                timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
                 sleep 2 # To avoid running the next job to early in the case we killed this one
                 ALGO_FNAME=${LIBSWING_BCAST_ALGO_FAMILY}-${LIBSWING_BCAST_ALGO}-${LIBSWING_BCAST_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                 mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -235,7 +235,7 @@ do
                     export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
                     export LIBSWING_BCAST_ALGO_LAYER="MPI" 
                     export LIBSWING_BCAST_ALGO="SCATTER_ALLGATHER"
-                    timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${actual_count} ${iterations}
+                    timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
                     sleep 2 # To avoid running the next job to early in the case we killed this one
                     ALGO_FNAME=${LIBSWING_BCAST_ALGO_FAMILY}-${LIBSWING_BCAST_ALGO}-${LIBSWING_BCAST_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
