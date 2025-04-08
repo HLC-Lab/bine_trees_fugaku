@@ -1124,7 +1124,8 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
                     if(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU){
                         res = swing_common->swing_reduce_scatter_utofu(sendbuf, recvbuf, datatype, op, blocks_info, comm);
                     }else{
-                        res = swing_common->swing_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, recvcounts, datatype, op, blocks_info, comm);
+                        res = swing_common->swing_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+		
                         //res = swing_common->swing_reduce_scatter_mpi(sendbuf, recvbuf, datatype, op, blocks_info, comm);
                     }        
         

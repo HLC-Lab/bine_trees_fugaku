@@ -910,8 +910,6 @@ int SwingCommon::swing_bcast_scatter_allgather(void *buffer, int count, MPI_Data
                 swing_utofu_wait_recv(utofu_descriptor, port, step + 1, segments_max_put_size - 1);
             }
 
-            utofu_descriptor->port_info[port].completed_send = 0;                               
-
             min_block_resident = std::min(min_block_resident, min_block_r);
             num_blocks *= 2;
         }
