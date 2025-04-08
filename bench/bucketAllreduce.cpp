@@ -1,3 +1,6 @@
+/***************************************************************************
+ *   Name Seydou BA
+ ***************************************************************************/
 
 /***************************************************************************
 AllreduceRSAG implementation from:
@@ -23,20 +26,95 @@ https://github.com/HLC-Lab/swing-allreduce-sim/blob/98ad4ebd58b54d4de55291d9d8fc
 
 using namespace std;
 
+// Allocate a new memory buffer on CPU or GPU.
 double* alloc(size_t size) {
     return new double[size];
 }
+// Deallocate an allocated memory buffer.
 void dealloc(double* buffer) {
     delete[] buffer;
 }
+
+// Copy data from one memory buffer to another on CPU or GPU.
+// Both buffers must resize on the same device.
 void copy(double* dst, double* src, size_t size) {
     std::memcpy((void*) dst, (void*) src, size * sizeof(double));
 }
 
+// Copy data from one memory buffer to another on CPU or GPU.
+// Both buffers must resize on the same device.
 void reduce(double* dst, double* src, size_t size) {
     // Accumulate values from `src` into `dst` on the CPU.
     for(size_t i = 0; i < size; i++) {
         dst[i] += src[i];
+    }
+}
+
+void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
+    if(datatype == MPI_INT32_T){
+        const int32_t *in = (const int32_t *)inbuf;
+        int32_t *inout = (int32_t *)inoutbuf;
+        if(op == MPI_SUM){
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
+            for (int i = 0; i < count; i++) {
+                inout[i] += in[i];
+            }
+        }else{
+            //fprintf(stderr, "Unknown reduction op\n");
+            //exit(EXIT_FAILURE);
+            // We assume this is the custom VOID operator
+        }
+    }else if(datatype == MPI_INT){
+        const int *in = (const int *)inbuf;
+        int *inout = (int *)inoutbuf;
+        if(op == MPI_SUM){
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
+            for (int i = 0; i < count; i++) {
+                inout[i] += in[i];
+            }
+        }else{
+            fprintf(stderr, "Unknown reduction op\n");
+            exit(EXIT_FAILURE);
+        }
+    }else if(datatype == MPI_CHAR){
+        const char *in = (const char *)inbuf;
+        char *inout = (char *)inoutbuf;
+        if(op == MPI_SUM){
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
+            for (int i = 0; i < count; i++) {
+                inout[i] += in[i];
+            }
+        }else{
+            fprintf(stderr, "Unknown reduction op\n");
+            exit(EXIT_FAILURE);
+        }
+    }else if(datatype == MPI_FLOAT){
+        const float *in = (const float *)inbuf;
+        float *inout = (float *)inoutbuf;
+        if(op == MPI_SUM){
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
+            for (int i = 0; i < count; i++) {
+                inout[i] += in[i];
+            }
+        }else{
+            fprintf(stderr, "Unknown reduction op\n");
+            exit(EXIT_FAILURE);
+        }
+    }else if(datatype == MPI_DOUBLE){
+        const double *in = (const double *)inbuf;
+        double *inout = (double *)inoutbuf;
+        if(op == MPI_SUM){
+//#pragma omp parallel for // Should be automatically parallelized by the compiler
+            for (int i = 0; i < count; i++) {
+                inout[i] += in[i];
+            }
+        }else{
+            fprintf(stderr, "Unknown reduction op\n");
+            exit(EXIT_FAILURE);
+        }
+    }else{
+        fprintf(stderr, "Unknown reduction datatype\n");
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -281,7 +359,7 @@ void allreduceRing(double* data, double* output, int count)
 #define LDIM 3
 #define TDIM 6
 
-/*
+/***
 // Convert a rank id into a list of d-dimensional coordinates
 static void getCoordFromId(int id, int* dimensions, int dimensions_num, int* coord, int m_p){
     int nnodes = m_p;
@@ -299,7 +377,7 @@ static int getIdFromCoord(int* coords, int* dimensions, int dimensions_num){
     int coord;
     for (int i = dimensions_num - 1; i >= 0; i--) {
         coord = coords[i];
-        if (1) {                // cart_ptr->topo.cart.periodic[i]
+        if (1) {            // cart_ptr->topo.cart.periodic[i]
             if (coord >= dimensions[i])
                 coord = coord % dimensions[i];
             else if (coord < 0) {
@@ -318,13 +396,12 @@ static int mod(int a, int b){
     int r = a % b;
     return r < 0 ? r + b : r;
 }
-
-*/
+***/
 
 void ringRedScatAG(double* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat){
-    // Partition the elements of the array into N approximately equal-sized
-    // chunks, where N is the MPI size.
-    const int segment_size = count / nProc;   //count=data_size[i], nProc=dimensions_sizes[current_d]
+    // Perform ring reduce-scatter or allgather on each line of a selected dimension.
+    
+    const int segment_size = count / nProc;
     std::vector<size_t> segment_sizes(nProc, segment_size);
 
     const size_t residual = count % nProc;
@@ -338,46 +415,37 @@ void ringRedScatAG(double* data, int count, int nProc, int rank, int recvfrom, i
     for (size_t i = 1; i < segment_ends.size(); ++i) {
         segment_ends[i] = segment_sizes[i] + segment_ends[i - 1];
     }
-
     // The last segment should end at the very end of the buffer.
     assert(segment_ends[nProc - 1] == count);
     
     // Allocate the output buffer.
-  //  double* output = new double[count];
-    // Copy your data to the output buffer to avoid modifying the input buffer.
-    // copy(output, data, count);
-  //  std::memcpy(output, data, count * sizeof(double));  // ouput = recvbuf, data = sendbuf 
-    // OR, in this case where output is the input buffer
+    // The updated data set is used on subsequent reduce-scatter/allgather. 
      double* output = data;
   
-  // printf("Leaving now \n\n");
-  // MPI_Finalize();
-  // exit(EXIT_SUCCESS);
     // Allocate a temporary buffer to store incoming data.
     // We know that segment_sizes[0] is going to be the largest buffer size,
     // because if there are any overflow elements at least one will be added to
     // the first segment.
-    double* buffer = new double[segment_sizes[0]];
+    double* buffer = alloc(segment_sizes[0]);
 
-    // Receive from your left neighbor with wrap-around. // recvfrom[current_d], sendto[current_d]
-    const size_t recv_from = recvfrom; // (rank - 1 + nProc) % nProc;  
-
-    // Send to your right neighbor with wrap-around.
-    const size_t send_to = sendto;   //(rank + 1) % nProc;
+    // Recv_from/send_to on each dimention is defined for each node before hand.
+    const size_t recv_from = recvfrom;      // (rank - 1 + nProc) % nProc;  
+    const size_t send_to = sendto;          //(rank + 1) % nProc;
     
     MPI_Status recv_status;
     MPI_Request recv_req;
     MPI_Datatype datatype = MPI_DOUBLE;
-    int send_chunk, recv_chunk, chunk_l, chunk_r;
-    
+    int send_chunk, recv_chunk;
+
+    // Selecting algorithm (0-1 reduce-scatter, 2-3 allgather), and direction (0,2 left dataset, 1,3 right dataset
     if(redscat<2){
         for (int i = 0; i < nProc - 1; i++) {
             if(redscat == 0){
-		send_chunk = (rank - i - 1 + nProc) % nProc;            // Where to receive data, rank = relcoord[current_d]
-		recv_chunk = (rank - i + nProc) % nProc;                // What data to send
+                recv_chunk = (rank - i - 2 + nProc) % nProc;            // Where to receive data, rank = relcoord[current_d]
+                send_chunk = (rank - i - 1 + nProc) % nProc;                
             }else{
-            	recv_chunk = (rank - i - 1 + nProc) % nProc;            
-		send_chunk = (rank - i + nProc) % nProc;                
+                recv_chunk = (rank + 2 + i) % nProc;
+                send_chunk = (rank + 1 + i) % nProc;
             }
             
             double* segment_send = &(output[segment_ends[send_chunk] -
@@ -395,16 +463,17 @@ void ringRedScatAG(double* data, int count, int nProc, int rank, int recvfrom, i
             // Wait for recv to complete before reduction
             MPI_Wait(&recv_req, &recv_status);
 
-            reduce(segment_update, buffer, segment_sizes[recv_chunk]);
+        //    reduce(segment_update, buffer, segment_sizes[recv_chunk]);
+            reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, MPI_SUM);
         }
     }else{
         for (int i = 0; i < nProc - 1; ++i) {
             if(redscat == 2){
-                recv_chunk = (rank - i + 1 + nProc) % nProc;
+                recv_chunk = (rank - i - 1 + nProc) % nProc;
                 send_chunk = (rank - i + nProc) % nProc;
             }else{
-                send_chunk = (rank - i + 1 + nProc) % nProc;
-                recv_chunk = (rank - i + nProc) % nProc;
+		recv_chunk = (rank + i + 1 + nProc) % nProc;
+                send_chunk = (rank + i + nProc) % nProc;
             }
             // Segment to send - at every iteration we send segment (r+1-i)
             double* segment_send = &(output[segment_ends[send_chunk] -
@@ -419,13 +488,11 @@ void ringRedScatAG(double* data, int count, int nProc, int rank, int recvfrom, i
                     0, MPI_COMM_WORLD, &recv_status);
         }
     }
-    //  printf("So far so good, got out  \n\n");
-   //  delete [] output;
     delete [] buffer;
 }
 
-
-void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
+//void buckAllreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm)
+void buckAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
 {    
     int size, myrank, x, y, z;
     int dimensions, dimensions_sizes[3];
@@ -446,14 +513,16 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
     	MPI_Abort(MPI_COMM_WORLD, 1);
     }
     if (dimensions == 1){
-    //	fprintf("My Shape: X= %d");
+   // 	printf("My Shape: X= %d", x);
         dimensions_sizes[0] = x;
     }else if(dimensions == 2){
+   //   printf("My Shape: X= %d", x);
         dimensions_sizes[0] = x;
-    //    printf(", Y= %d", y);
+   //     printf(", Y= %d", y);
         dimensions_sizes[1] = y;
     }else if(dimensions == 3){
-        dimensions_sizes[0] = x;
+    //   printf("My Shape: X= %d", x);
+	dimensions_sizes[0] = x;
     //    printf(", Y= %d", y);
         dimensions_sizes[1] = y;
     //    printf(", Z= %d", z);
@@ -463,21 +532,17 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
         exit(-1);
     }
     
-   // int count_0 = count;
     double *data = new double[count];
     memcpy((void*) data, (void*) sendbuf, count * sizeof(double));
-   // for (int i=0; i<count; i++)
-   //     data[i]=sendbuf[i];
-
     
  // Adjust count to the number of data sets
     while(count % (2*dimensions)){
        count += 1;
     }
 
+ // Get the neighbor nodes on each dimension
     int recvfrom[LDIM];
     int sendto[LDIM];
-
    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
     rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
     if (rc != FJMPI_SUCCESS) {
@@ -492,7 +557,7 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
             printf("rank to xy : rank= %d, (X,Y)=( %d, %d ) ",myrank, relcoord[0], relcoord[1]);
             break;
         case 3:
-            fprintf(stderr, "rank to xyz : rank= %d, (X,Y,Z)=( %d, %d, %d ) \n", myrank, relcoord[0], relcoord[1], relcoord[2]);
+            printf(stderr, "rank to xyz : rank= %d, (X,Y,Z)=( %d, %d, %d ) \n", myrank, relcoord[0], relcoord[1], relcoord[2]);
             break;
         default:
             break;
@@ -501,7 +566,7 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
     for(size_t i = 0; i < dimensions; i++){
         int coord[LDIM]={0,0,0};
         for(size_t j=0; j < dimensions; j++){ coord[j] = relcoord[j]; }
-
+        // Next node
         coord[i] = (relcoord[i] + 1) % dimensions_sizes[i];
     //    sendto[i] = getIdFromCoord(coord, dimensions_sizes, dimensions);
         rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, 1, &outppn, &sendto[i]);
@@ -509,20 +574,17 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
             fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-    //	fprintf(stderr, "Rank: %d, Coord= %d, SendTo: %d, and recvFrom: %d \n",myrank, relcoord[0], sendto[i], recvfrom[i]);
-//    	printf("Rank: %d, Coord= {%d,%d,%d}, SendTo: %d, Coord= {%d,%d,%d} \n",myrank, relcoord[0], relcoord[1], relcoord[2], sendto[i], coord[0], coord[1], coord[2] );
-    //    coord[i] = mod((relcoord[i] - 1), m_dimensions_sizes[i]);
-        coord[i] = (relcoord[i] - 1 + dimensions_sizes[i]) % dimensions_sizes[i];
+          // Previous node
+        coord[i] = (relcoord[i] - 1 + dimensions_sizes[i]) % dimensions_sizes[i];   //
     //    recvfrom[i] = getIdFromCoord(coord, dimensions_sizes, dimensions);
         rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, dimensions, &outppn, &recvfrom[i]);
         if (rc != FJMPI_SUCCESS) {
             fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
            MPI_Abort(MPI_COMM_WORLD, 1);
         }
-    //	fprintf(stderr, "Rank: %d, Coord= %d, SendTo: %d, and recvFrom: %d \n",myrank, relcoord[0], sendto[i], recvfrom[i]);
-//	printf("Rank: %d, Coord= {%d,%d,%d}, RecvFrom: %d, Coord= {%d,%d,%d} \n",myrank, relcoord[0], relcoord[1], relcoord[2], recvfrom[i], coord[0], coord[1], coord[2] );
     }
     
+ // Divide data into 2*num_dimensions datasets (buckets) and perform allreduce on each.
     size_t data_size[LDIM];
     size_t offsets[LDIM];
     for(int i = 0; i < dimensions; i++){
@@ -530,10 +592,12 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
         offsets[i] = 0;
     }    
     
+    // Saving the offsets from reduce-scatter loops for corresponding allgather loops.
     size_t loop_offset_r[dimensions*dimensions];
     size_t loop_offset_l[dimensions*dimensions];
     size_t loop_data_size[dimensions*dimensions];
 
+ // Reduce-scatter loops   
     for(int s = 0; s < dimensions; s++){
         for(int i = 0; i < dimensions; i++){
             int current_d = (i + s) % dimensions;
@@ -541,53 +605,37 @@ void ringAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
             size_t offset_r = (2*i+1)*(count/(2*dimensions)) + offsets[i];
             assert(offset_l + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
             
-	    loop_offset_l[s*dimensions+i]= offset_l;
+	        loop_offset_l[s*dimensions+i]= offset_l;
             loop_offset_r[s*dimensions+i]= offset_r;
             loop_data_size[s*dimensions+i]= data_size[i];
 
-            /*
-            if(i == 0){
-                printf("[%d] s: %d i: %d offset_l: %d offset_r: %d\n", m_r, s, i, offset_l, offset_r);
-            }
-            */
-        
-            // Ring allreduce with from data with src and dst
             ringRedScatAG(data + offset_l, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 0);
-
-	 //   ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 0);
-            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], dimensions_sizes[current_d] - relcoord[current_d] - 1, sendto[current_d], recvfrom[current_d], 1);
+            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], sendto[current_d], recvfrom[current_d], 1);
 	    
-	    if(s != dimensions - 1){
-		data_size[i] /= dimensions_sizes[current_d];
-		offsets[i] += relcoord[current_d]*data_size[i];
-	    }
-	}
+            if(s != dimensions - 1){
+                data_size[i] /= dimensions_sizes[current_d];
+                offsets[i] += relcoord[current_d]*data_size[i];
+            }
+        }
    }
-
-   for(int s = dimensions - 1; s >= 0; s--){
+   
+ // Allgather loops
+    for(int s = dimensions - 1; s >= 0; s--){
         for(int i = dimensions - 1; i >= 0; i--){
             int current_d = (i + s) % dimensions;
-          //  offset_l = (2*i)*(count/(2*dimensions))   + offsets[i];
-          //  offset_r = (2*i+1)*(count/(2*dimensions)) + offsets[i];
             size_t offset_l = loop_offset_l[s*dimensions+i];
             size_t offset_r = loop_offset_r[s*dimensions+i];
             data_size[i] = loop_data_size[s*dimensions+i];
- 	        assert(offset_l + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
+            assert(offset_l + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
             
             ringRedScatAG(data + offset_l, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 2);
-	//    ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 2);
-            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], dimensions_sizes[current_d] - relcoord[current_d] - 1, sendto[current_d], recvfrom[current_d], 3);
-            
-        //    if(s != 0){   // Or is it (s != 0) ? (s != dimensions - 1)
-        //        data_size[i] *= dimensions_sizes[current_d];
-        //        offsets[i] -= relcoord[current_d]*data_size[i];
-        //    }
+            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], sendto[current_d], recvfrom[current_d], 3);
         }
     }
     memcpy((void*) recvbuf, (void*) data, count * sizeof(double));
     delete [] data;
 }
-   
+
     
 /**
  * Program entry
@@ -600,40 +648,48 @@ int main(int argc, char* argv[])
 	MPI_Comm_rank(MPI_COMM_WORLD, &thisProc);
 	MPI_Comm_size(MPI_COMM_WORLD, &nProc);
 
-	int count = nProc*12;  // LCM of 4 and 6 
-	double *sendbuf = new double[count];
+	int count = nProc*12;  // *6 //
 
+	// initialize sendbuf
+	double *sendbuf = new double[count];
 	for (size_t i = 0; i < count; i++)
         sendbuf[i] = (i+1)*(thisProc+1);
 
-    double *recvbufGround = new double[count];
-    allreduce(sendbuf, recvbufGround, count);
-
+    // initialize recvbuf
     double *recvbuf = new double[count];
-    allreduceRing(sendbuf, recvbuf, count);
-    
+    double *recvbufGround = new double[count];
     double *recvbuf_b = new double[count];
-    ringAllreduce(sendbuf, recvbuf_b, count);
+    
+ // Ref. allreduce implementations 
+    allreduce(sendbuf, recvbufGround, count);    // Default MPI_allreduce
+    // allreduceRSAG(sendbuf, recvbuf, nProc);  // Reduce-scatter/allgather 
+    allreduceRing(sendbuf, recvbuf, count);      // Topology un-aware Ring_allreduce  
 
     bool test = true;
-    for (int i=0; i<nProc; i++){
-        if (recvbuf[i]!=recvbufGround[i]) test=false;
+    for (int i=0; i<count; i++){
+//        printf("%f\n", recvbufGround[i]);
+        if (recvbuf[i]!=recvbufGround[i])             test=false;
     }
-    if (test)
-        cout<<"AllreduceRing Test passed"<<endl;
-    else
-        cout<<"AllreduceRing Test failed"<<endl;
+    if (thisProc == 0){
+        if (test)
+            cout<<"Ring Allreduce Test passed"<<endl;
+        else
+            cout<<"Ring Allreduce Test failed"<<endl;
+    }
 
+ //  Test bucket allgorithm
+    buckAllreduce(sendbuf, recvbuf_b, count);
     test = true;
     for (int i=0; i<count; i++){
-        printf("reduced value:%f, error margin %f\n", recvbuf_b[i], recvbufGround[i] - recvbuf_b[i]);
-        if (recvbufGround[i]!=recvbuf_b[i]) test=false;
+ //       printf("reduced value:%f\t, error margin %f\n", recvbuf_b[i], recvbufGround[i] - recvbuf_b[i]);
+        if (recvbufGround[i]!=recvbuf_b[i]) test=false ;
     }
-    if (test)
-        cout<<"Ring Allreduce Test passed"<<endl;
-    else
-        cout<<"Ring Allreduce Test failed"<<endl;
-        
+    if (thisProc == 0){
+        if (test)
+            cout<<"Bucket Allreduce Test passed"<<endl;
+        else
+            cout<<"Bucket Allreduce Test failed"<<endl;
+    }
 	MPI_Finalize();
 	exit(EXIT_SUCCESS);
 }
