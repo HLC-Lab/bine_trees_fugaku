@@ -43,7 +43,8 @@ done
 export MPI_OP="MPI_SUM"
 python3 generate_metadata.py ${EXP_ID} || exit 1
 
-for n in 1 8 64 512 4096 32768 262144 2097152 16777216 134217728
+#for n in 1 8 64 512 4096 32768 262144 2097152 16777216 134217728
+for n in 262144 2097152 16777216 134217728
 do
     iterations=0
     if [ $n -le 512 ]
