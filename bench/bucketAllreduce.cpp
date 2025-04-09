@@ -29,6 +29,8 @@ https://github.com/HLC-Lab/swing-allreduce-sim/blob/98ad4ebd58b54d4de55291d9d8fc
 #define LDIM 3
 #define TDIM 6
 
+#include <omp.h>
+
 using namespace std;
 
 void reduce_local(const void* inbuf, void* inoutbuf, int count, MPI_Datatype datatype, MPI_Op op) {
@@ -336,42 +338,101 @@ void buckAllreduce(double *sendbuf, double *recvbuf, MPI_Aint count)
     size_t loop_offset_r[dimensions*dimensions];
     size_t loop_offset_l[dimensions*dimensions];
     size_t loop_data_size[dimensions*dimensions];
+    size_t offset_ls[dimensions];
+    size_t offset_rs[dimensions];
+    size_t loop_data_sizes[dimensions];
+    // int current_ds[dimensions];
 
- // Reduce-scatter loops   
+    size_t data_offsets[2*dimensions];
+    size_t data_sizes[2*dimensions];
+    int current_ds[2*dimensions];
+    int recvfroms[2*dimensions], sendtos[2*dimensions];
+    int cur_dimensions_sizes[2*dimensions];
+    int cur_relcoord[2*dimensions];
+
+
     for(int s = 0; s < dimensions; s++){
         for(int i = 0; i < dimensions; i++){
             int current_d = (i + s) % dimensions;
-            size_t offset_l = (2*i)*(count/(2*dimensions))   + offsets[i];
-            size_t offset_r = (2*i+1)*(count/(2*dimensions)) + offsets[i];
-            assert(offset_l + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
+            data_offsets[2*i] = (2*i)*(count/(2*dimensions))   + offsets[i];
+            data_offsets[2*i+1] = (2*i+1)*(count/(2*dimensions)) + offsets[i];
+            data_sizes[2*i] = data_size[i];
+            data_sizes[2*i+1] = data_size[i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+//	    printf("recv %d, sendto %d", recvfroms[2*i],sendtos[2*i]);
+
+            assert(data_offsets[2*i] + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
             
-	        loop_offset_l[s*dimensions+i]= offset_l;
-            loop_offset_r[s*dimensions+i]= offset_r;
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+
+            loop_offset_l[s*dimensions+i]= data_offsets[2*i];
+            loop_offset_r[s*dimensions+i]= data_offsets[2*i+1];
             loop_data_size[s*dimensions+i]= data_size[i];
 
-            ringRedScatAG(data + offset_l, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 0);
-            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], sendto[current_d], recvfrom[current_d], 1);
-	    
             if(s != dimensions - 1){
                 data_size[i] /= dimensions_sizes[current_d];
                 offsets[i] += relcoord[current_d]*data_size[i];
             }
         }
-   }
-   
+
+    /*
+	int tid;
+	#pragma omp parallel private(tid) num_threads(2*dimensions)
+	{
+    		tid = omp_get_thread_num();
+		double* tmp_buf = data + data_offsets[tid];
+		printf("tid %d\n", tid);
+    		ringRedScatAG(data + data_offsets[tid], data_sizes[tid], cur_dimensions_sizes[tid], cur_relcoord[tid], recvfroms[tid], sendtos[tid], tid%2);
+	}
+    */
+        #pragma omp parallel for
+        for (int i=0; i < 2*dimensions; i++) {
+            ringRedScatAG(data + data_offsets[i], data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2);
+	    }
+	}
+    	//   #pragma omp barrier 
+
  // Allgather loops
     for(int s = dimensions - 1; s >= 0; s--){
         for(int i = dimensions - 1; i >= 0; i--){
             int current_d = (i + s) % dimensions;
-            size_t offset_l = loop_offset_l[s*dimensions+i];
-            size_t offset_r = loop_offset_r[s*dimensions+i];
-            data_size[i] = loop_data_size[s*dimensions+i];
-            assert(offset_l + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
-            
-            ringRedScatAG(data + offset_l, data_size[i], dimensions_sizes[current_d], relcoord[current_d], recvfrom[current_d], sendto[current_d], 2);
-            ringRedScatAG(data + offset_r, data_size[i], dimensions_sizes[current_d], relcoord[current_d], sendto[current_d], recvfrom[current_d], 3);
+            data_offsets[2*i] = loop_offset_l[s*dimensions+i];
+            data_offsets[2*i+1] = loop_offset_r[s*dimensions+i];
+            data_sizes[2*i] = loop_data_size[s*dimensions+i];
+            data_sizes[2*i+1] = loop_data_size[s*dimensions+i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
         }
+    /*
+    int tid;
+    #pragma omp parallel private(tid) num_threads(2*dimensions)
+    {
+        tid = omp_get_thread_num();
+        double* tmp_buf = data + data_offsets[tid];
+        printf("tid %d\n", tid);
+        ringRedScatAG(data + data_offsets[tid], data_sizes[tid], cur_dimensions_sizes[tid], cur_relcoord[tid], recvfroms[tid], sendtos[tid], tid%2+2);
     }
+    */
+    
+    //    #pragma omp parallel for
+        for (int j=0; j < 2*dimensions; j++) {
+        //    int tid = omp_get_thread_num();
+            ringRedScatAG(data + data_offsets[j], data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2);
+        }
+	}
     memcpy((void*) recvbuf, (void*) data, count * sizeof(double));
     delete [] data;
 }
