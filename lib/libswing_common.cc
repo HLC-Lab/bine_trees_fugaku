@@ -2369,7 +2369,8 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
 #endif
 
 
-void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char* buffer, int port, size_t data_offset, size_t buffer_offset, size_t real_size){
+void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
+                                char* buffer, int port, size_t data_offset, size_t buffer_offset, size_t real_size){
     // Perform ring reduce-scatter or allgather on each line of a selected dimension.
     const int segment_size = count / nProc;
     std::vector<size_t> segment_sizes(nProc, segment_size);
@@ -2427,7 +2428,10 @@ void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int 
             swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
             this->utofu_descriptor->port_info[port].completed_recv[0] = 0;
             char *segment_update = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
-            reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
+            #pragma omp critical
+            {
+                reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
+            }
             swing_utofu_wait_sends(this->utofu_descriptor, port, issued_sends);
         }
     }else{
@@ -2529,8 +2533,8 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
 
     char *data, *segment_buf;
     bool free_tmpbuf = false;
-    size_t tmpbuf_size = count*dtsize + ((count / size) + 1)*dtsize; // We need space to store both the data and the segment buffer
-
+    //size_t tmpbuf_size = count*dtsize + ((count / size) + 1)*dtsize; // We need space to store both the data and the segment buffer
+    size_t tmpbuf_size = count*dtsize*2; // We need space to store both the data and the segment buffer
 
     if(tmpbuf_size > env.prealloc_size){
         data = (char*) malloc(tmpbuf_size);
@@ -2633,9 +2637,10 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
             }
         }
 
-        //#pragma omp parallel for
+        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
         for (int i=0; i < 2*dimensions; i++) {
-            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf, i, data_offsets[i]*dtsize, count * dtsize, real_count*dtsize);
+            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*i, \
+                          i, data_offsets[i]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*i, real_count*dtsize);
 	    }
 	}
 
@@ -2672,9 +2677,10 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
                 }
             }
         }
-
+        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
         for (int j=0; j < 2*dimensions; j++) {
-            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf, j, data_offsets[j]*dtsize, count * dtsize, real_count*dtsize);
+            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*j, \
+                          j, data_offsets[j]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*j, real_count*dtsize);
         }
 	}
     if(free_tmpbuf){
