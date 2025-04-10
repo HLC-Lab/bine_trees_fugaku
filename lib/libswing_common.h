@@ -81,7 +81,7 @@ typedef enum {
     SWING_ALGO_FAMILY_RECDOUB,
     // Bruck
     SWING_ALGO_FAMILY_BRUCK,
-    // Ring
+    // Ring/Bucket
     SWING_ALGO_FAMILY_RING,
 } swing_algo_family_t;
 
@@ -587,7 +587,12 @@ class SwingCommon {
         int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
         int swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
 
-        
+
+        /*******************************/
+        /************ BCAST ************/
+        /*******************************/
+        int bucket_allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);       
+
         /*******************************/
         /************ BCAST ************/
         /*******************************/                
