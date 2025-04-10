@@ -2413,7 +2413,6 @@ void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int 
                 send_chunk = (rank + 1 + i) % nProc;
             }
             
-
             // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv           
             size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][recv_from]), port, recv_from, utofu_descriptor->port_info[port].lcl_temp_stadd, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[recv_from], 0); 
             // Wait for notification from send_to
@@ -2440,15 +2439,45 @@ void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int 
 		        recv_chunk = (rank + i + 1 + nProc) % nProc;
                 send_chunk = (rank + i + nProc) % nProc;
             }
-            // Segment to send - at every iteration we send segment (r+1-i)
-            char* segment_send = &(output[segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize]);
 
-            // Segment to recv - at every iteration we receive segment (r-i)
-            char* segment_recv = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
-            MPI_Sendrecv(segment_send, segment_sizes[send_chunk],
-                         datatype, send_to, 0, segment_recv,
-                         segment_sizes[recv_chunk], datatype, recv_from,
-                         0, comm, &recv_status);
+            // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv           
+            size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][recv_from]), port, recv_from, utofu_descriptor->port_info[port].lcl_recv_stadd, 0, utofu_descriptor->port_info[port].rmt_recv_stadd[recv_from], 0); 
+            // Wait for notification from send_to
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
+
+            // Segment to send - at every iteration we send segment (r+1-i)
+            size_t segment_send_offset = (segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize) + data_offset;
+            size_t segment_recv_offset = (segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize) + data_offset;
+            size_t segment_send_bytes = segment_sizes[send_chunk]*dtsize; 
+            size_t segment_recv_bytes = segment_sizes[recv_chunk]*dtsize;
+                       
+            bool do_send = true, do_recv = true;
+            if(segment_send_offset > real_size){
+                do_send = false;
+                //printf("Skipping send [%ld, %ld] \n", segment_send_offset, segment_send_bytes); fflush(stdout);
+            }else if(segment_send_offset + segment_send_bytes > real_size){
+                segment_send_bytes = real_size - segment_send_offset;
+            }
+
+            if(segment_recv_offset > real_size){
+                do_recv = false;
+                //printf("Skipping recv [%ld, %ld] \n", segment_recv_offset, segment_recv_bytes); fflush(stdout);
+            }else if(segment_recv_offset + segment_recv_bytes > real_size){
+                segment_recv_bytes = real_size - segment_recv_offset;
+            }
+           
+            utofu_stadd_t lcl_addr, rmt_addr;
+            lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd          + segment_send_offset;
+            rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[send_to] + segment_send_offset;
+            if(do_send){            
+                issued_sends += swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][send_to]), port, send_to, lcl_addr, segment_send_bytes, rmt_addr, 0); 
+            }
+            if(do_recv){
+                size_t recvs_to_wait = ceil((float) segment_recv_bytes / (float) MAX_PUTGET_SIZE);
+                swing_utofu_wait_recv(this->utofu_descriptor, port, 0, 1 + recvs_to_wait - 1); // 1 + because we already waited the notify recv                
+            }
+            this->utofu_descriptor->port_info[port].completed_recv[0] = 0;
+            swing_utofu_wait_sends(this->utofu_descriptor, port, issued_sends);
         }
     }
 }
@@ -2604,7 +2633,6 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
             }
         }
 
-        printf("Doing iteration %d\n", s); fflush(stdout);
         //#pragma omp parallel for
         for (int i=0; i < 2*dimensions; i++) {
             ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf, i, data_offsets[i]*dtsize, count * dtsize, real_count*dtsize);
@@ -2635,16 +2663,16 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
         for (int j=0; j < 2*dimensions; j++) {
             if(s == dimensions - 1){
                 // Avoid overflowing the buffer
-                size_t offset_count = data_offsets[j] < real_count ? data_offsets[j] : real_count;
-                size_t count_t = data_sizes[j];
-                if(offset_count + count_t > real_count){
-                    count_t = real_count - offset_count;
+                if(data_offsets[j] < real_count){                    
+                    size_t count_t = data_sizes[j];
+                    if(data_offsets[j] + count_t > real_count){
+                        count_t = real_count - data_offsets[j];
+                    }
+                    memcpy((void*) ((char*) recvbuf + data_offsets[j]*dtsize), (void*) (data + data_offsets[j]*dtsize), count_t*dtsize);            
                 }
-                memcpy((void*) ((char*) recvbuf + offset_count*dtsize), (void*) (data + offset_count*dtsize), count_t*dtsize);            
             }
         }
 
-        printf("Doing iteration %d\n", s); fflush(stdout);
         for (int j=0; j < 2*dimensions; j++) {
             ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf, j, data_offsets[j]*dtsize, count * dtsize, real_count*dtsize);
         }
