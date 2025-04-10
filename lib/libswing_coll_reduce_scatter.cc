@@ -819,16 +819,18 @@ int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int c
     char *data, *segment_buf;
     bool free_tmpbuf = false;
     //size_t tmpbuf_size = count*dtsize + ((count / size) + 1)*dtsize; // We need space to store both the data and the segment buffer
-    size_t tmpbuf_size = count*dtsize*2; // We need space to store both the data and the segment buffer
+    size_t tmpbuf_size = count*dtsize*3; // We need space to store both the data and the segment buffer and the recvbuffer
 
     if(tmpbuf_size > env.prealloc_size){
         data = (char*) malloc(tmpbuf_size);
+        recvbuf = data + 2*count*dtsize;
         free_tmpbuf = true;
         swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
     }else{
-        // Still done to reset everything
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports); 
+        // Still done to reset everythin
         data = env.prealloc_buf;
+        recvbuf = data + 2*count*dtsize;
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports);         
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
@@ -933,6 +935,9 @@ int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int c
     size_t offset_to_copy = rank*(real_count / size)*dtsize;
     memcpy((void*) recvbuf, (void*) data + offset_to_copy, bytes_to_copy);
     if(free_tmpbuf){
+        for(int s = 0; s < dimensions*2; s++){
+            swing_utofu_dereg_buf(this->utofu_descriptor, data, s);
+        }
         free(data);
     }
     return MPI_SUCCESS;
