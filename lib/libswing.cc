@@ -1173,7 +1173,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
         case SWING_ALGO_FAMILY_RING:
-            return swing_common->bucket_allgather((char*) sendbuf, (char*) recvbuf, sendcount, sendtype, MPI_SUM, comm);
+            return swing_common->bucket_allgather((char*) sendbuf, (char*) recvbuf, sendcount*swing_common->get_size(), sendtype, MPI_SUM, comm);
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             switch(env.allgather_config.algo){
