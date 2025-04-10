@@ -2097,7 +2097,7 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
 }
 */
 
-void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char* buffer){
     // Perform ring reduce-scatter or allgather on each line of a selected dimension.
     
     const int segment_size = count / nProc;
@@ -2123,12 +2123,6 @@ void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int
     // The updated data set is used on subsequent reduce-scatter/allgather. 
     char* output = data;
   
-    // Allocate a temporary buffer to store incoming data.
-    // We know that segment_sizes[0] is going to be the largest buffer size,
-    // because if there are any overflow elements at least one will be added to
-    // the first segment.
-    char* buffer = new char[segment_sizes[0]*dtsize];
-
     // Recv_from/send_to on each dimention is defined for each node before hand.
     const size_t recv_from = recvfrom;      // (rank - 1 + nProc) % nProc;  
     const size_t send_to = sendto;          //(rank + 1) % nProc;
@@ -2180,7 +2174,6 @@ void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int
                          0, comm, &recv_status);
         }
     }
-    delete [] buffer;
 }
 #define LDIM 3
 #define TDIM 6
@@ -2228,14 +2221,24 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
        count += 1;
     }
 
-    char *data = new char[count*dtsize];
+    char *data, *segment_buf;
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*dtsize + (count / size) + 1; // We need space to store both the data and the segment buffer
+
+    if(tmpbuf_size > env.prealloc_size){
+        data = (char*) malloc(tmpbuf_size);
+        free_tmpbuf = true;
+    }else{
+        data = env.prealloc_buf;        
+    }
+    segment_buf = data + count*dtsize;
+
     memcpy((void*) data, (void*) sendbuf, count * dtsize);
     
-
     // Get the neighbor nodes on each dimension
     int recvfrom[LDIM];
     int sendto[LDIM];
-   // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
+    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
     rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
     if (rc != FJMPI_SUCCESS) {
    	    fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
@@ -2313,7 +2316,7 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
 
         //#pragma omp parallel for
         for (int i=0; i < 2*dimensions; i++) {
-            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm);
+            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf);
 	    }
 	}
 
@@ -2337,10 +2340,12 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
         }
 
         for (int j=0; j < 2*dimensions; j++) {
-            ringRedScatAG(data + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm);
+            ringRedScatAG(data + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf);
         }
 	}
     memcpy((void*) recvbuf, (void*) data, real_count * dtsize);
-    delete [] data;
+    if(free_tmpbuf){
+        free(data);
+    }
     return MPI_SUCCESS;
 }
