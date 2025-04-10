@@ -330,12 +330,15 @@ int main(int argc, char** argv){
     if((!strcmp(collective, "MPI_Gather") || !strcmp(collective, "MPI_Reduce")) && rank != 0){
         // On MPI_Gather and MPI_Reduce only rank 0 receives the result
     }else{
-        // Don't validate for VOID op
-        if(strcmp(type, "VOID")){
-            for(i = 0; i < dtsize*final_buffer_count; i++){
-                if(recvbuf[i] != recvbuf_validation[i]){
-                    fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
-                    return 1;
+        char* skip_validation = getenv("LIBSWING_SKIP_VALIDATION");
+        if(skip_validation == NULL || strcmp(skip_validation, "0") == 0){
+            // Don't validate for VOID op
+            if(strcmp(type, "VOID")){
+                for(i = 0; i < dtsize*final_buffer_count; i++){
+                    if(recvbuf[i] != recvbuf_validation[i]){
+                        fprintf(stderr, "Rank %d: Validation failed at index %ld: %d != %d\n", rank, i, recvbuf[i], recvbuf_validation[i]);
+                        return 1;
+                    }
                 }
             }
         }

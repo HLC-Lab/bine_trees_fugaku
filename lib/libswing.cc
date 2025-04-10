@@ -1067,6 +1067,8 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
     switch(env.reduce_scatter_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
+        case SWING_ALGO_FAMILY_RING:
+            return swing_common->bucket_reduce_scatter(sendbuf, recvbuf, recvcounts[0]*swing_common->get_size(), datatype, op, comm);
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             size_t count = 0;
@@ -1170,6 +1172,8 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     switch(env.allgather_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+        case SWING_ALGO_FAMILY_RING:
+            return swing_common->bucket_allgather((char*) sendbuf, (char*) recvbuf, sendcount, sendtype, MPI_SUM, comm);
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             switch(env.allgather_config.algo){
