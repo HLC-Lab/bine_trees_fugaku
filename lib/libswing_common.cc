@@ -2339,11 +2339,24 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
             cur_relcoord[2*i+1] = relcoord[current_d];
         }
 
+        //// In the first allgather step I copy my block from data to recvbuf so that I can use always recvbuf 
+        //// in the allgather and avoid the big memcpy from data to recvbuf at the end of the allgather.
         for (int j=0; j < 2*dimensions; j++) {
-            ringRedScatAG(data + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf);
+            if(s == dimensions - 1){
+                // Avoid overflowing the buffer
+                size_t offset_count = data_offsets[j] < real_count ? data_offsets[j] : real_count;
+                size_t count = data_sizes[j];
+                if(offset_count + count > real_count){
+                    count = real_count - offset_count;
+                }
+                memcpy((void*) ((char*) recvbuf + offset_count*dtsize), (void*) (data + offset_count*dtsize), count*dtsize);            
+            }
+        }
+
+        for (int j=0; j < 2*dimensions; j++) {
+            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf);
         }
 	}
-    memcpy((void*) recvbuf, (void*) data, real_count * dtsize);
     if(free_tmpbuf){
         free(data);
     }
