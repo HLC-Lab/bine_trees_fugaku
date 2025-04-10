@@ -43,7 +43,7 @@ done
 export MPI_OP="null"
 python3 generate_metadata.py ${EXP_ID} || exit 1
 
-for n in 1 8 64 512 4096 32768 262144 2097152 16777216 134217728
+for n in 2097152 16777216 134217728 #1 8 64 512 4096 32768 262144 2097152 16777216 134217728
 do
     iterations=0
     if [ $n -le 512 ]
@@ -51,10 +51,10 @@ do
         iterations=100 #00
     elif [ $n -le 1048576 ]
     then
-        iterations=100 #0
+        iterations=10 #0
     elif [ $n -le 8388608 ]
     then
-        iterations=100
+        iterations=10
     elif [ $n -le 67108864 ]
     then
         iterations=10
@@ -105,7 +105,7 @@ do
         EXTRA_MCAS="${EXTRA_MCAS} -mca coll ^tbi"
     fi
 
-    for DEFAULT_ALGO in "split_binary_tree" "binary_tree" "binomial" "basic-linear" # "pipeline" "chain"
+    for DEFAULT_ALGO in "split_binary_tree" "binary_tree" "binomial" "basic_linear" # "pipeline" "chain"
     do        
         export LIBSWING_BCAST_ALGO_FAMILY="DEFAULT" 
         ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_bcast_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
@@ -214,7 +214,7 @@ do
             # Run swing scatter-allgather
             elems_per_block=$((n / p))
             elems_per_port=$((elems_per_block / PORTS))            
-            if [ $elems_per_port -ge 1 ]; then
+            if [ $elems_per_port -ge 8 ]; then
                 export LIBSWING_BCAST_ALGO_FAMILY="SWING" 
                 export LIBSWING_BCAST_ALGO_LAYER="UTOFU" 
                 export LIBSWING_BCAST_ALGO="SCATTER_ALLGATHER"

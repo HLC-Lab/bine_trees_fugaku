@@ -17,6 +17,8 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
+int MPI_Bcast_f(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm );
+
 #define TOFU_DEV_INFO "/proc/tofu/dev/info"
 #define TOF_IOCTL_GET_PORT_STAT _IOWR('d', 9, long)
 #define PA_LEN 31
@@ -131,7 +133,7 @@ int run_collective(RunType rt, const char* collective, const void* sendbuf, void
         if(rt == RUN_TYPE_VALIDATION){
             r = PMPI_Bcast((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
         }else{
-            r = MPI_Bcast((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
+            r = MPI_Bcast_f((void*) sendbuf, count, dt, 0, MPI_COMM_WORLD);
         }
     }else if(!strcmp(collective, "MPI_Alltoall")){
         if(rt == RUN_TYPE_VALIDATION){

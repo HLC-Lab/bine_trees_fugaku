@@ -10,6 +10,7 @@
 #include <climits>
 #ifdef FUGAKU
 #include "fugaku/swing_utofu.h"
+#include <mpi-ext.h> 
 #endif
 
 Timer::Timer(std::string fname, std::string name):_name(name), _timer_stopped(false){
@@ -2147,22 +2148,16 @@ void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int
                 send_chunk = (rank + 1 + i) % nProc;
             }
             
-            char* segment_send = &(output[segment_ends[send_chunk] -
-                                       segment_sizes[send_chunk]]);
+            char* segment_send = &(output[segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize]);
 
-            MPI_Irecv(buffer, segment_sizes[recv_chunk],
-                    datatype, recv_from, 0, comm, &recv_req);
+            MPI_Irecv(buffer, segment_sizes[recv_chunk], datatype, recv_from, 0, comm, &recv_req);
 
-            MPI_Send(segment_send, segment_sizes[send_chunk],
-                    datatype, send_to, 0, comm);
+            MPI_Send(segment_send, segment_sizes[send_chunk], datatype, send_to, 0, comm);
 
-            char *segment_update = &(output[segment_ends[recv_chunk] -
-                                             segment_sizes[recv_chunk]]);
+            char *segment_update = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
 
             // Wait for recv to complete before reduction
             MPI_Wait(&recv_req, &recv_status);
-
-        //    reduce(segment_update, buffer, segment_sizes[recv_chunk]);
             reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
         }
     }else{
@@ -2171,20 +2166,18 @@ void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int
                 recv_chunk = (rank - i - 1 + nProc) % nProc;
                 send_chunk = (rank - i + nProc) % nProc;
             }else{
-		recv_chunk = (rank + i + 1 + nProc) % nProc;
+		        recv_chunk = (rank + i + 1 + nProc) % nProc;
                 send_chunk = (rank + i + nProc) % nProc;
             }
             // Segment to send - at every iteration we send segment (r+1-i)
-            char* segment_send = &(output[segment_ends[send_chunk] -
-                                           segment_sizes[send_chunk]]);
+            char* segment_send = &(output[segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize]);
 
             // Segment to recv - at every iteration we receive segment (r-i)
-            char* segment_recv = &(output[segment_ends[recv_chunk] -
-                                           segment_sizes[recv_chunk]]);
+            char* segment_recv = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
             MPI_Sendrecv(segment_send, segment_sizes[send_chunk],
-                    datatype, send_to, 0, segment_recv,
-                    segment_sizes[recv_chunk], datatype, recv_from,
-                    0, comm, &recv_status);
+                         datatype, send_to, 0, segment_recv,
+                         segment_sizes[recv_chunk], datatype, recv_from,
+                         0, comm, &recv_status);
         }
     }
     delete [] buffer;
@@ -2226,13 +2219,18 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
     
     int dtsize;
     MPI_Type_size(datatype, &dtsize);
+
+    // Adjust count to the number of data sets
+    // It must be divisible both by number of dimensions
+    // and by number of ranks
+    size_t real_count = count;
+    while(count % ((2*dimensions)*size)){
+       count += 1;
+    }
+
     char *data = new char[count*dtsize];
     memcpy((void*) data, (void*) sendbuf, count * dtsize);
     
-    // Adjust count to the number of data sets
-    while(count % (2*dimensions)){
-       count += 1;
-    }
 
     // Get the neighbor nodes on each dimension
     int recvfrom[LDIM];
@@ -2240,7 +2238,7 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
     rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
     if (rc != FJMPI_SUCCESS) {
-   	fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
+   	    fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
     	MPI_Abort(MPI_COMM_WORLD, 1);
     }
     for(size_t i = 0; i < dimensions; i++){
@@ -2274,18 +2272,15 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
     size_t loop_offset_r[dimensions*dimensions];
     size_t loop_offset_l[dimensions*dimensions];
     size_t loop_data_size[dimensions*dimensions];
-    size_t offset_ls[dimensions];
-    size_t offset_rs[dimensions];
-    size_t loop_data_sizes[dimensions];
+    // size_t offset_ls[dimensions];
+    // size_t offset_rs[dimensions];
+    // size_t loop_data_sizes[dimensions];
     // int current_ds[dimensions];
-
     size_t data_offsets[2*dimensions];
     size_t data_sizes[2*dimensions];
-    int current_ds[2*dimensions];
     int recvfroms[2*dimensions], sendtos[2*dimensions];
     int cur_dimensions_sizes[2*dimensions];
     int cur_relcoord[2*dimensions];
-
 
     for(int s = 0; s < dimensions; s++){
         for(int i = 0; i < dimensions; i++){
@@ -2316,9 +2311,9 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
             }
         }
 
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int i=0; i < 2*dimensions; i++) {
-            ringRedScatAG(data + data_offsets[i], data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm);
+            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm);
 	    }
 	}
 
@@ -2342,9 +2337,10 @@ int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count,
         }
 
         for (int j=0; j < 2*dimensions; j++) {
-            ringRedScatAG(data + data_offsets[j], data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm);
+            ringRedScatAG(data + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm);
         }
 	}
-    memcpy((void*) recvbuf, (void*) data, count * dtsize);
+    memcpy((void*) recvbuf, (void*) data, real_count * dtsize);
     delete [] data;
+    return MPI_SUCCESS;
 }

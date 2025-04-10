@@ -19,7 +19,7 @@ fi
 # Collective impls
 # Bash list of collectives to compile
 # Define a list of collectives
-collectives=("libswing" "libswing_common" "libswing_coll" "libswing_coll_reduce" "libswing_coll_reduce_scatter" "libswing_coll_bcast" "libswing_coll_allgather" "libswing_coll_gather" "libswing_coll_scatter" "libswing_coll_alltoall")
+collectives=("libswing_coll_bcast" "libswing" "libswing_common" "libswing_coll" "libswing_coll_reduce" "libswing_coll_reduce_scatter" "libswing_coll_allgather" "libswing_coll_gather" "libswing_coll_scatter" "libswing_coll_alltoall")
 collective_objects=""
 # Compile each collective
 for collective in "${collectives[@]}"; do
@@ -75,6 +75,7 @@ fi
 
 # Bench
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
+echo ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects_validate} -o ./bench/bench_validate ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/get_coord_daint.c -o ./bench/get_coord_daint

@@ -1054,8 +1054,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     assert("Invalid value for LIBSWING_ALLREDUCE_ALGO" && 0);
             }
         case SWING_ALGO_FAMILY_RING:
-            // TODO: Implement multiported ring
-            return MPI_Allreduce_ring((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
+            return swing_common->bucket_allreduce((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         default:
             assert("Invalid value for LIBSWING_ALLREDUCE_ALGO_FAMILY" && 0);
     }
@@ -1246,7 +1245,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     return MPI_ERR_OTHER;
 }
 
-int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm ){
+int MPI_Bcast_f(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm ){
     read_env(comm);
     switch(env.bcast_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:

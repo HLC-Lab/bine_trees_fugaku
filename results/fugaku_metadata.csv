@@ -48,3 +48,5 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_04_09___17_37_37,1,32x256,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_04_09___17_37_37,2,32x256,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_04_09___17_37_37,3,32x256,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___02_24_48,0,64x64,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___17_02_16,0,64x64,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null

@@ -1175,9 +1175,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     int mask = 0x1;
     int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
     int block_first_mask = ~(inverse_mask - 1);
-    int next_req_s = 0, next_req_r = 0;
     int step = 0;
-    int last_recv_done = 0;
     while(inverse_mask > 0){
       int partner;
       if(rank % 2 == 0){
@@ -1185,10 +1183,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
       }else{
           partner = mod(rank - nbtob((inverse_mask << 1) - 1), size); 
       }   
-  
-      next_req_r = 0;
-      next_req_s = 0;
-  
+    
       // We start from 1 because 0 never sends block 0
       for(size_t block = 1; block < size; block++){
           // Get the position of the highest set bit using clz

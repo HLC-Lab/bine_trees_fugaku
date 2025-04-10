@@ -249,6 +249,8 @@ static inline uint32_t get_rank_negabinary_representation(uint32_t rank, uint32_
     }
 }
 
+
+#if 0
 static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
     uint32_t remap_rank = get_rank_negabinary_representation(rank, size);    
     remap_rank = remap_rank ^ (remap_rank >> 1);
@@ -257,7 +259,6 @@ static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
     return remap_rank;
 }
 
-#if 0
 // Version with send at the end
 int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
