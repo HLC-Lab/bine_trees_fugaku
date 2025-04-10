@@ -2413,21 +2413,19 @@ void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int 
                 send_chunk = (rank + 1 + i) % nProc;
             }
             
-            // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv
-            MPI_Irecv(buffer, 0, MPI_BYTE, send_to, 0, comm, &recv_req);
-            // Send the segment to sendto
-            MPI_Send(buffer, 0, MPI_BYTE, recv_from, 0, comm);
-            // Wait for recv to complete before reduction
-            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+
+            // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv           
+            size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][recv_from]), port, recv_from, utofu_descriptor->port_info[port].lcl_temp_stadd, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[recv_from], 0); 
+            // Wait for notification from send_to
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
 
             size_t segment_send_offset = (segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize) + data_offset;
             size_t segment_send_bytes = segment_sizes[send_chunk]*dtsize;           
             utofu_stadd_t lcl_addr, rmt_addr;
             lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd          + segment_send_offset;
             rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[send_to] + buffer_offset;            
-            size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][send_to]), port, send_to, lcl_addr, segment_send_bytes, rmt_addr, 0); 
-            
-            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);            
+            issued_sends += swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][send_to]), port, send_to, lcl_addr, segment_send_bytes, rmt_addr, 0); 
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
             this->utofu_descriptor->port_info[port].completed_recv[0] = 0;
             char *segment_update = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
             reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
