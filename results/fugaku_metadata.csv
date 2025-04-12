@@ -24,7 +24,6 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_03_28___13_53_29,6,4,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_30___03_33_43,0,64x64,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_31___07_02_37,0,64x64,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
-2025_03_31___10_31_44,0,8x8x8,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_03_31___16_10_59,0,64x64,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_03_31___16_18_56,0,64x64,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_04_04___19_16_18,0,64x64,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
@@ -45,3 +44,9 @@ timestamp,test_id,nnodes,collective_type,mpi_lib,mpi_lib_version,libswing_versio
 2025_04_06___02_35_52,4,64x64,GATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
 2025_04_06___02_35_52,5,64x64,REDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
 2025_04_06___02_35_52,6,64x64,ALLTOALL,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___17_37_37,0,32x256,ALLREDUCE,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_04_09___17_37_37,1,32x256,REDUCE_SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,MPI_SUM,null
+2025_04_09___17_37_37,2,32x256,ALLGATHER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___17_37_37,3,32x256,SCATTER,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___02_24_48,0,64x64,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null
+2025_04_09___17_02_16,0,64x64,BCAST,FJMPI,x.x.x,4.0.1,false,summarized,null,null

@@ -1,0 +1,14 @@
+#!/bin/sh
+#PJM -L  "node=32x256:torus"
+#PJM -L  "rscgrp=large"
+#PJM -L  "elapse=00:30:00"
+#PJM -g hp240454
+#PJM --mpi  "rank-map-bynode=YX"
+#PJM --mpi "max-proc-per-node=1"
+
+DIMENSIONS="32x256" # Must be equal to the one specified above
+
+pushd bench
+./run_all_bucket.sh -d ${DIMENSIONS} -p 4 -c allreduce,reduce_scatter,allgather
+popd
+

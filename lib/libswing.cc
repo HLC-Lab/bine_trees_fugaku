@@ -1054,8 +1054,7 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
                     assert("Invalid value for LIBSWING_ALLREDUCE_ALGO" && 0);
             }
         case SWING_ALGO_FAMILY_RING:
-            // TODO: Implement multiported ring
-            return MPI_Allreduce_ring((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
+            return swing_common->bucket_allreduce((char*) sendbuf, (char*) recvbuf, count, datatype, op, comm);
         default:
             assert("Invalid value for LIBSWING_ALLREDUCE_ALGO_FAMILY" && 0);
     }
@@ -1068,6 +1067,8 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
     switch(env.reduce_scatter_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Reduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm);
+        case SWING_ALGO_FAMILY_RING:
+            return swing_common->bucket_reduce_scatter(sendbuf, recvbuf, recvcounts[0]*swing_common->get_size(), datatype, op, comm);
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             size_t count = 0;
@@ -1171,6 +1172,8 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     switch(env.allgather_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:
             return PMPI_Allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+        case SWING_ALGO_FAMILY_RING:
+            return swing_common->bucket_allgather((char*) sendbuf, (char*) recvbuf, sendcount*swing_common->get_size(), sendtype, MPI_SUM, comm);
         case SWING_ALGO_FAMILY_SWING:
         case SWING_ALGO_FAMILY_RECDOUB:{
             switch(env.allgather_config.algo){
@@ -1246,7 +1249,7 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, voi
     return MPI_ERR_OTHER;
 }
 
-int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm ){
+int MPI_Bcast_f(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm ){
     read_env(comm);
     switch(env.bcast_config.algo_family){
         case SWING_ALGO_FAMILY_DEFAULT:

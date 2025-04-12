@@ -10,6 +10,7 @@
 #include <climits>
 #ifdef FUGAKU
 #include "fugaku/swing_utofu.h"
+#include <mpi-ext.h> 
 #endif
 
 int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
@@ -1175,9 +1176,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     int mask = 0x1;
     int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
     int block_first_mask = ~(inverse_mask - 1);
-    int next_req_s = 0, next_req_r = 0;
     int step = 0;
-    int last_recv_done = 0;
     while(inverse_mask > 0){
       int partner;
       if(rank % 2 == 0){
@@ -1185,10 +1184,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
       }else{
           partner = mod(rank - nbtob((inverse_mask << 1) - 1), size); 
       }   
-  
-      next_req_r = 0;
-      next_req_s = 0;
-  
+    
       // We start from 1 because 0 never sends block 0
       for(size_t block = 1; block < size; block++){
           // Get the position of the highest set bit using clz
@@ -1337,3 +1333,206 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     return res;
 }
 #endif
+
+#define LDIM 3
+#define TDIM 6
+
+int SwingCommon::bucket_allgather(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int size, myrank, x, y, z;
+    int dimensions, dimensions_sizes[3];
+    int relcoord[LDIM];
+    int rc, outppn;
+
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+
+    rc = FJMPI_Topology_get_dimension(&dimensions);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_dims ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    rc = FJMPI_Topology_get_shape(&x, &y, &z);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_shape ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    if (dimensions == 1){
+        dimensions_sizes[0] = x;
+    }else if(dimensions == 2){
+        dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+    }else if(dimensions == 3){
+	    dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+        dimensions_sizes[2] = z;
+    }else{
+        fprintf(stderr, "%d dimensions not supported.", dimensions);
+        exit(-1);
+    }
+    
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+
+    // Adjust count to the number of data sets
+    // It must be divisible both by number of dimensions
+    // and by number of ranks
+    size_t real_count = count;
+    while(count % ((2*dimensions)*size)){
+       count += 1;
+    }
+
+    char *data, *segment_buf;
+    bool free_tmpbuf = false;
+    //size_t tmpbuf_size = count*dtsize + ((count / size) + 1)*dtsize; // We need space to store both the data and the segment buffer
+    size_t tmpbuf_size = count*dtsize*2; // We need space to store both the data and the segment buffer
+
+    if(tmpbuf_size > env.prealloc_size){
+        data = (char*) malloc(tmpbuf_size);
+        free_tmpbuf = true;
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
+    }else{
+        // Still done to reset everything
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports); 
+        data = env.prealloc_buf;
+        // Store the rmt_temp_stadd of all the other ranks
+        for(size_t i = 0; i < env.num_ports; i++){
+            this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
+            this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
+        }
+    }
+    assert(env.utofu_add_ag);
+    if(env.utofu_add_ag){
+        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
+    }
+    segment_buf = data + count*dtsize;
+    
+    // Get the neighbor nodes on each dimension
+    int recvfrom[LDIM];
+    int sendto[LDIM];
+    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
+    rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
+    if (rc != FJMPI_SUCCESS) {
+   	    fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    for(size_t i = 0; i < dimensions; i++){
+        int coord[LDIM]={0,0,0};
+        for(size_t j=0; j < dimensions; j++){ coord[j] = relcoord[j]; }
+        // Next node
+        coord[i] = (relcoord[i] + 1) % dimensions_sizes[i];
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, 1, &outppn, &sendto[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        // Previous node
+        coord[i] = (relcoord[i] - 1 + dimensions_sizes[i]) % dimensions_sizes[i];   //
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, dimensions, &outppn, &recvfrom[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+           MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    
+    // Divide data into 2*num_dimensions datasets (buckets) and perform allreduce on each.
+    size_t data_size[LDIM];
+    size_t offsets[LDIM];
+    for(int i = 0; i < dimensions; i++){
+        data_size[i] = count/(2*dimensions);
+        offsets[i] = 0;
+    }    
+    
+    // Saving the offsets from reduce-scatter loops for corresponding allgather loops.
+    size_t loop_offset_r[dimensions*dimensions];
+    size_t loop_offset_l[dimensions*dimensions];
+    size_t loop_data_size[dimensions*dimensions];
+    // size_t offset_ls[dimensions];
+    // size_t offset_rs[dimensions];
+    // size_t loop_data_sizes[dimensions];
+    // int current_ds[dimensions];
+    size_t data_offsets[2*dimensions];
+    size_t data_sizes[2*dimensions];
+    int recvfroms[2*dimensions], sendtos[2*dimensions];
+    int cur_dimensions_sizes[2*dimensions];
+    int cur_relcoord[2*dimensions];
+
+    for(int s = 0; s < dimensions; s++){
+        for(int i = 0; i < dimensions; i++){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = (2*i)*(count/(2*dimensions))   + offsets[i];
+            data_offsets[2*i+1] = (2*i+1)*(count/(2*dimensions)) + offsets[i];
+            data_sizes[2*i] = data_size[i];
+            data_sizes[2*i+1] = data_size[i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            assert(data_offsets[2*i] + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
+            
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+
+            loop_offset_l[s*dimensions+i]= data_offsets[2*i];
+            loop_offset_r[s*dimensions+i]= data_offsets[2*i+1];
+            loop_data_size[s*dimensions+i]= data_size[i];
+
+            if(s != dimensions - 1){
+                data_size[i] /= dimensions_sizes[current_d];
+                offsets[i] += relcoord[current_d]*data_size[i];
+            }
+        }
+
+//        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+//        for (int i=0; i < 2*dimensions; i++) {
+//            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*i, \
+//                          i, data_offsets[i]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*i, real_count*dtsize);
+//	    }
+	}
+
+    // Allgather loops
+    for(int s = dimensions - 1; s >= 0; s--){
+        for(int i = dimensions - 1; i >= 0; i--){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = loop_offset_l[s*dimensions+i];
+            data_offsets[2*i+1] = loop_offset_r[s*dimensions+i];
+            data_sizes[2*i] = loop_data_size[s*dimensions+i];
+            data_sizes[2*i+1] = loop_data_size[s*dimensions+i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+        }
+
+        //// In the first allgather step I copy my block from data to recvbuf so that I can use always recvbuf 
+        //// in the allgather and avoid the big memcpy from data to recvbuf at the end of the allgather.
+        for (int j=0; j < 2*dimensions; j++) {
+            if(s == dimensions - 1){
+                // Avoid overflowing the buffer
+                if(data_offsets[j] < real_count){                    
+                    size_t count_t = data_sizes[j];
+                    if(data_offsets[j] + count_t > real_count){
+                        count_t = real_count - data_offsets[j];
+                    }
+                    memcpy((void*) ((char*) recvbuf + data_offsets[j]*dtsize), (void*) (data + data_offsets[j]*dtsize), count_t*dtsize);            
+                }
+            }
+        }
+        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+        for (int j=0; j < 2*dimensions; j++) {
+            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*j, \
+                          j, data_offsets[j]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*j, real_count*dtsize);
+        }
+	}
+    if(free_tmpbuf){
+        free(data);
+    }
+    return MPI_SUCCESS;
+}

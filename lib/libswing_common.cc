@@ -10,6 +10,7 @@
 #include <climits>
 #ifdef FUGAKU
 #include "fugaku/swing_utofu.h"
+#include <mpi-ext.h> 
 #endif
 
 Timer::Timer(std::string fname, std::string name):_name(name), _timer_stopped(false){
@@ -2095,3 +2096,595 @@ void get_data_history_bitmap(int* coord_rank, size_t step, size_t num_steps, uin
     }
 }
 */
+
+
+
+// MPI working version
+#if 0
+void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char* buffer){
+    // Perform ring reduce-scatter or allgather on each line of a selected dimension.
+    
+    const int segment_size = count / nProc;
+    std::vector<size_t> segment_sizes(nProc, segment_size);
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+
+    const size_t residual = count % nProc;
+    for (size_t i = 0; i < residual; ++i) {
+        segment_sizes[i]++;
+    }
+    
+    // Compute where each chunk ends.
+    std::vector<size_t> segment_ends(nProc);
+    segment_ends[0] = segment_sizes[0];
+    for (size_t i = 1; i < segment_ends.size(); ++i) {
+        segment_ends[i] = segment_sizes[i] + segment_ends[i - 1];
+    }
+    // The last segment should end at the very end of the buffer.
+    assert(segment_ends[nProc - 1] == count);
+    
+    // Allocate the output buffer.
+    // The updated data set is used on subsequent reduce-scatter/allgather. 
+    char* output = data;
+  
+    // Recv_from/send_to on each dimention is defined for each node before hand.
+    const size_t recv_from = recvfrom;      // (rank - 1 + nProc) % nProc;  
+    const size_t send_to = sendto;          //(rank + 1) % nProc;
+    
+    MPI_Status recv_status;
+    MPI_Request recv_req;
+    int send_chunk, recv_chunk;
+
+    // Selecting algorithm (0-1 reduce-scatter, 2-3 allgather), and direction (0,2 left dataset, 1,3 right dataset
+    if(redscat<2){
+        for (int i = 0; i < nProc - 1; i++) {
+            if(redscat == 0){
+                recv_chunk = (rank - i - 2 + nProc) % nProc;            // Where to receive data, rank = relcoord[current_d]
+                send_chunk = (rank - i - 1 + nProc) % nProc;                
+            }else{
+                recv_chunk = (rank + 2 + i) % nProc;
+                send_chunk = (rank + 1 + i) % nProc;
+            }
+            
+            char* segment_send = &(output[segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize]);
+
+            MPI_Irecv(buffer, segment_sizes[recv_chunk], datatype, recv_from, 0, comm, &recv_req);
+
+            MPI_Send(segment_send, segment_sizes[send_chunk], datatype, send_to, 0, comm);
+
+            char *segment_update = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
+
+            // Wait for recv to complete before reduction
+            MPI_Wait(&recv_req, &recv_status);
+            reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
+        }
+    }else{
+        for (int i = 0; i < nProc - 1; ++i) {
+            if(redscat == 2){
+                recv_chunk = (rank - i - 1 + nProc) % nProc;
+                send_chunk = (rank - i + nProc) % nProc;
+            }else{
+		        recv_chunk = (rank + i + 1 + nProc) % nProc;
+                send_chunk = (rank + i + nProc) % nProc;
+            }
+            // Segment to send - at every iteration we send segment (r+1-i)
+            char* segment_send = &(output[segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize]);
+
+            // Segment to recv - at every iteration we receive segment (r-i)
+            char* segment_recv = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
+            MPI_Sendrecv(segment_send, segment_sizes[send_chunk],
+                         datatype, send_to, 0, segment_recv,
+                         segment_sizes[recv_chunk], datatype, recv_from,
+                         0, comm, &recv_status);
+        }
+    }
+}
+#define LDIM 3
+#define TDIM 6
+int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int size, myrank, x, y, z;
+    int dimensions, dimensions_sizes[3];
+    int relcoord[LDIM];
+    int rc, outppn;
+
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+
+    rc = FJMPI_Topology_get_dimension(&dimensions);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_dims ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    rc = FJMPI_Topology_get_shape(&x, &y, &z);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_shape ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    if (dimensions == 1){
+        dimensions_sizes[0] = x;
+    }else if(dimensions == 2){
+        dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+    }else if(dimensions == 3){
+	    dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+        dimensions_sizes[2] = z;
+    }else{
+        fprintf(stderr, "%d dimensions not supported.", dimensions);
+        exit(-1);
+    }
+    
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+
+    // Adjust count to the number of data sets
+    // It must be divisible both by number of dimensions
+    // and by number of ranks
+    size_t real_count = count;
+    while(count % ((2*dimensions)*size)){
+       count += 1;
+    }
+
+    char *data, *segment_buf;
+    bool free_tmpbuf = false;
+    size_t tmpbuf_size = count*dtsize + (count / size) + 1; // We need space to store both the data and the segment buffer
+
+    if(tmpbuf_size > env.prealloc_size){
+        data = (char*) malloc(tmpbuf_size);
+        free_tmpbuf = true;
+    }else{
+        data = env.prealloc_buf;        
+    }
+    segment_buf = data + count*dtsize;
+
+    memcpy((void*) data, (void*) sendbuf, count * dtsize);
+    
+    // Get the neighbor nodes on each dimension
+    int recvfrom[LDIM];
+    int sendto[LDIM];
+    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
+    rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
+    if (rc != FJMPI_SUCCESS) {
+   	    fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    for(size_t i = 0; i < dimensions; i++){
+        int coord[LDIM]={0,0,0};
+        for(size_t j=0; j < dimensions; j++){ coord[j] = relcoord[j]; }
+        // Next node
+        coord[i] = (relcoord[i] + 1) % dimensions_sizes[i];
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, 1, &outppn, &sendto[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        // Previous node
+        coord[i] = (relcoord[i] - 1 + dimensions_sizes[i]) % dimensions_sizes[i];   //
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, dimensions, &outppn, &recvfrom[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+           MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    
+    // Divide data into 2*num_dimensions datasets (buckets) and perform allreduce on each.
+    size_t data_size[LDIM];
+    size_t offsets[LDIM];
+    for(int i = 0; i < dimensions; i++){
+        data_size[i] = count/(2*dimensions);
+        offsets[i] = 0;
+    }    
+    
+    // Saving the offsets from reduce-scatter loops for corresponding allgather loops.
+    size_t loop_offset_r[dimensions*dimensions];
+    size_t loop_offset_l[dimensions*dimensions];
+    size_t loop_data_size[dimensions*dimensions];
+    // size_t offset_ls[dimensions];
+    // size_t offset_rs[dimensions];
+    // size_t loop_data_sizes[dimensions];
+    // int current_ds[dimensions];
+    size_t data_offsets[2*dimensions];
+    size_t data_sizes[2*dimensions];
+    int recvfroms[2*dimensions], sendtos[2*dimensions];
+    int cur_dimensions_sizes[2*dimensions];
+    int cur_relcoord[2*dimensions];
+
+    for(int s = 0; s < dimensions; s++){
+        for(int i = 0; i < dimensions; i++){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = (2*i)*(count/(2*dimensions))   + offsets[i];
+            data_offsets[2*i+1] = (2*i+1)*(count/(2*dimensions)) + offsets[i];
+            data_sizes[2*i] = data_size[i];
+            data_sizes[2*i+1] = data_size[i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            assert(data_offsets[2*i] + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
+            
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+
+            loop_offset_l[s*dimensions+i]= data_offsets[2*i];
+            loop_offset_r[s*dimensions+i]= data_offsets[2*i+1];
+            loop_data_size[s*dimensions+i]= data_size[i];
+
+            if(s != dimensions - 1){
+                data_size[i] /= dimensions_sizes[current_d];
+                offsets[i] += relcoord[current_d]*data_size[i];
+            }
+        }
+
+        //#pragma omp parallel for
+        for (int i=0; i < 2*dimensions; i++) {
+            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf);
+	    }
+	}
+
+    // Allgather loops
+    for(int s = dimensions - 1; s >= 0; s--){
+        for(int i = dimensions - 1; i >= 0; i--){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = loop_offset_l[s*dimensions+i];
+            data_offsets[2*i+1] = loop_offset_r[s*dimensions+i];
+            data_sizes[2*i] = loop_data_size[s*dimensions+i];
+            data_sizes[2*i+1] = loop_data_size[s*dimensions+i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+        }
+
+        //// In the first allgather step I copy my block from data to recvbuf so that I can use always recvbuf 
+        //// in the allgather and avoid the big memcpy from data to recvbuf at the end of the allgather.
+        for (int j=0; j < 2*dimensions; j++) {
+            if(s == dimensions - 1){
+                // Avoid overflowing the buffer
+                size_t offset_count = data_offsets[j] < real_count ? data_offsets[j] : real_count;
+                size_t count = data_sizes[j];
+                if(offset_count + count > real_count){
+                    count = real_count - offset_count;
+                }
+                memcpy((void*) ((char*) recvbuf + offset_count*dtsize), (void*) (data + offset_count*dtsize), count*dtsize);            
+            }
+        }
+
+        for (int j=0; j < 2*dimensions; j++) {
+            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf);
+        }
+	}
+    if(free_tmpbuf){
+        free(data);
+    }
+    return MPI_SUCCESS;
+}
+#endif
+
+
+void SwingCommon::ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, 
+                                char* buffer, int port, size_t data_offset, size_t buffer_offset, size_t real_size){
+    // Perform ring reduce-scatter or allgather on each line of a selected dimension.
+    const int segment_size = count / nProc;
+    std::vector<size_t> segment_sizes(nProc, segment_size);
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+
+    const size_t residual = count % nProc;
+    for (size_t i = 0; i < residual; ++i) {
+        segment_sizes[i]++;
+    }
+    
+    // Compute where each chunk ends.
+    std::vector<size_t> segment_ends(nProc);
+    segment_ends[0] = segment_sizes[0];
+    for (size_t i = 1; i < segment_ends.size(); ++i) {
+        segment_ends[i] = segment_sizes[i] + segment_ends[i - 1];
+    }
+    // The last segment should end at the very end of the buffer.
+    assert(segment_ends[nProc - 1] == count);
+    
+    // Allocate the output buffer.
+    // The updated data set is used on subsequent reduce-scatter/allgather. 
+    char* output = data;
+  
+    // Recv_from/send_to on each dimention is defined for each node before hand.
+    const size_t recv_from = recvfrom;      // (rank - 1 + nProc) % nProc;  
+    const size_t send_to = sendto;          //(rank + 1) % nProc;
+    
+    MPI_Status recv_status;
+    MPI_Request recv_req;
+    int send_chunk, recv_chunk;
+
+    // Selecting algorithm (0-1 reduce-scatter, 2-3 allgather), and direction (0,2 left dataset, 1,3 right dataset
+    if(redscat<2){
+        for (int i = 0; i < nProc - 1; i++) {
+            if(redscat == 0){
+                recv_chunk = (rank - i - 2 + nProc) % nProc;            // Where to receive data, rank = relcoord[current_d]
+                send_chunk = (rank - i - 1 + nProc) % nProc;                
+            }else{
+                recv_chunk = (rank + 2 + i) % nProc;
+                send_chunk = (rank + 1 + i) % nProc;
+            }
+            
+            // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv           
+            size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][recv_from]), port, recv_from, utofu_descriptor->port_info[port].lcl_temp_stadd, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[recv_from], 0); 
+            // Wait for notification from send_to
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
+
+            size_t segment_send_offset = (segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize) + data_offset;
+            size_t segment_send_bytes = segment_sizes[send_chunk]*dtsize;           
+            utofu_stadd_t lcl_addr, rmt_addr;
+            lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd          + segment_send_offset;
+            rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[send_to] + buffer_offset;            
+            issued_sends += swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][send_to]), port, send_to, lcl_addr, segment_send_bytes, rmt_addr, 0); 
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
+            this->utofu_descriptor->port_info[port].completed_recv[0] = 0;
+            char *segment_update = &(output[segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize]);
+            #pragma omp critical
+            {
+                reduce_local(buffer, segment_update, segment_sizes[recv_chunk], datatype, op);
+            }
+            swing_utofu_wait_sends(this->utofu_descriptor, port, issued_sends);
+        }
+    }else{
+        for (int i = 0; i < nProc - 1; ++i) {
+            if(redscat == 2){
+                recv_chunk = (rank - i - 1 + nProc) % nProc;
+                send_chunk = (rank - i + nProc) % nProc;
+            }else{
+		        recv_chunk = (rank + i + 1 + nProc) % nProc;
+                send_chunk = (rank + i + nProc) % nProc;
+            }
+
+            // Notify recvfrom that I am ready to receive, and check if sendto is ready to receive, using 0-bytes send/recv           
+            size_t issued_sends = swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][recv_from]), port, recv_from, utofu_descriptor->port_info[port].lcl_recv_stadd, 0, utofu_descriptor->port_info[port].rmt_recv_stadd[recv_from], 0); 
+            // Wait for notification from send_to
+            swing_utofu_wait_recv(this->utofu_descriptor, port, 0, issued_sends - 1);
+
+            // Segment to send - at every iteration we send segment (r+1-i)
+            size_t segment_send_offset = (segment_ends[send_chunk]*dtsize - segment_sizes[send_chunk]*dtsize) + data_offset;
+            size_t segment_recv_offset = (segment_ends[recv_chunk]*dtsize - segment_sizes[recv_chunk]*dtsize) + data_offset;
+            size_t segment_send_bytes = segment_sizes[send_chunk]*dtsize; 
+            size_t segment_recv_bytes = segment_sizes[recv_chunk]*dtsize;
+                       
+            bool do_send = true, do_recv = true;
+            if(segment_send_offset > real_size){
+                do_send = false;
+                //printf("Skipping send [%ld, %ld] \n", segment_send_offset, segment_send_bytes); fflush(stdout);
+            }else if(segment_send_offset + segment_send_bytes > real_size){
+                segment_send_bytes = real_size - segment_send_offset;
+            }
+
+            if(segment_recv_offset > real_size){
+                do_recv = false;
+                //printf("Skipping recv [%ld, %ld] \n", segment_recv_offset, segment_recv_bytes); fflush(stdout);
+            }else if(segment_recv_offset + segment_recv_bytes > real_size){
+                segment_recv_bytes = real_size - segment_recv_offset;
+            }
+           
+            utofu_stadd_t lcl_addr, rmt_addr;
+            lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd          + segment_send_offset;
+            rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[send_to] + segment_send_offset;
+            if(do_send){            
+                issued_sends += swing_utofu_isend(this->utofu_descriptor, &(this->vcq_ids[port][send_to]), port, send_to, lcl_addr, segment_send_bytes, rmt_addr, 0); 
+            }
+            if(do_recv){
+                size_t recvs_to_wait = ceil((float) segment_recv_bytes / (float) MAX_PUTGET_SIZE);
+                swing_utofu_wait_recv(this->utofu_descriptor, port, 0, 1 + recvs_to_wait - 1); // 1 + because we already waited the notify recv                
+            }
+            this->utofu_descriptor->port_info[port].completed_recv[0] = 0;
+            swing_utofu_wait_sends(this->utofu_descriptor, port, issued_sends);
+        }
+    }
+}
+#define LDIM 3
+#define TDIM 6
+int SwingCommon::bucket_allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+    int size, myrank, x, y, z;
+    int dimensions, dimensions_sizes[3];
+    int relcoord[LDIM];
+    int rc, outppn;
+
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+
+    rc = FJMPI_Topology_get_dimension(&dimensions);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_dims ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    rc = FJMPI_Topology_get_shape(&x, &y, &z);
+    if (rc != FJMPI_SUCCESS) {
+    	fprintf(stderr, "FJMPI_Topology_get_shape ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    if (dimensions == 1){
+        dimensions_sizes[0] = x;
+    }else if(dimensions == 2){
+        dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+    }else if(dimensions == 3){
+	    dimensions_sizes[0] = x;
+        dimensions_sizes[1] = y;
+        dimensions_sizes[2] = z;
+    }else{
+        fprintf(stderr, "%d dimensions not supported.", dimensions);
+        exit(-1);
+    }
+    
+    int dtsize;
+    MPI_Type_size(datatype, &dtsize);
+
+    // Adjust count to the number of data sets
+    // It must be divisible both by number of dimensions
+    // and by number of ranks
+    size_t real_count = count;
+    while(count % ((2*dimensions)*size)){
+       count += 1;
+    }
+
+    char *data, *segment_buf;
+    bool free_tmpbuf = false;
+    //size_t tmpbuf_size = count*dtsize + ((count / size) + 1)*dtsize; // We need space to store both the data and the segment buffer
+    size_t tmpbuf_size = count*dtsize*2; // We need space to store both the data and the segment buffer
+
+    if(tmpbuf_size > env.prealloc_size){
+        data = (char*) malloc(tmpbuf_size);
+        free_tmpbuf = true;
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
+    }else{
+        // Still done to reset everything
+        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports); 
+        data = env.prealloc_buf;
+        // Store the rmt_temp_stadd of all the other ranks
+        for(size_t i = 0; i < env.num_ports; i++){
+            this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
+            this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
+        }
+    }
+    assert(env.utofu_add_ag);
+    if(env.utofu_add_ag){
+        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
+    }
+    segment_buf = data + count*dtsize;
+
+    memcpy((void*) data, (void*) sendbuf, real_count * dtsize);
+    
+    // Get the neighbor nodes on each dimension
+    int recvfrom[LDIM];
+    int sendto[LDIM];
+    // getCoordFromId(myrank, dimensions_sizes, dimensions, relcoord, size);
+    rc = FJMPI_Topology_get_coords(MPI_COMM_WORLD, myrank, FJMPI_LOGICAL, dimensions, relcoord);
+    if (rc != FJMPI_SUCCESS) {
+   	    fprintf(stderr, "FJMPI_Topology_get_coords ERROR\n");
+    	MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    for(size_t i = 0; i < dimensions; i++){
+        int coord[LDIM]={0,0,0};
+        for(size_t j=0; j < dimensions; j++){ coord[j] = relcoord[j]; }
+        // Next node
+        coord[i] = (relcoord[i] + 1) % dimensions_sizes[i];
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, 1, &outppn, &sendto[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        // Previous node
+        coord[i] = (relcoord[i] - 1 + dimensions_sizes[i]) % dimensions_sizes[i];   //
+        rc = FJMPI_Topology_get_ranks(MPI_COMM_WORLD, FJMPI_LOGICAL, coord, dimensions, &outppn, &recvfrom[i]);
+        if (rc != FJMPI_SUCCESS) {
+            fprintf(stderr, "FJMPI_Topology_get_ranks ERROR\n");
+           MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    
+    // Divide data into 2*num_dimensions datasets (buckets) and perform allreduce on each.
+    size_t data_size[LDIM];
+    size_t offsets[LDIM];
+    for(int i = 0; i < dimensions; i++){
+        data_size[i] = count/(2*dimensions);
+        offsets[i] = 0;
+    }    
+    
+    // Saving the offsets from reduce-scatter loops for corresponding allgather loops.
+    size_t loop_offset_r[dimensions*dimensions];
+    size_t loop_offset_l[dimensions*dimensions];
+    size_t loop_data_size[dimensions*dimensions];
+    // size_t offset_ls[dimensions];
+    // size_t offset_rs[dimensions];
+    // size_t loop_data_sizes[dimensions];
+    // int current_ds[dimensions];
+    size_t data_offsets[2*dimensions];
+    size_t data_sizes[2*dimensions];
+    int recvfroms[2*dimensions], sendtos[2*dimensions];
+    int cur_dimensions_sizes[2*dimensions];
+    int cur_relcoord[2*dimensions];
+
+    for(int s = 0; s < dimensions; s++){
+        for(int i = 0; i < dimensions; i++){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = (2*i)*(count/(2*dimensions))   + offsets[i];
+            data_offsets[2*i+1] = (2*i+1)*(count/(2*dimensions)) + offsets[i];
+            data_sizes[2*i] = data_size[i];
+            data_sizes[2*i+1] = data_size[i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            assert(data_offsets[2*i] + data_size[i] <= (2*i+1)*(count/(2*dimensions)));
+            
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+
+            loop_offset_l[s*dimensions+i]= data_offsets[2*i];
+            loop_offset_r[s*dimensions+i]= data_offsets[2*i+1];
+            loop_data_size[s*dimensions+i]= data_size[i];
+
+            if(s != dimensions - 1){
+                data_size[i] /= dimensions_sizes[current_d];
+                offsets[i] += relcoord[current_d]*data_size[i];
+            }
+        }
+
+        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+        for (int i=0; i < 2*dimensions; i++) {
+            ringRedScatAG(data + data_offsets[i]*dtsize, data_sizes[i], cur_dimensions_sizes[i], cur_relcoord[i], recvfroms[i], sendtos[i], i%2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*i, \
+                          i, data_offsets[i]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*i, real_count*dtsize);
+	    }
+	}
+
+    // Allgather loops
+    for(int s = dimensions - 1; s >= 0; s--){
+        for(int i = dimensions - 1; i >= 0; i--){
+            int current_d = (i + s) % dimensions;
+            data_offsets[2*i] = loop_offset_l[s*dimensions+i];
+            data_offsets[2*i+1] = loop_offset_r[s*dimensions+i];
+            data_sizes[2*i] = loop_data_size[s*dimensions+i];
+            data_sizes[2*i+1] = loop_data_size[s*dimensions+i];
+            recvfroms[2*i] = recvfrom[current_d];
+            sendtos[2*i] = sendto[current_d];
+            recvfroms[2*i+1] = sendto[current_d];
+            sendtos[2*i+1] = recvfrom[current_d];
+
+            cur_dimensions_sizes[2*i] = dimensions_sizes[current_d];
+            cur_dimensions_sizes[2*i+1] = dimensions_sizes[current_d];
+            cur_relcoord[2*i] = relcoord[current_d];
+            cur_relcoord[2*i+1] = relcoord[current_d];
+        }
+
+        //// In the first allgather step I copy my block from data to recvbuf so that I can use always recvbuf 
+        //// in the allgather and avoid the big memcpy from data to recvbuf at the end of the allgather.
+        for (int j=0; j < 2*dimensions; j++) {
+            if(s == dimensions - 1){
+                // Avoid overflowing the buffer
+                if(data_offsets[j] < real_count){                    
+                    size_t count_t = data_sizes[j];
+                    if(data_offsets[j] + count_t > real_count){
+                        count_t = real_count - data_offsets[j];
+                    }
+                    memcpy((void*) ((char*) recvbuf + data_offsets[j]*dtsize), (void*) (data + data_offsets[j]*dtsize), count_t*dtsize);            
+                }
+            }
+        }
+        #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
+        for (int j=0; j < 2*dimensions; j++) {
+            ringRedScatAG((char*) recvbuf + data_offsets[j]*dtsize, data_sizes[j], cur_dimensions_sizes[j], cur_relcoord[j], recvfroms[j], sendtos[j], j%2+2, datatype, op, comm, segment_buf + ((count*dtsize)/(2*dimensions))*j, \
+                          j, data_offsets[j]*dtsize, count * dtsize + ((count*dtsize)/(2*dimensions))*j, real_count*dtsize);
+        }
+	}
+    if(free_tmpbuf){
+        free(data);
+    }
+    return MPI_SUCCESS;
+}

@@ -81,7 +81,7 @@ typedef enum {
     SWING_ALGO_FAMILY_RECDOUB,
     // Bruck
     SWING_ALGO_FAMILY_BRUCK,
-    // Ring
+    // Ring/Bucket
     SWING_ALGO_FAMILY_RING,
 } swing_algo_family_t;
 
@@ -587,7 +587,13 @@ class SwingCommon {
         int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
         int swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
 
-        
+
+        /*******************************/
+        /************ ALLREDUCE ************/
+        /*******************************/
+        void ringRedScatAG(char* data, int count, int nProc, int rank, int recvfrom, int sendto, int redscat, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, char* buffer, int port, size_t data_offset, size_t buffer_offset, size_t real_size);
+        int bucket_allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);       
+
         /*******************************/
         /************ BCAST ************/
         /*******************************/                
@@ -651,6 +657,10 @@ class SwingCommon {
         int swing_allgather_blocks_utofu_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
         int swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
         int swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+
+        /****** BUCKET ******/
+        int bucket_allgather(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+
            
         /****************************************/
         /************ REDUCE-SCATTER ************/
@@ -666,6 +676,9 @@ class SwingCommon {
         int swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);    
         int swing_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
         int swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+
+        /***** BUCKET */
+        int bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
 
         // TODO: Add allreduce_l as reduce+bcast
         // TODO: add bcast as scatter + allgather

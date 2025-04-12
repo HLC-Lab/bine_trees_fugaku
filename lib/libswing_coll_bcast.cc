@@ -1008,7 +1008,7 @@ int SwingCommon::swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_
     int mask = 0x1;
     int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
     int block_first_mask = ~(inverse_mask - 1);
-    int vrank = (rank % 2) ? rank : -rank;
+    // int vrank = (rank % 2) ? rank : -rank;
     int remapped_rank = remap_rank(rank, size);
     int receiving_mask = inverse_mask << 1; // Root never receives. By having a large mask inverse_mask will always be < receiving_mask
     // I receive in the step corresponding to the position (starting from right)

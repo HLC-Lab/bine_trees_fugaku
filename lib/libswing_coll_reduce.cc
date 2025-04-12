@@ -1073,7 +1073,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
   int mask = 0x1;
   int inverse_mask = 0x1 << (int) (ceil(log2(size)) - 1);
   int block_first_mask = ~(inverse_mask - 1);
-  int vrank = (rank % 2) ? rank : -rank;
+  // int vrank = (rank % 2) ? rank : -rank;
   int remapped_rank = remap_rank(rank, size);
   
   /***** Reduce_scatter *****/
