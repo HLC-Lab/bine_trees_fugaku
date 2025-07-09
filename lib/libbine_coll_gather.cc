@@ -5,64 +5,64 @@
 #include <omp.h>
 #include <unistd.h>
 
-#include "libswing_common.h"
-#include "libswing_coll.h"
+#include "libbine_common.h"
+#include "libbine_coll.h"
 #include <climits>
 #ifdef FUGAKU
-#include "fugaku/swing_utofu.h"
+#include "fugaku/bine_utofu.h"
 #endif
 
-int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+    assert(env.gather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.gather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.gather_config.algo == BINE_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
 #endif
 #ifdef FUGAKU
     assert(sendcount >= env.num_ports);
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_gather_utofu (init)");
-    Timer timer("swing_gather_utofu (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_gather_utofu (init)");
+    Timer timer("bine_gather_utofu (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = ceil((float) sendcount / env.num_ports)*env.num_ports*dtsize*this->size;
     
-    timer.reset("= swing_gather_utofu (utofu buf reg)"); 
+    timer.reset("= bine_gather_utofu (utofu buf reg)"); 
 
     // Everyone sends from tempbuf because they need to put the sendbuf in the correct position
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_gather_utofu (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_gather_utofu (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.gather_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.gather_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
         // Everything to 0/NULL just to initialize the internal status.
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -80,7 +80,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.gather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_gather_utofu (computing trees)");
+        timer.reset("= bine_gather_utofu (computing trees)");
         // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
         // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
         // e.g., for 4 nodes I have an increasing distance tree as follows:
@@ -91,7 +91,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         //           2
         // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
         // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
-        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
+        bine_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -106,7 +106,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         }
 
         DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);        
-        timer.reset("= swing_gather_utofu (waiting recv)");
+        timer.reset("= bine_gather_utofu (waiting recv)");
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
 
@@ -119,7 +119,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
             if(step < sending_step){
                 // Receive from peer                
                 uint peer;
-                if(env.gather_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.gather_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
                     peer = peers[port][step];                      
@@ -131,7 +131,7 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                     size_t blocks_to_recv = (max_block_r - min_block_r) + 1; 
                     size_t bytes_to_recv = blocks_info[port][0].count*blocks_to_recv*dtsize; // All blocks for this port have the same size
                     size_t segments_max_put_size = ceil((float) bytes_to_recv / ((float) MAX_PUTGET_SIZE));
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -143,16 +143,16 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
                 utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_temp_stadd       + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize;
                 size_t tmpcnt = num_blocks*blocks_info[port][0].count; // All blocks for this port have the same size
-                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, step);
-                swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+                issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, tmpcnt*dtsize, rmt_addr, step);
+                bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
             }
             // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_gather_utofu (waiting all sends)");
+            timer.reset("= bine_gather_utofu (waiting all sends)");
         }
 
         // For each port we need to permute back the data in the correct position
         if(this->rank == root){
-            timer.reset("= swing_gather_utofu (permute)");    
+            timer.reset("= bine_gather_utofu (permute)");    
             for(size_t i = 0; i < size; i++){      
                 DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, tree.remapped_ranks[i]);          
                 // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -169,14 +169,14 @@ int SwingCommon::swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Data
         free(peers[port]);
         destroy_tree(&tree);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }                
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_gather_utofu (writing profile data to file)");
+    timer.reset("= bine_gather_utofu (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -199,12 +199,12 @@ static int32_t nbtob(uint32_t neg) {
     return (mask ^ neg) - mask;
 }
 
-int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype dt, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype dt, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+    assert(env.gather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.gather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.gather_config.algo == BINE_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
 #endif
   assert(sendcount == recvcount && dt == recvtype);
   int size, rank, dtsize;
@@ -271,32 +271,32 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
   return MPI_SUCCESS;
 }
 #else
-int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.gather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.gather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.gather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.gather_config.algo == SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
+    assert(env.gather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.gather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.gather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.gather_config.algo == BINE_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE);
 #endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_gather_mpi (init)");
-    Timer timer("swing_gather_mpi (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_gather_mpi (init)");
+    Timer timer("bine_gather_mpi (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = ceil((float) sendcount / env.num_ports)*env.num_ports*dtsize*this->size;
     
-    timer.reset("= swing_gather_mpi (utofu buf reg)"); 
+    timer.reset("= bine_gather_mpi (utofu buf reg)"); 
 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;           
     }else{
         tmpbuf = env.prealloc_buf;
@@ -310,7 +310,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.gather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_gather_mpi (computing trees)");
+        timer.reset("= bine_gather_mpi (computing trees)");
         // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
         // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
         // e.g., for 4 nodes I have an increasing distance tree as follows:
@@ -321,7 +321,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
         //           2
         // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
         // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
-        swing_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        bine_tree_t tree = get_tree(root, port, env.gather_config.algo_family, env.gather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -336,7 +336,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
         }
 
         DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
-        timer.reset("= swing_gather_mpi (waiting recv)");
+        timer.reset("= bine_gather_mpi (waiting recv)");
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         // Put sendbuf in the correct positions (at index of remapped rank) in tempbuf
@@ -347,7 +347,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
             if(step < sending_step){
                 // Receive from peer
                 uint peer;                
-                if(env.gather_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.gather_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
                     peer = peers[port][step];                      
@@ -358,7 +358,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
                     size_t max_block_r = tree.remapped_ranks_max[peer];            
                     size_t num_blocks = (max_block_r - min_block_r) + 1; 
                     DPRINTF("[%d] receiving %d elems from %d at step %d [offset %d, count %d]\n", this->rank, num_blocks*blocks_info[port][0].count, peer, step, min_block_r*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count);
-                    MPI_Recv(tmpbuf + tmpbuf_offset_port + min_block_r*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count, sendtype, peer, TAG_SWING_GATHER, comm, MPI_STATUS_IGNORE);
+                    MPI_Recv(tmpbuf + tmpbuf_offset_port + min_block_r*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count, sendtype, peer, TAG_BINE_GATHER, comm, MPI_STATUS_IGNORE);
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -367,15 +367,15 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
                 size_t max_block_s = tree.remapped_ranks_max[this->rank];            
                 size_t num_blocks = (max_block_s - min_block_s) + 1; 
                 DPRINTF("[%d] sending %d elems to %d at step %d [offset %d, count %d]\n", this->rank, num_blocks*blocks_info[port][0].count, peer, step, min_block_s*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count);
-                MPI_Send(tmpbuf + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count, sendtype, peer, TAG_SWING_GATHER, comm);
+                MPI_Send(tmpbuf + tmpbuf_offset_port + min_block_s*blocks_info[port][0].count*dtsize, num_blocks*blocks_info[port][0].count, sendtype, peer, TAG_BINE_GATHER, comm);
             }
             // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_gather_mpi (waiting all sends)");
+            timer.reset("= bine_gather_mpi (waiting all sends)");
         }
 
         // For each port we need to permute back the data in the correct position
         if(this->rank == root){
-            timer.reset("= swing_gather_mpi (permute)");    
+            timer.reset("= bine_gather_mpi (permute)");    
             for(size_t i = 0; i < size; i++){      
                 DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, tree.remapped_ranks[i]);          
                 // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -396,7 +396,7 @@ int SwingCommon::swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Dataty
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_gather_mpi (writing profile data to file)");
+    timer.reset("= bine_gather_mpi (writing profile data to file)");
     return res;
 }
 #endif

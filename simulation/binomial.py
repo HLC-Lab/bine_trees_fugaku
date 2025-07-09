@@ -30,7 +30,7 @@ def get_peer(sender, step, num_ranks, collective):
 # @param collective: collective to build the tree for
 # @param children: list of children for each rank
 # @param parent: list of parent for each rank
-def build_tree_swing_flat_inner(num_nodes, root, step, collective, children, parent):
+def build_tree_bine_flat_inner(num_nodes, root, step, collective, children, parent):
     for s in range(step + 1, math.floor(math.log2(num_nodes))):
         peer = get_peer(root, s, num_nodes, collective)
 
@@ -44,7 +44,7 @@ def build_tree_swing_flat_inner(num_nodes, root, step, collective, children, par
             children[root].append(peer)
             parent[peer] = root
 
-            build_tree_swing_flat_inner(num_nodes, peer, s, collective, children, parent)
+            build_tree_bine_flat_inner(num_nodes, peer, s, collective, children, parent)
 
 # Rotate a list to the right by n (in place, instead of returning a new list)
 def rotate(l, n):
@@ -172,7 +172,7 @@ def get_remapped_rank(q, num_nodes):
     # Revert the bit indexes and convert back to int
     return int(bit_indexes[::-1], 2)
 
-# Build the tree for the swing-flat algorithm
+# Build the tree for the bine-flat algorithm
 # @param num_nodes: number of nodes participating in the collective
 # @param root: rank of the root of the tree
 # @param step: step of the tree building process
@@ -180,11 +180,11 @@ def get_remapped_rank(q, num_nodes):
 # @param children: list of children for each rank
 # @param parent: list of parent for each rank
 # @param relabels: list of new labels for each rank
-def build_tree_swing_flat(num_nodes, root, step, collective, children, parent, relabels):
+def build_tree_bine_flat(num_nodes, root, step, collective, children, parent, relabels):
     # I build the tree rooted in 0, and then I rotate it appropriately
     reference_root = 0
     assert(reference_root == 0) # We use a variable just for mnemonic purposes, but the code assumes 0
-    build_tree_swing_flat_inner(num_nodes, reference_root, step, collective, children, parent)
+    build_tree_bine_flat_inner(num_nodes, reference_root, step, collective, children, parent)
 
     # If num_nodes is not a power of two, some nodes might have never been reached.
     # Add those to the tree, by considering the distance they would talk to in the last step
@@ -240,7 +240,7 @@ def build_tree_swing_flat(num_nodes, root, step, collective, children, parent, r
             parent[i] = (parent[i] + gap) % num_nodes
     rotate(parent, gap)
 
-# Validate the schedule of the swing-flat algorithm
+# Validate the schedule of the bine-flat algorithm
 # @param num_nodes: number of nodes participating in the collective
 # @param collective: collective to build the tree for
 def validate_schedule(num_nodes, collective):
@@ -252,7 +252,7 @@ def validate_schedule(num_nodes, collective):
         children = [None]*num_nodes
         parent = [None]*num_nodes  
         relabels = [None]*num_nodes      
-        build_tree_swing_flat(num_nodes, r, -1, collective, children, parent, relabels)        
+        build_tree_bine_flat(num_nodes, r, -1, collective, children, parent, relabels)        
         c = children[r]    
         while len(c):
             new_c = []
@@ -265,7 +265,7 @@ def validate_schedule(num_nodes, collective):
         assert(sorted(received_data[r]) == list(range(num_nodes)))
     print("Validation succeeded on {} nodes.".format(num_nodes))
 
-# Validate the schedule of the swing-flat algorithm for several
+# Validate the schedule of the bine-flat algorithm for several
 # values of num_nodes
 def validate_all():
     for n in [4, 8, 6, 10, 12, 14, 18, 30, 32, 64, 128, 256]:
@@ -300,12 +300,12 @@ def get_children_range(children, relabels, num_nodes, r):
             stack.extend(children[node])
     return min_block_id, max_block_id, relabeled_children
 
-# Get the tx info for the swing-flat algorithm
+# Get the tx info for the bine-flat algorithm
 # @param num_nodes: number of nodes participating in the collective
 # @param collective: collective to build the tree for
 # @param root: rank of the root of the collective
 # @param rank: the rank for which we want to get the tx info (for multi-root collectives, it is the same as root)
-def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
+def get_tx_info_bine_flat_contiguous(num_nodes, collective, root, rank=-1):
     if collective == "ALLREDUCE" or collective == "ALLGATHER" or collective == "REDUCE-SCATTER":
         assert(is_power_of_two(num_nodes))
     if rank == -1:
@@ -329,7 +329,7 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
     children = [None]*num_nodes
     parent = [None]*num_nodes        
     relabels = [None]*num_nodes
-    build_tree_swing_flat(num_nodes, root, -1, collective, children, parent, relabels)
+    build_tree_bine_flat(num_nodes, root, -1, collective, children, parent, relabels)
     
     starting_step = 0
 
@@ -382,4 +382,4 @@ def get_tx_info_swing_flat_contiguous(num_nodes, collective, root, rank=-1):
                 print("Step {}: Peer: {} Blocks to send: ({}-{})".format(s, peer, min_block_id_s, max_block_id_s))
 
 validate_all()
-get_tx_info_swing_flat_contiguous(6, "BCAST", 0, 5)
+get_tx_info_bine_flat_contiguous(6, "BCAST", 0, 5)

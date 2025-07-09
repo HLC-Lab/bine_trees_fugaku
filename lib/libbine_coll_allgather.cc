@@ -5,63 +5,63 @@
 #include <omp.h>
 #include <unistd.h>
 
-#include "libswing_common.h"
-#include "libswing_coll.h"
+#include "libbine_common.h"
+#include "libbine_coll.h"
 #include <climits>
 #ifdef FUGAKU
-#include "fugaku/swing_utofu.h"
+#include "fugaku/bine_utofu.h"
 #include <mpi-ext.h> 
 #endif
 
-int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_utofu_contiguous_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
 #endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_utofu_contiguous (init)");
-    Timer timer("swing_allgather_utofu_contiguous (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_utofu_contiguous (init)");
+    Timer timer("bine_allgather_utofu_contiguous (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = ceil((float) sendcount / env.num_ports)*env.num_ports*dtsize*this->size;
     
-    timer.reset("= swing_allgather_utofu_contiguous (utofu buf reg)"); 
+    timer.reset("= bine_allgather_utofu_contiguous (utofu buf reg)"); 
 
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_allgather_utofu_contiguous (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_allgather_utofu_contiguous (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.allgather_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.allgather_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
         // Still done to reset everything
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -79,15 +79,15 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_allgather_utofu_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type, this->scc_real);
+        timer.reset("= bine_allgather_utofu_contiguous (computing trees)");
+        bine_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type, this->scc_real);
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);
 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;
-            if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
@@ -95,7 +95,7 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
 
             // Always send from the beginning of the buffer
             // and receive in the remaining part.
-            timer.reset("= swing_allgather_utofu_contiguous (sendrecv)");
+            timer.reset("= bine_allgather_utofu_contiguous (sendrecv)");
             size_t num_blocks = pow(2, step);
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
 
@@ -105,14 +105,14 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
             
             DPRINTF("[%d] Sending/receiving %d bytes from %d\n", this->rank, count_to_sendrecv*dtsize, peer);
             
-            size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+            size_t issued_sends = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
+            bine_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         }
 
         // For each port we need to permute back the data in the correct position
-        timer.reset("= swing_allgather_utofu_contiguous (permute)");    
-        swing_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_utofu_contiguous (permute)");    
+        bine_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -129,14 +129,14 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
         free(peers[port]);
         destroy_tree(&tree);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }        
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_allgather_utofu_contiguous (writing profile data to file)");
+    timer.reset("= bine_allgather_utofu_contiguous (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -145,55 +145,55 @@ int SwingCommon::swing_allgather_utofu_contiguous_threads(const void *sendbuf, i
 }
 
 
-int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_utofu_contiguous_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
 #endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_utofu_contiguous (init)");
-    Timer timer("swing_allgather_utofu_contiguous (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_utofu_contiguous (init)");
+    Timer timer("bine_allgather_utofu_contiguous (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = ceil((float) sendcount / env.num_ports)*env.num_ports*dtsize*this->size;
     
-    timer.reset("= swing_allgather_utofu_contiguous (utofu buf reg)"); 
+    timer.reset("= bine_allgather_utofu_contiguous (utofu buf reg)"); 
 
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_allgather_utofu_contiguous (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_allgather_utofu_contiguous (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.allgather_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.allgather_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
         // Still done to reset everything
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -203,7 +203,7 @@ int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf,
     }
 
     int res = MPI_SUCCESS; 
-    size_t tmpbuf_offset_port[LIBSWING_MAX_SUPPORTED_PORTS];
+    size_t tmpbuf_offset_port[LIBBINE_MAX_SUPPORTED_PORTS];
 
     for(size_t port = 0; port < env.num_ports; port++){
         // Compute the peers of this port if I did not do it yet
@@ -215,19 +215,19 @@ int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf,
         tmpbuf_offset_port[port] = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port[port], ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
     }
-    size_t issued_sends[LIBSWING_MAX_SUPPORTED_PORTS];
+    size_t issued_sends[LIBBINE_MAX_SUPPORTED_PORTS];
 
     for(size_t step = 0; step < (uint) this->num_steps; step++){
         for(size_t port = 0; port < env.num_ports; port++){
             uint peer;
-            if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
             }
             // Always send from the beginning of the buffer
             // and receive in the remaining part.
-            timer.reset("= swing_allgather_utofu_contiguous (sendrecv)");
+            timer.reset("= bine_allgather_utofu_contiguous (sendrecv)");
             size_t num_blocks = pow(2, step);
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
 
@@ -237,18 +237,18 @@ int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf,
             
             DPRINTF("[%d] Sending/receiving %d bytes from %d\n", this->rank, count_to_sendrecv*dtsize, peer);
             
-            issued_sends[port] = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
+            issued_sends[port] = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step);
         }
         for(size_t port = 0; port < env.num_ports; port++){
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends[port] - 1);
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
+            bine_utofu_wait_recv(utofu_descriptor, port, step, issued_sends[port] - 1);
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
         }        
     }
 
     for(size_t port = 0; port < env.num_ports; port++){        
         // For each port we need to permute back the data in the correct position
-        timer.reset("= swing_allgather_utofu_contiguous (permute)");    
-        swing_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_utofu_contiguous (permute)");    
+        bine_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -263,14 +263,14 @@ int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf,
         destroy_tree(&perm_tree);   
         free(peers[port]);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }                
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_allgather_utofu_contiguous (writing profile data to file)");
+    timer.reset("= bine_allgather_utofu_contiguous (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -278,37 +278,37 @@ int SwingCommon::swing_allgather_utofu_contiguous_nothreads(const void *sendbuf,
 #endif   
 }
 
-int SwingCommon::swing_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
     if(env.use_threads){
-        return swing_allgather_utofu_contiguous_threads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+        return bine_allgather_utofu_contiguous_threads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }else{
-        return swing_allgather_utofu_contiguous_nothreads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+        return bine_allgather_utofu_contiguous_nothreads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }
 }
 
-int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE);
 #endif
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_mpi_contiguous (init)");
-    Timer timer("swing_allgather_mpi_contiguous (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_mpi_contiguous (init)");
+    Timer timer("bine_allgather_mpi_contiguous (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = ceil((float) sendcount / env.num_ports)*env.num_ports*dtsize*this->size;
     
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;           
     }else{
         tmpbuf = env.prealloc_buf;
@@ -322,15 +322,15 @@ int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcou
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_allgather_mpi_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type, this->scc_real);
+        timer.reset("= bine_allgather_mpi_contiguous (computing trees)");
+        bine_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type, this->scc_real);
 
         size_t tmpbuf_offset_port = (tmpbuf_size / env.num_ports) * port;
         memcpy(tmpbuf + tmpbuf_offset_port, ((char*) sendbuf) + blocks_info[port][0].offset, blocks_info[port][0].count*dtsize);              
 
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             uint peer;
-            if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                               
             }else{  
                 peer = peers[port][step];
@@ -338,17 +338,17 @@ int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcou
 
             // Always send from the beginning of the buffer
             // and receive in the remaining part.
-            timer.reset("= swing_allgather_mpi_contiguous (sendrecv)");
+            timer.reset("= bine_allgather_mpi_contiguous (sendrecv)");
             size_t num_blocks = pow(2, step);
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
-            MPI_Sendrecv(tmpbuf + tmpbuf_offset_port                           , count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
-                         tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+            MPI_Sendrecv(tmpbuf + tmpbuf_offset_port                           , count_to_sendrecv, sendtype, peer, TAG_BINE_ALLGATHER, 
+                         tmpbuf + tmpbuf_offset_port + count_to_sendrecv*dtsize, count_to_sendrecv, sendtype, peer, TAG_BINE_ALLGATHER, 
                          comm, MPI_STATUS_IGNORE);                                   
         }
 
         // For each port we need to permute back the data in the correct position
-        timer.reset("= swing_allgather_mpi_contiguous (permute)");    
-        swing_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_mpi_contiguous (permute)");    
+        bine_tree_t perm_tree = get_tree(rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving block %d to %d\n", this->rank, i, perm_tree.remapped_ranks[i]);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -369,29 +369,29 @@ int SwingCommon::swing_allgather_mpi_contiguous(const void *sendbuf, int sendcou
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_allgather_mpi_contiguous (writing profile data to file)");
+    timer.reset("= bine_allgather_mpi_contiguous (writing profile data to file)");
     return res;
 }
 
-int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+int BineCommon::bine_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
 #endif
 #ifdef FUGAKU
     assert(env.num_ports == 1); // TODO: Implement the case where env.num_ports > 1. It would require memcpys, so probably does not make sense ... (just use cont_permute ...)
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_utofu_cont_send (init)");
-    Timer timer("swing_allgather_utofu_cont_send (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_utofu_cont_send (init)");
+    Timer timer("bine_allgather_utofu_cont_send (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
     size_t port = 0;
@@ -400,11 +400,11 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
         peers[port] = (uint*) malloc(sizeof(uint)*(this->num_steps)); 
         compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
     }        
-    timer.reset("= swing_allgather_utofu_cont_send (computing trees)");
+    timer.reset("= bine_allgather_utofu_cont_send (computing trees)");
     // We need to invert everything for the usual reason of the allgather etc...
     // The remapping must be the same for all the ranks so all trees must be built for the same rank (0 in this case)
     uint root = 0;
-    swing_tree_t tree = get_tree(root, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    bine_tree_t tree = get_tree(root, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
     uint peer_send;
     for(size_t i = 0; i < this->size; i++){
         if(tree.remapped_ranks[i] == rank){
@@ -415,10 +415,10 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
 
     int res = MPI_SUCCESS; 
     DPRINTF("[%d] Permuting send. Sending to %d and receiving from %d\n", rank, peer_send, tree.remapped_ranks[rank]); 
-    timer.reset("= swing_allgather_utofu_contiguous (utofu buf reg+exch)");   
-    swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, ((size_t) recvcount)*dtsize*this->size, NULL, 0, env.num_ports); 
+    timer.reset("= bine_allgather_utofu_contiguous (utofu buf reg+exch)");   
+    bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, ((size_t) recvcount)*dtsize*this->size, NULL, 0, env.num_ports); 
     // + 1 because of the peer I talk to at the beginning to permute
-    swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[port]);                 
+    bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[port]);                 
     // I should receive the block I am remapped to from the rank I am remapped to,
     // and send my block to the rank it is remapped as my rank (used the inverse remapping) 
     // i.e., send to inverse_remapping[rank] and received from remapped_ranks[rank]
@@ -437,9 +437,9 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
         assert(tree.remapped_ranks[peer_send] == rank);
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer_send] + tree.remapped_ranks[peer_send]*sendcount*dtsize;
-        size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer_send]), port, peer_send, lcl_addr, sendcount*dtsize, rmt_addr, 0);
-        swing_utofu_wait_recv(utofu_descriptor, port, 0, issued_sends - 1);
-        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+        size_t issued_sends = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer_send]), port, peer_send, lcl_addr, sendcount*dtsize, rmt_addr, 0);
+        bine_utofu_wait_recv(utofu_descriptor, port, 0, issued_sends - 1);
+        bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
     }else{
         memcpy(recvbuf, sendbuf, sendcount*dtsize);
     }
@@ -451,7 +451,7 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
     size_t min_block_r;        
     for(size_t step = 0; step < (uint) this->num_steps; step++){        
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - step - 1];                         
         }else{  
             peer = peers[port][step];
@@ -472,16 +472,16 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
         DPRINTF("[%d] Sending/receiving %d bytes to %d offset %d\n", this->rank, count_to_sendrecv*dtsize, peer, min_block_resident);
 
         // step + 1 because I did already a transmission before starting with the actual steps
-        size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
-        swing_utofu_wait_recv(utofu_descriptor, port, step + 1, issued_sends - 1);
-        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+        size_t issued_sends = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step + 1);
+        bine_utofu_wait_recv(utofu_descriptor, port, step + 1, issued_sends - 1);
+        bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
                         
         min_block_resident = std::min(min_block_resident, min_block_r);
         num_blocks *= 2;
     }         
     free(peers[port]);
     destroy_tree(&tree);
-    timer.reset("= swing_allgather_utofu_cont_send (writing profile data to file)");
+    timer.reset("= bine_allgather_utofu_cont_send (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -489,24 +489,24 @@ int SwingCommon::swing_allgather_send_utofu(const void *sendbuf, int sendcount, 
 #endif
 }
 
-int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+int BineCommon::bine_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND);
 #endif
     assert(env.num_ports == 1);
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_mpi_cont_send (init)");
-    Timer timer("swing_allgather_mpi_cont_send (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_mpi_cont_send (init)");
+    Timer timer("bine_allgather_mpi_cont_send (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
     int res = MPI_SUCCESS; 
@@ -518,10 +518,10 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
     }        
-    timer.reset("= swing_allgather_mpi_cont_send (computing trees)");
+    timer.reset("= bine_allgather_mpi_cont_send (computing trees)");
     // We need to invert everything for the usual reason of the allgather etc...
     // The remapping must be the same for all the ranks so all trees must be built for the same rank (0 in this case)
-    swing_tree_t tree = get_tree(0, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    bine_tree_t tree = get_tree(0, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
     size_t remapped_rank = tree.remapped_ranks[rank];
     uint* inverse_remapping = (uint*) malloc(sizeof(uint)*this->size);
     for(size_t i = 0; i < this->size; i++){
@@ -532,8 +532,8 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
     // and send my block to the rank it is remapped as my rank (used the inverse remapping) 
     // i.e., send to inverse_remapping[rank] and received from remapped_ranks[rank]
     DPRINTF("[%d] Remap: Sending to %d and receiving from %d\n", rank, inverse_remapping[rank], remapped_rank);
-    MPI_Sendrecv((char*) sendbuf                                 , sendcount, sendtype, inverse_remapping[rank], TAG_SWING_ALLGATHER, 
-                 (char*) recvbuf + remapped_rank*sendcount*dtsize, sendcount, sendtype, remapped_rank          , TAG_SWING_ALLGATHER, 
+    MPI_Sendrecv((char*) sendbuf                                 , sendcount, sendtype, inverse_remapping[rank], TAG_BINE_ALLGATHER, 
+                 (char*) recvbuf + remapped_rank*sendcount*dtsize, sendcount, sendtype, remapped_rank          , TAG_BINE_ALLGATHER, 
                  comm, MPI_STATUS_IGNORE);
     free(inverse_remapping);
     
@@ -543,7 +543,7 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
     size_t min_block_r;        
     for(size_t step = 0; step < (uint) this->num_steps; step++){        
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - step - 1];                         
         }else{  
             peer = peers[port][step];
@@ -559,8 +559,8 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
 
 
         DPRINTF("[%d] Sending to %d and receiving from %d\n", rank, peer, peer);
-        MPI_Sendrecv((char*) recvbuf + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
-                     (char*) recvbuf + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, sendtype, peer, TAG_SWING_ALLGATHER, 
+        MPI_Sendrecv((char*) recvbuf + recvbuf_offset_port + min_block_resident*sendcount*dtsize, count_to_sendrecv, sendtype, peer, TAG_BINE_ALLGATHER, 
+                     (char*) recvbuf + recvbuf_offset_port + min_block_r*sendcount*dtsize       , count_to_sendrecv, sendtype, peer, TAG_BINE_ALLGATHER, 
                         comm, MPI_STATUS_IGNORE);     
                         
         min_block_resident = std::min(min_block_resident, min_block_r);
@@ -569,86 +569,86 @@ int SwingCommon::swing_allgather_send_mpi(const void *sendbuf, int sendcount, MP
     free(peers[port]);
     destroy_tree(&tree);
 
-    timer.reset("= swing_allgather_mpi_cont_send (writing profile data to file)");
+    timer.reset("= bine_allgather_mpi_cont_send (writing profile data to file)");
     return res;
 }
 
 
 #if 1
-int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
 #endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    Timer timer("swing_allgather_blocks_utofu (init)");
-    timer.reset("= swing_allgather_blocks_utofu (serial fraction)");
+    Timer timer("bine_allgather_blocks_utofu (init)");
+    timer.reset("= bine_allgather_blocks_utofu (serial fraction)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
-    swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
+    bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
     }else{
         // TODO: Probably need to do this for all the ports for torus with different dimensions size
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, 0, env.allgather_config.algo_family, this->scc_real, peers[0]);
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+        bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
         
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
         if(mp != -1 && mp != 0){
             peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, mp, env.allgather_config.algo_family, this->scc_real, peers[mp]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
         }
     }
 
-    //timer.reset("= swing_allgather_blocks_utofu (memcpy)");           
+    //timer.reset("= bine_allgather_blocks_utofu (memcpy)");           
     memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
 
-    swing_tree_t trees[LIBSWING_MAX_SUPPORTED_PORTS];
+    bine_tree_t trees[LIBBINE_MAX_SUPPORTED_PORTS];
     // resident_blocks[i] == 0 => block i is not resident
     // resident_blocks[i] == 1 => we must wait for block i to be received
     // resident_blocks[i] == 2 => block i has been received
-    char* resident_blocks[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t segments_max_put_size[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t issued_sends[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t issued_recvs[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t expected_recv[LIBSWING_MAX_SUPPORTED_PORTS];
+    char* resident_blocks[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t segments_max_put_size[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t issued_sends[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t issued_recvs[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t expected_recv[LIBBINE_MAX_SUPPORTED_PORTS];
 
     // Do the first step
     for(size_t port = 0; port < env.num_ports; port++){
-        //Timer timer("swing_allgather_blocks_utofu (init)");
+        //Timer timer("bine_allgather_blocks_utofu (init)");
         // Compute the peers of this port if I did not do it yet
-        timer.reset("= swing_allgather_blocks_utofu (computing peers)");
+        timer.reset("= bine_allgather_blocks_utofu (computing peers)");
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_allgather_blocks_utofu (computing trees)");
-        trees[port] = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_blocks_utofu (computing trees)");
+        trees[port] = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
 
 
         resident_blocks[port] = (char*) calloc(this->size, sizeof(char)); 
         
-        timer.reset("= swing_allgather_blocks_utofu (first send)");
+        timer.reset("= bine_allgather_blocks_utofu (first send)");
         issued_sends[port] = 0;
         issued_recvs[port] = 0;
 
         // Do send for the first step, and compute what to receive
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - 0 - 1];                         
         }else{  
             peer = peers[port][0];
@@ -656,7 +656,7 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
 
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][this->rank].offset;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][this->rank].offset;
-        issued_sends[port] += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
+        issued_sends[port] += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
         resident_blocks[port][this->rank] = 2;
         resident_blocks[port][peer] = 1;
 
@@ -673,26 +673,26 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
         for(size_t block = 0; block < this->size; block++){
             for(size_t port = 0; port < env.num_ports; port++){
                 uint peer;            
-                if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                         
                 }else{  
                     peer = peers[port][step];
                 }
 
                 if(resident_blocks[port][block] == 1){
-                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    timer.reset("= bine_allgather_blocks_utofu (waiting for recv)");
                     // We must wait for this block (from previous step)                    
-                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv[port] - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv[port] - 1);
                     expected_recv[port] += segments_max_put_size[port];
                     resident_blocks[port][block] = 2;
                 }
 
                 if(resident_blocks[port][block] == 2){
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends[port] += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                    issued_sends[port] += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                 }    
 
                 if(trees[port].subtree_roots[block] == peer){
@@ -709,8 +709,8 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
     }
 
     for(size_t port = 0; port < env.num_ports; port++){
-        swing_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs[port] - 1);
-        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
+        bine_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs[port] - 1);
+        bine_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
         free(peers[port]);
         free(resident_blocks[port]);
         destroy_tree(&trees[port]);
@@ -725,80 +725,80 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
 
 #else
 
-int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
 #endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    Timer timer("swing_allgather_blocks_utofu (init)");
-    timer.reset("= swing_allgather_blocks_utofu (serial fraction)");
+    Timer timer("bine_allgather_blocks_utofu (init)");
+    timer.reset("= bine_allgather_blocks_utofu (serial fraction)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
-    swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
+    bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
     }else{
         // TODO: Probably need to do this for all the ports for torus with different dimensions size
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, 0, env.allgather_config.algo_family, this->scc_real, peers[0]);
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+        bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
         
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
         if(mp != -1 && mp != 0){
             peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, mp, env.allgather_config.algo_family, this->scc_real, peers[mp]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
         }
     }
 
-    //timer.reset("= swing_allgather_blocks_utofu (memcpy)");           
+    //timer.reset("= bine_allgather_blocks_utofu (memcpy)");           
     memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
 
-    swing_tree_t trees[LIBSWING_MAX_SUPPORTED_PORTS];
+    bine_tree_t trees[LIBBINE_MAX_SUPPORTED_PORTS];
     // resident_blocks[i] == 0 => block i is not resident
     // resident_blocks[i] == 1 => we must wait for block i to be received
     // resident_blocks[i] == 2 => block i has been received
-    char* resident_blocks[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t segments_max_put_size[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t issued_sends[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t issued_recvs[LIBSWING_MAX_SUPPORTED_PORTS];
-    size_t expected_recv[LIBSWING_MAX_SUPPORTED_PORTS];
+    char* resident_blocks[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t segments_max_put_size[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t issued_sends[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t issued_recvs[LIBBINE_MAX_SUPPORTED_PORTS];
+    size_t expected_recv[LIBBINE_MAX_SUPPORTED_PORTS];
 
     // Do the first step
     for(size_t port = 0; port < env.num_ports; port++){
-        //Timer timer("swing_allgather_blocks_utofu (init)");
+        //Timer timer("bine_allgather_blocks_utofu (init)");
         // Compute the peers of this port if I did not do it yet
-        timer.reset("= swing_allgather_blocks_utofu (computing peers)");
+        timer.reset("= bine_allgather_blocks_utofu (computing peers)");
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_allgather_blocks_utofu (computing trees)");
-        trees[port] = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_blocks_utofu (computing trees)");
+        trees[port] = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
 
 
         resident_blocks[port] = (char*) calloc(this->size, sizeof(char)); 
         
-        timer.reset("= swing_allgather_blocks_utofu (first send)");
+        timer.reset("= bine_allgather_blocks_utofu (first send)");
         issued_sends[port] = 0;
         issued_recvs[port] = 0;
 
         // Do send for the first step, and compute what to receive
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - 0 - 1];                         
         }else{  
             peer = peers[port][0];
@@ -806,7 +806,7 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
 
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][this->rank].offset;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][this->rank].offset;
-        issued_sends[port] += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
+        issued_sends[port] += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
         resident_blocks[port][this->rank] = 2;
         resident_blocks[port][peer] = 1;
 
@@ -821,18 +821,18 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
         for(size_t block = 0; block < this->size; block++){
             for(size_t port = 0; port < env.num_ports; port++){
                 uint peer;            
-                if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                         
                 }else{  
                     peer = peers[port][step];
                 }
 
                 if(resident_blocks[port][block] == 2){
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends[port] += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                    issued_sends[port] += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                 }    
             }    
         }
@@ -842,24 +842,24 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
         for(size_t block = 0; block < this->size; block++){
             for(size_t port = 0; port < env.num_ports; port++){
                 uint peer;            
-                if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                         
                 }else{  
                     peer = peers[port][step];
                 }
 
                 if(resident_blocks[port][block] == 1){
-                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    timer.reset("= bine_allgather_blocks_utofu (waiting for recv)");
                     // We must wait for this block (from previous step)                    
-                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv[port] - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv[port] - 1);
                     expected_recv[port] += segments_max_put_size[port];
                     resident_blocks[port][block] = 2;
 
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends[port] += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);                    
+                    issued_sends[port] += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);                    
                 }            
                 
                 if(trees[port].subtree_roots[block] == peer){
@@ -875,8 +875,8 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
     }
 
     for(size_t port = 0; port < env.num_ports; port++){
-        swing_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs[port] - 1);
-        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
+        bine_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs[port] - 1);
+        bine_utofu_wait_sends(utofu_descriptor, port, issued_sends[port]);
         free(peers[port]);
         free(resident_blocks[port]);
         destroy_tree(&trees[port]);
@@ -890,71 +890,71 @@ int SwingCommon::swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int
 }
 #endif
 
-int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_utofu_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
 #endif
 #ifdef FUGAKU
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    Timer timer("swing_allgather_blocks_utofu (init)");
-    timer.reset("= swing_allgather_blocks_utofu (serial fraction)");
+    Timer timer("bine_allgather_blocks_utofu (init)");
+    timer.reset("= bine_allgather_blocks_utofu (serial fraction)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
-    swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
+    bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, sendcount*dtsize, recvbuf, recvcount*this->size*dtsize, NULL, 0, env.num_ports);     
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
     }else{
         // TODO: Probably need to do this for all the ports for torus with different dimensions size
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, 0, env.allgather_config.algo_family, this->scc_real, peers[0]);
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+        bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
         
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
         if(mp != -1 && mp != 0){
             peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, mp, env.allgather_config.algo_family, this->scc_real, peers[mp]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
         }
     }
 
-    //timer.reset("= swing_allgather_blocks_utofu (memcpy)");           
+    //timer.reset("= bine_allgather_blocks_utofu (memcpy)");           
     //memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
 
     int res = MPI_SUCCESS; 
 #pragma omp parallel for num_threads(env.num_ports) schedule(static, 1) collapse(1)
     for(size_t port = 0; port < env.num_ports; port++){
-        //Timer timer("swing_allgather_blocks_utofu (init)");
+        //Timer timer("bine_allgather_blocks_utofu (init)");
         // Compute the peers of this port if I did not do it yet
-        timer.reset("= swing_allgather_blocks_utofu (computing peers)");
+        timer.reset("= bine_allgather_blocks_utofu (computing peers)");
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_allgather_blocks_utofu (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        timer.reset("= bine_allgather_blocks_utofu (computing trees)");
+        bine_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
 
         // resident_blocks[i] == 0 => block i is not resident
         // resident_blocks[i] == 1 => we must wait for block i to be received
         // resident_blocks[i] == 2 => block i has been received
         char* resident_blocks = (char*) calloc(this->size, sizeof(char)); 
         
-        timer.reset("= swing_allgather_blocks_utofu (first send)");
+        timer.reset("= bine_allgather_blocks_utofu (first send)");
         size_t issued_sends = 0, issued_recvs = 0;
         // Do send for the first step, and compute what to receive
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - 0 - 1];                         
         }else{  
             peer = peers[port][0];
@@ -962,7 +962,7 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
         
         utofu_stadd_t lcl_addr = utofu_descriptor->port_info[port].lcl_send_stadd       + blocks_info[port][0].offset;
         utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][this->rank].offset;
-        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
+        issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][this->rank].count*dtsize, rmt_addr, 0);
         resident_blocks[this->rank] = 2;
         resident_blocks[peer] = 1;
 
@@ -980,9 +980,9 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
         // and I send each of those blocks, as well as the other blocks that were already resident.
         for(size_t step = 1; step < (uint) this->num_steps; step++){        
             issued_recvs = 0;
-            timer.reset("= swing_allgather_blocks_utofu (step " + std::to_string(step) + ")");
+            timer.reset("= bine_allgather_blocks_utofu (step " + std::to_string(step) + ")");
             uint peer;            
-            if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];                         
             }else{  
                 peer = peers[port][step];
@@ -991,9 +991,9 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
             #if 0
             for(size_t block = 0; block < this->size; block++){
                 if(resident_blocks[block] == 1){
-                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    timer.reset("= bine_allgather_blocks_utofu (waiting for recv)");
                     // We must wait for this block (from previous step)                    
-                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
                     // What's the ID of the next recv?
                     bytes_to_recv = blocks_info[port][peer].count*dtsize;
                     segments_max_put_size = ceil(bytes_to_recv / ((float) MAX_PUTGET_SIZE));                    
@@ -1002,11 +1002,11 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
                 }
                 
                 if(resident_blocks[block] == 2){
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                    issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                 }
             }
             #else
@@ -1016,37 +1016,37 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
 
             for(size_t block = 0; block < this->size; block++){
                 if(resident_blocks[block] == 2){
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
                     ++posted_sends;
 
                     if(posted_sends % push_every == 0){
-                        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                        issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                     }else{
-                        issued_sends += swing_utofu_isend_delayed(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
+                        issued_sends += bine_utofu_isend_delayed(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);
                     }
                 }                
             }
             // Just to push all the posted sends (0-byte put) (unless I didn't do it already for the last send)
             if(posted_sends % push_every){
-                issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);
+                issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, 0, rmt_addr, step);
             }
 
             for(size_t block = 0; block < this->size; block++){
                 if(resident_blocks[block] == 1){
-                    timer.reset("= swing_allgather_blocks_utofu (waiting for recv)");
+                    timer.reset("= bine_allgather_blocks_utofu (waiting for recv)");
                     // We must wait for this block (from previous step)                    
-                    swing_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step - 1, expected_recv - 1);
                     expected_recv += segments_max_put_size;
                     resident_blocks[block] = 2;
 
-                    timer.reset("= swing_allgather_blocks_utofu (sending)");
+                    timer.reset("= bine_allgather_blocks_utofu (sending)");
                     // Block is here, send it
                     lcl_addr = utofu_descriptor->port_info[port].lcl_recv_stadd       + blocks_info[port][block].offset;
                     rmt_addr = utofu_descriptor->port_info[port].rmt_recv_stadd[peer] + blocks_info[port][block].offset;
-                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);                    
+                    issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, blocks_info[port][block].count*dtsize, rmt_addr, step);                    
                 }            
                 
                 if(tree.subtree_roots[block] == peer){
@@ -1060,17 +1060,17 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
             expected_recv = segments_max_put_size;            
         }    
 
-        timer.reset("= swing_allgather_blocks_utofu (last recvs waiting)");
+        timer.reset("= bine_allgather_blocks_utofu (last recvs waiting)");
         // Now wait for all the recvs that were issued in the last step.
-        swing_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs - 1);
+        bine_utofu_wait_recv(utofu_descriptor, port, this->num_steps - 1, issued_recvs - 1);
         DPRINTF("[%d] All receives waited\n", this->rank);
 
-        swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+        bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         DPRINTF("[%d] All sends waited\n", this->rank);
         free(peers[port]);
         destroy_tree(&tree);
         free(resident_blocks);
-        timer.reset("= swing_allgather_blocks_utofu (writing profile data to file)");
+        timer.reset("= bine_allgather_blocks_utofu (writing profile data to file)");
     }    
     return res;
 #else
@@ -1079,11 +1079,11 @@ int SwingCommon::swing_allgather_blocks_utofu_threads(const void *sendbuf, int s
 #endif
 }
 
-int SwingCommon::swing_allgather_blocks_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm){
     if(env.use_threads){
-        return swing_allgather_blocks_utofu_threads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+        return bine_allgather_blocks_utofu_threads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }else{
-        return swing_allgather_blocks_utofu_nothreads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
+        return bine_allgather_blocks_utofu_nothreads(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, blocks_info, comm);
     }
 }
 
@@ -1158,12 +1158,12 @@ static inline uint32_t get_nu(uint32_t rank, uint32_t size){
 }
 
 
-int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
 #endif    
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
@@ -1230,23 +1230,23 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
 #endif
 
 #if 0
-int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
+int BineCommon::bine_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.allgather_config.algo_family == SWING_ALGO_FAMILY_SWING || env.allgather_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.allgather_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.allgather_config.algo == SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
+    assert(env.allgather_config.algo_family == BINE_ALGO_FAMILY_BINE || env.allgather_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.allgather_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.allgather_config.algo == BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS);
 #endif    
     assert(sendcount == recvcount); // TODO: Implement the case where sendcount != recvcount
     assert(sendtype == recvtype); // TODO: Implement the case where sendtype != recvtype
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_allgather_blocks_mpi (init)");
-    Timer timer("swing_allgather_blocks_mpi (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_allgather_blocks_mpi (init)");
+    Timer timer("bine_allgather_blocks_mpi (init)");
     int dtsize;
     MPI_Type_size(sendtype, &dtsize);    
 
     // We don't need a tmpbuf since we do not need to reorder
     // We can do everything with recvbuf
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
     int res = MPI_SUCCESS; 
@@ -1258,8 +1258,8 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
         peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, port, env.allgather_config.algo_family, this->scc_real, peers[port]);
     }        
-    timer.reset("= swing_allgather_blocks_mpi (computing trees)");
-    swing_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+    timer.reset("= bine_allgather_blocks_mpi (computing trees)");
+    bine_tree_t tree = get_tree(this->rank, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
 
     memcpy((char*) recvbuf + this->rank*sendcount*dtsize, sendbuf, sendcount*dtsize);
     MPI_Request* reqs_send = (MPI_Request*) malloc(sizeof(MPI_Request)*this->size);
@@ -1271,14 +1271,14 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     size_t issued_sends = 0, issued_recvs = 0;
     for(size_t step = 0; step < (uint) this->num_steps; step++){        
         uint peer;            
-        if(env.allgather_config.distance_type == SWING_DISTANCE_DECREASING){
+        if(env.allgather_config.distance_type == BINE_DISTANCE_DECREASING){
             peer = peers[port][this->num_steps - step - 1];                         
         }else{  
             peer = peers[port][step];
         }
 
         issued_recvs = 0;
-        swing_tree_t tree_peer = get_tree(peer, port, env.allgather_config.algo_family, env.allgather_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);
+        bine_tree_t tree_peer = get_tree(peer, port, env.allgather_config.algo_family, env.allgather_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);
         for(size_t block = 0; block < this->size; block++){
             char send_block = 0, recv_block = 0;
             // Check first if I actually need to send something to that peer
@@ -1296,7 +1296,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
                 }
             }
 
-            // TODO: This does not work for some non p2 cases. You should use compute_block_step from libswing_common.cc rather than get_tree
+            // TODO: This does not work for some non p2 cases. You should use compute_block_step from libbine_common.cc rather than get_tree
             // The issue is how we disconnect the nodes, which should be done based on the starting step rather than arrival step.
             if(send_block && resident_blocks[block]){ // Sometimes (e.g., on a 6x6 torus) it might turn out that I need to both send and recv a block at the same time in the last step.
                 //if(resident_blocks[block] == 0){
@@ -1305,13 +1305,13 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
                 //}
                 ////assert(resident_blocks[block] == 1);
                 DPRINTF("[%d] Step %d Sending block %d to %d\n", this->rank, step, block, peer);
-                MPI_Isend((char*) recvbuf + block*sendcount*dtsize, sendcount, sendtype, peer, TAG_SWING_ALLGATHER, comm, &reqs_send[issued_sends]);
+                MPI_Isend((char*) recvbuf + block*sendcount*dtsize, sendcount, sendtype, peer, TAG_BINE_ALLGATHER, comm, &reqs_send[issued_sends]);
                 ++issued_sends;
             }
 
             if(recv_block){
                 DPRINTF("[%d] Step %d Receiving block %d from %d\n", this->rank, step, block, peer);
-                MPI_Irecv((char*) recvbuf + block*recvcount*dtsize, recvcount, recvtype, peer, TAG_SWING_ALLGATHER, comm, &reqs_recv[issued_recvs]);
+                MPI_Irecv((char*) recvbuf + block*recvcount*dtsize, recvcount, recvtype, peer, TAG_BINE_ALLGATHER, comm, &reqs_recv[issued_recvs]);
                 ++issued_recvs;
                 resident_blocks[block] = 1;
             }
@@ -1329,7 +1329,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
     free(reqs_recv);
     free(resident_blocks);
 
-    timer.reset("= swing_allgather_blocks_mpi (writing profile data to file)");
+    timer.reset("= bine_allgather_blocks_mpi (writing profile data to file)");
     return res;
 }
 #endif
@@ -1337,7 +1337,7 @@ int SwingCommon::swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, 
 #define LDIM 3
 #define TDIM 6
 
-int SwingCommon::bucket_allgather(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+int BineCommon::bucket_allgather(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int size, myrank, x, y, z;
     int dimensions, dimensions_sizes[3];
     int relcoord[LDIM];
@@ -1389,10 +1389,10 @@ int SwingCommon::bucket_allgather(const void *sendbuf, void *recvbuf, int count,
     if(tmpbuf_size > env.prealloc_size){
         data = (char*) malloc(tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
     }else{
         // Still done to reset everything
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports); 
         data = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -1402,7 +1402,7 @@ int SwingCommon::bucket_allgather(const void *sendbuf, void *recvbuf, int count,
     }
     assert(env.utofu_add_ag);
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
     }
     segment_buf = data + count*dtsize;
     

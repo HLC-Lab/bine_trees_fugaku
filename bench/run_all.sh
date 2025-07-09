@@ -31,7 +31,7 @@ export CUDA="false"
 export OUTPUT_LEVEL="summarized"
 export MPI_LIB="FJMPI"
 export MPI_LIB_VERSION="4.0.1"
-export LIBSWING_VERSION="1.0.0"
+export LIBBINE_VERSION="1.0.0"
 
 i=0
 for COLLECTIVE in "${COLLECTIVES[@]}"

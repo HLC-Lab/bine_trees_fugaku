@@ -330,7 +330,7 @@ int main(int argc, char** argv){
     if((!strcmp(collective, "MPI_Gather") || !strcmp(collective, "MPI_Reduce")) && rank != 0){
         // On MPI_Gather and MPI_Reduce only rank 0 receives the result
     }else{
-        char* skip_validation = getenv("LIBSWING_SKIP_VALIDATION");
+        char* skip_validation = getenv("LIBBINE_SKIP_VALIDATION");
         if(skip_validation == NULL || strcmp(skip_validation, "0") == 0){
             // Don't validate for VOID op
             if(strcmp(type, "VOID")){

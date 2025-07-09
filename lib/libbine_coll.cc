@@ -5,11 +5,11 @@
 #include <omp.h>
 #include <unistd.h>
 
-#include "libswing_common.h"
-#include "libswing_coll.h"
+#include "libbine_common.h"
+#include "libbine_coll.h"
 #include <climits>
 #ifdef FUGAKU
-#include "fugaku/swing_utofu.h"
+#include "fugaku/bine_utofu.h"
 #endif
 
 static int is_mirroring_port(int port, uint dimensions_num){
@@ -86,17 +86,17 @@ int ceil_log2(unsigned long long x){
     return y;
 }
 
-void get_peer_c(int* coord_rank, size_t step, uint port, swing_step_info_t* step_info, swing_algo_family_t algo, uint dimensions_num, uint* dimensions, int* coord_peer){
+void get_peer_c(int* coord_rank, size_t step, uint port, bine_step_info_t* step_info, bine_algo_family_t algo, uint dimensions_num, uint* dimensions, int* coord_peer){
     memcpy(coord_peer, coord_rank, sizeof(uint)*dimensions_num);
     size_t d = step_info[step].d;
     size_t step_in_d = step_info[step].step_in_d;
-    if(algo == SWING_ALGO_FAMILY_RECDOUB){
+    if(algo == BINE_ALGO_FAMILY_RECDOUB){
         int distance = (coord_peer[d] ^ (1 << (step_in_d))) - coord_peer[d];
         if(is_mirroring_port(port, dimensions_num)){ // Invert sign if mirrored collective
             distance *= -1;     
         }
         coord_peer[d] = mod(coord_peer[d] + distance, dimensions[d]);
-    }else if(algo == SWING_ALGO_FAMILY_SWING){
+    }else if(algo == BINE_ALGO_FAMILY_BINE){
         int distance = rhos[step_in_d];
         distance *= get_distance_sign(coord_rank[d], port, dimensions_num);
         coord_peer[d] = mod(coord_peer[d] + distance, dimensions[d]);
@@ -107,23 +107,23 @@ void get_peer_c(int* coord_rank, size_t step, uint port, swing_step_info_t* step
 }
 
 /**
- * Computes a Swing binomial tree. 
+ * Computes a Bine binomial tree. 
  * @param coord_root (IN) The root of the tree
  * @param step (IN) The current step
  * @param port (IN) The port on which we are working on
- * @param algo (IN) The algorithm to use (SWING or RECDOUB)
+ * @param algo (IN) The algorithm to use (BINE or RECDOUB)
  * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
- * @param scc (IN) The SwingCoordConverter object
+ * @param scc (IN) The BineCoordConverter object
  * @param subtree_root (IN) The rank of the root of the subtree (i.e., one of the immediate children of the root)
  * @param reached_at_step (OUT) An array of size scc->size to store the step at which a node is reached
  * @param parent (OUT) An array of size scc->size to store the parent of a node
  * @param subtree_roots (OUT) An array of size scc->size to store the rank of the root of the subtree to which i belongs. The root of such a subtree will be a children of coord_root.
  */
-static void build_tree(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint32_t* reached_at_step, uint32_t subtree_root, uint32_t* parent, swing_step_info_t* step_info, uint32_t* subtree_roots){
+static void build_tree(int* coord_root, size_t step, uint port, bine_algo_family_t algo, bine_distance_type_t dist_type, BineCoordConverter* scc, uint32_t* reached_at_step, uint32_t subtree_root, uint32_t* parent, bine_step_info_t* step_info, uint32_t* subtree_roots){
     for(size_t i = step; i < scc->num_steps; i++){
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int peer_rank[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
-        if(dist_type == SWING_DISTANCE_DECREASING){
+        if(dist_type == BINE_DISTANCE_DECREASING){
             real_step = scc->num_steps - 1 - i;
         }else{
             real_step = i;
@@ -267,24 +267,24 @@ void reduce_local(const void* inbuf_a, const void* inbuf_b, void* outbuf, int co
 }
 
 /**
- * Remaps the ranks of a Swing binomial tree so to have subtrees with contiguous ranks.
+ * Remaps the ranks of a Bine binomial tree so to have subtrees with contiguous ranks.
  * @param coord_root (IN) The root of the tree
  * @param step (IN) The current step
  * @param port (IN) The port on which we are working on
- * @param algo (IN) The algorithm to use (SWING or RECDOUB)
+ * @param algo (IN) The algorithm to use (BINE or RECDOUB)
  * @param dist_type (IN) The type of distance between nodes in the tree (increasing or decreasing)
- * @param scc (IN) The SwingCoordConverter object
+ * @param scc (IN) The BineCoordConverter object
  * @param next_rank (IN) The next rank to assign
  * @param parent (IN) An array of size scc->size to store the parent of a node
  * @param remapped_ranks (OUT) An array of size scc->size to store the remapped ranks
  * @param remapped_ranks_max (OUT) An array of size scc->size to store the maximum remapped rank in the subtree rooted at i
  */
-static void remap_ranks(int* coord_root, size_t step, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc, uint* next_rank, const uint* parent, uint* remapped_ranks, uint* remapped_ranks_max, swing_step_info_t* step_info){
+static void remap_ranks(int* coord_root, size_t step, uint port, bine_algo_family_t algo, bine_distance_type_t dist_type, BineCoordConverter* scc, uint* next_rank, const uint* parent, uint* remapped_ranks, uint* remapped_ranks_max, bine_step_info_t* step_info){
     remapped_ranks_max[scc->getIdFromCoord(coord_root)] = *next_rank;
     for(size_t i = step; i < scc->num_steps; i++){
-        int peer_rank[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int peer_rank[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         int real_step;
-        if(dist_type == SWING_DISTANCE_DECREASING){
+        if(dist_type == BINE_DISTANCE_DECREASING){
             real_step = scc->num_steps - 1 - i;
         }else{
             real_step = i;
@@ -303,10 +303,10 @@ static void remap_ranks(int* coord_root, size_t step, uint port, swing_algo_fami
     (*next_rank)--;
 }
 
-swing_step_info_t* compute_step_info(uint port, SwingCoordConverter* scc, uint dimensions_num, uint* dimensions){
-    size_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+bine_step_info_t* compute_step_info(uint port, BineCoordConverter* scc, uint dimensions_num, uint* dimensions){
+    size_t next_step_per_dim[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     size_t current_d = port % dimensions_num;
-    swing_step_info_t* step_info = (swing_step_info_t*) malloc(sizeof(swing_step_info_t)*scc->num_steps);
+    bine_step_info_t* step_info = (bine_step_info_t*) malloc(sizeof(bine_step_info_t)*scc->num_steps);
     memset(next_step_per_dim, 0, sizeof(size_t)*dimensions_num);
     for(size_t i = 0; i < scc->num_steps; i++){
         step_info[i].d = current_d;
@@ -331,15 +331,15 @@ swing_step_info_t* compute_step_info(uint port, SwingCoordConverter* scc, uint d
 }
 
 
-swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
-    swing_comm_info_key_t key;
+bine_tree_t get_tree(uint root, uint port, bine_algo_family_t algo, bine_distance_type_t dist_type, BineCoordConverter* scc){
+    bine_comm_info_key_t key;
     key.root = root;
     key.port = port;
     key.algo = algo;
     key.dist_type = dist_type;
     key.comm = MPI_COMM_WORLD; // TODO: FIXME
     bool found = false;
-    swing_tree_t tree_to_return;
+    bine_tree_t tree_to_return;
 #pragma omp critical
 {
     auto it = comm_info.find(key);
@@ -352,9 +352,9 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
     if(found){
         return tree_to_return;
     }else{
-        int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int coord_root[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         scc->getCoordFromId(root, coord_root);
-        swing_tree_t tree;
+        bine_tree_t tree;
         uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*5); // Do one single malloc rather than 5
         tree.parent = buffer;
         tree.reached_at_step = buffer + scc->size;
@@ -367,7 +367,7 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
         }
                
         // Compute the basic tree informations (parent and reached_at_step)
-        swing_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
+        bine_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
         build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, 0, tree.parent, step_info, tree.subtree_roots);    
         tree.parent[root] = UINT32_MAX;
         tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
@@ -378,7 +378,7 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
         remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks, tree.remapped_ranks_max, step_info);
         assert(next_rank == UINT32_MAX);
         free(step_info);
-        swing_comm_info_t cinfo;
+        bine_comm_info_t cinfo;
         cinfo.tree = tree;
 #pragma omp critical
         {
@@ -388,24 +388,24 @@ swing_tree_t get_tree(uint root, uint port, swing_algo_family_t algo, swing_dist
     }
 }
 
-swing_tree_t* get_tree_fast(uint root, uint port, swing_algo_family_t algo, swing_distance_type_t dist_type, SwingCoordConverter* scc){
-    swing_comm_info_key_t key = {root, port, algo, dist_type, MPI_COMM_WORLD}; // TODO: FIXME MPI_COMM_WORLD
-    //swing_comm_info_key_t key;
+bine_tree_t* get_tree_fast(uint root, uint port, bine_algo_family_t algo, bine_distance_type_t dist_type, BineCoordConverter* scc){
+    bine_comm_info_key_t key = {root, port, algo, dist_type, MPI_COMM_WORLD}; // TODO: FIXME MPI_COMM_WORLD
+    //bine_comm_info_key_t key;
     //key.root = root;
     //key.port = port;
     //key.algo = algo;
     //key.dist_type = dist_type;
     //key.comm = MPI_COMM_WORLD; // TODO: FIXME
-    const std::unordered_map<swing_comm_info_key_t, swing_comm_info_t>::iterator it = comm_info.find(key);
+    const std::unordered_map<bine_comm_info_key_t, bine_comm_info_t>::iterator it = comm_info.find(key);
 
     //auto it = comm_info.find(key);
     if(it != comm_info.end()){
         return &(it->second.tree);
     }else{
-        int coord_root[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        int coord_root[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         scc->getCoordFromId(root, coord_root);
         uint* buffer = (uint*) malloc(sizeof(uint)*scc->size*5); // Do one single malloc rather than 5
-        swing_tree_t tree;
+        bine_tree_t tree;
         tree.parent = buffer;
         tree.reached_at_step = buffer + scc->size;
         tree.remapped_ranks = buffer + scc->size*2;
@@ -417,7 +417,7 @@ swing_tree_t* get_tree_fast(uint root, uint port, swing_algo_family_t algo, swin
         }
                
         // Compute the basic tree informations (parent and reached_at_step)
-        swing_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
+        bine_step_info_t* step_info = compute_step_info(port, scc, scc->dimensions_num, scc->dimensions);
         build_tree(coord_root, 0, port, algo, dist_type, scc, tree.reached_at_step, 0, tree.parent, step_info, tree.subtree_roots);    
         tree.parent[root] = UINT32_MAX;
         tree.reached_at_step[root] = 0; // To avoid sending the step for myself at a wrong value
@@ -428,25 +428,25 @@ swing_tree_t* get_tree_fast(uint root, uint port, swing_algo_family_t algo, swin
         remap_ranks(coord_root, 0, port, algo, dist_type, scc, &(next_rank), tree.parent, tree.remapped_ranks, tree.remapped_ranks_max, step_info);
         assert(next_rank == UINT32_MAX);
         free(step_info);
-        swing_comm_info_t cinfo;
+        bine_comm_info_t cinfo;
         cinfo.tree = tree;
         comm_info[key] = cinfo;
         return &(comm_info[key].tree);
     }
 }
 
-void destroy_tree(swing_tree_t* tree){
+void destroy_tree(bine_tree_t* tree){
     //free(tree->parent);
 }
 
 
-void compute_peers(uint rank, int port, swing_algo_family_t algo, SwingCoordConverter* scc, uint* peers){
-    bool terminated_dimensions_bitmap[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    uint8_t next_step_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    memset(next_step_per_dim, 0, sizeof(uint8_t)*LIBSWING_MAX_SUPPORTED_DIMENSIONS);
+void compute_peers(uint rank, int port, bine_algo_family_t algo, BineCoordConverter* scc, uint* peers){
+    bool terminated_dimensions_bitmap[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
+    uint8_t next_step_per_dim[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
+    memset(next_step_per_dim, 0, sizeof(uint8_t)*LIBBINE_MAX_SUPPORTED_DIMENSIONS);
     
     // Compute default directions
-    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    int coord[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     scc->retrieve_coord_mapping(rank, coord);
     for(size_t i = 0; i < scc->dimensions_num; i++){
         terminated_dimensions_bitmap[i] = false;            
@@ -473,9 +473,9 @@ void compute_peers(uint rank, int port, swing_algo_family_t algo, SwingCoordConv
             coord[0] = rank;
         }
 
-        if(algo == SWING_ALGO_FAMILY_RECDOUB){
+        if(algo == BINE_ALGO_FAMILY_RECDOUB){
             distance = (coord[target_dim] ^ (1 << relative_step)) - coord[target_dim];
-        }else if(algo == SWING_ALGO_FAMILY_SWING){
+        }else if(algo == BINE_ALGO_FAMILY_BINE){
             distance = rhos[relative_step];
             // Flip the sign for odd nodes
             if(is_odd(coord[target_dim])){distance *= -1;}

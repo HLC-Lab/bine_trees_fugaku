@@ -6,69 +6,69 @@
 #include <unistd.h>
 #include <strings.h>
 
-#include "libswing_common.h"
-#include "libswing_coll.h"
+#include "libbine_common.h"
+#include "libbine_coll.h"
 #include <climits>
 #ifdef FUGAKU
-#include "fugaku/swing_utofu.h"
+#include "fugaku/bine_utofu.h"
 #endif
 
-#define SWING_REDUCE_NOSYNC_THRESHOLD 1024 // TODO Read from env. Env should be passed to SwingCommon as a struct with all the variables.
+#define BINE_REDUCE_NOSYNC_THRESHOLD 1024 // TODO Read from env. Env should be passed to BineCommon as a struct with all the variables.
 
 
-int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
     // TODO: Don't use recvbuf but use as recvbuf a larger tmpbuf
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_BINOMIAL_TREE);
 #endif
 #ifdef FUGAKU
     assert(count >= env.num_ports);
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
-    Timer timer("swing_reduce_utofu (constant overhead)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_mpi (init)");
+    Timer timer("bine_reduce_utofu (constant overhead)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size;
-    if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+    if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
         tmpbuf_size = count*dtsize;
     }else{
         tmpbuf_size = count*dtsize*this->num_steps; // In this way each rank writes in a different part of tmpbuf, avoid the need to synchronize
     }
     
-    //timer.reset("= swing_reduce_utofu (utofu buf reg)"); 
+    //timer.reset("= bine_reduce_utofu (utofu buf reg)"); 
 
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_reduce_utofu (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_reduce_utofu (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.reduce_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.reduce_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -98,13 +98,13 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
         }
         offset_port *= dtsize;
 
-        timer.reset("= swing_reduce_utofu (compute peers)");
+        timer.reset("= bine_reduce_utofu (compute peers)");
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_utofu (computing trees)");
+        timer.reset("= bine_reduce_utofu (computing trees)");
         // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
         // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
         // e.g., for 4 nodes I have an increasing distance tree as follows:
@@ -115,8 +115,8 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
         //           2
         // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
         // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
-        //swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
-        swing_tree_t *tree = get_tree_fast(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
+        //bine_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
+        bine_tree_t *tree = get_tree_fast(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -135,9 +135,9 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
         char sent_to_parent = 0;
         size_t issued_sends = 0;
         for(size_t step = 0; step < (uint) this->num_steps; step++){    
-            timer.reset("= swing_reduce_utofu (step init)");
+            timer.reset("= bine_reduce_utofu (step init)");
             size_t offset_port_tmpbuf;
-            if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+            if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                 offset_port_tmpbuf = offset_port;                
             }else{
                 offset_port_tmpbuf = offset_port*this->num_steps + step*count_port*dtsize;
@@ -145,7 +145,7 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
                     peer = peers[port][step];                      
@@ -153,9 +153,9 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                 if(tree->parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
 
-                    if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                    if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                         // Do a 0-byte put to notify I am ready to recv
-                        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);
+                        issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);
                     }
 
                     // Now start pipelining recv and reduce
@@ -170,9 +170,9 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                         size_t seg_count = remaining < max_count ? remaining : max_count;
                         bytes_to_recv = seg_count*dtsize;
 
-                        timer.reset("= swing_reduce_utofu (waiting recv)");
-                        swing_utofu_wait_recv(utofu_descriptor, port, step, next_recv);
-                        timer.reset("= swing_reduce_utofu (reduce_local)");
+                        timer.reset("= bine_reduce_utofu (waiting recv)");
+                        bine_utofu_wait_recv(utofu_descriptor, port, step, next_recv);
+                        timer.reset("= bine_reduce_utofu (reduce_local)");
                         if(!copied){
                             reduce_local(((char*) sendbuf) + offset_port + offset_segment, tmpbuf + offset_port_tmpbuf + offset_segment, ((char*) recvbuf) + offset_port + offset_segment, seg_count, datatype, op);
                             set_copied = 1;
@@ -181,12 +181,12 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                         }
 
                         // If last receiving step, send to parent
-                        timer.reset("= swing_reduce_utofu (waiting recv)");
+                        timer.reset("= bine_reduce_utofu (waiting recv)");
                         if(step == sending_step - 1 && this->rank != root){
                             // Send to parent
                             uint parent = tree->parent[this->rank];            
                             size_t offset_port_tmpbuf_parent;
-                            if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                            if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                                 offset_port_tmpbuf_parent = offset_port;                
                             }else{
                                 offset_port_tmpbuf_parent = offset_port*this->num_steps + sending_step*count_port*dtsize;
@@ -196,13 +196,13 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                             utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[parent] + offset_port_tmpbuf_parent;
                             // Do a 0-byte recv to check if the parent is ready to recv
                             if(!parent_ready_to_recv){
-                                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){                                    
-                                    swing_utofu_wait_recv(utofu_descriptor, port, sending_step, 0);
+                                if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){                                    
+                                    bine_utofu_wait_recv(utofu_descriptor, port, sending_step, 0);
                                 }
                                 parent_ready_to_recv = 1;
                             }
-                            issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, lcl_addr + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
-                            //issued_sends += swing_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, (char*) recvbuf + offset_port + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
+                            issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, lcl_addr + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
+                            //issued_sends += bine_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, (char*) recvbuf + offset_port + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
                             sent_to_parent = 1;
 
                             if(remaining == seg_count){
@@ -236,9 +236,9 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                 }
                 rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port_tmpbuf;
 
-                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                     // Do a 0-byte recv to check if the peer is ready to recv
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, 0);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step, 0);
                 }
 
                 size_t remaining = count_port;
@@ -247,8 +247,8 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
                 while(remaining){
                     size_t seg_count = remaining < max_count ? remaining : max_count;
                     bytes_to_send = seg_count*dtsize;
-                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
-                    //issued_sends += swing_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, (char*) lcl_buf + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
+                    issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
+                    //issued_sends += bine_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, (char*) lcl_buf + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
                     offset_segment += bytes_to_send;
                     remaining -= seg_count;
                 }
@@ -258,8 +258,8 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
         }
 
         if(issued_sends){
-            timer.reset("= swing_reduce_utofu (waiting all sends)");
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+            timer.reset("= bine_reduce_utofu (waiting all sends)");
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         }        
 
         if(peers[port]){
@@ -267,14 +267,14 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
         }
         destroy_tree(tree);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }        
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_utofu (writing profile data to file)");
+    timer.reset("= bine_reduce_utofu (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -283,59 +283,59 @@ int SwingCommon::swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, in
 }
 
 
-int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
     // TODO: Don't use recvbuf but use as recvbuf a larger tmpbuf
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_BINOMIAL_TREE);
 #endif
 #ifdef FUGAKU
     assert(count >= env.num_ports);
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
-    Timer timer("swing_reduce_utofu (constant overhead)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_mpi (init)");
+    Timer timer("bine_reduce_utofu (constant overhead)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size;
-    if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+    if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
         tmpbuf_size = count*dtsize;
     }else{
         tmpbuf_size = count*dtsize*this->num_steps; // In this way each rank writes in a different part of tmpbuf, avoid the need to synchronize
     }
     
-    //timer.reset("= swing_reduce_utofu (utofu buf reg)"); 
+    //timer.reset("= bine_reduce_utofu (utofu buf reg)"); 
 
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_reduce_utofu (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_reduce_utofu (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.reduce_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.reduce_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -365,13 +365,13 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
         }
         offset_port *= dtsize;
 
-        timer.reset("= swing_reduce_utofu (compute peers)");
+        timer.reset("= bine_reduce_utofu (compute peers)");
         // Compute the peers of this port if I did not do it yet
         if(peers[port] == NULL){
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_utofu (computing trees)");
+        timer.reset("= bine_reduce_utofu (computing trees)");
         // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
         // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
         // e.g., for 4 nodes I have an increasing distance tree as follows:
@@ -382,8 +382,8 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
         //           2
         // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
         // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
-        //swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
-        swing_tree_t *tree = get_tree_fast(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
+        //bine_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
+        bine_tree_t *tree = get_tree_fast(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -402,9 +402,9 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
         char sent_to_parent = 0;
         size_t issued_sends = 0;
         for(size_t step = 0; step < (uint) this->num_steps; step++){    
-            timer.reset("= swing_reduce_utofu (step init)");
+            timer.reset("= bine_reduce_utofu (step init)");
             size_t offset_port_tmpbuf;
-            if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+            if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                 offset_port_tmpbuf = offset_port;                
             }else{
                 offset_port_tmpbuf = offset_port*this->num_steps + step*count_port*dtsize;
@@ -412,7 +412,7 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];                             
                 }else{  
                     peer = peers[port][step];                      
@@ -420,9 +420,9 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                 if(tree->parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
 
-                    if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                    if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                         // Do a 0-byte put to notify I am ready to recv
-                        issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);
+                        issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, utofu_descriptor->port_info[port].lcl_send_stadd + offset_port, 0, utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port, step);
                     }
 
                     // Now start pipelining recv and reduce
@@ -437,9 +437,9 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                         size_t seg_count = remaining < max_count ? remaining : max_count;
                         bytes_to_recv = seg_count*dtsize;
 
-                        timer.reset("= swing_reduce_utofu (waiting recv)");
-                        swing_utofu_wait_recv(utofu_descriptor, port, step, next_recv);
-                        timer.reset("= swing_reduce_utofu (reduce_local)");
+                        timer.reset("= bine_reduce_utofu (waiting recv)");
+                        bine_utofu_wait_recv(utofu_descriptor, port, step, next_recv);
+                        timer.reset("= bine_reduce_utofu (reduce_local)");
                         if(!copied){
                             reduce_local(((char*) sendbuf) + offset_port + offset_segment, tmpbuf + offset_port_tmpbuf + offset_segment, ((char*) recvbuf) + offset_port + offset_segment, seg_count, datatype, op);
                             set_copied = 1;
@@ -448,12 +448,12 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                         }
 
                         // If last receiving step, send to parent
-                        timer.reset("= swing_reduce_utofu (waiting recv)");
+                        timer.reset("= bine_reduce_utofu (waiting recv)");
                         if(step == sending_step - 1 && this->rank != root){
                             // Send to parent
                             uint parent = tree->parent[this->rank];            
                             size_t offset_port_tmpbuf_parent;
-                            if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                            if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                                 offset_port_tmpbuf_parent = offset_port;                
                             }else{
                                 offset_port_tmpbuf_parent = offset_port*this->num_steps + sending_step*count_port*dtsize;
@@ -463,13 +463,13 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                             utofu_stadd_t rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[parent] + offset_port_tmpbuf_parent;
                             // Do a 0-byte recv to check if the parent is ready to recv
                             if(!parent_ready_to_recv){
-                                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){                                    
-                                    swing_utofu_wait_recv(utofu_descriptor, port, sending_step, 0);
+                                if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){                                    
+                                    bine_utofu_wait_recv(utofu_descriptor, port, sending_step, 0);
                                 }
                                 parent_ready_to_recv = 1;
                             }
-                            issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, lcl_addr + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
-                            //issued_sends += swing_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, (char*) recvbuf + offset_port + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
+                            issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, lcl_addr + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
+                            //issued_sends += bine_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][parent]), port, parent, (char*) recvbuf + offset_port + offset_segment, bytes_to_recv, rmt_addr + offset_segment, sending_step);
                             sent_to_parent = 1;
 
                             if(remaining == seg_count){
@@ -503,9 +503,9 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                 }
                 rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_port_tmpbuf;
 
-                if(count*dtsize > SWING_REDUCE_NOSYNC_THRESHOLD){
+                if(count*dtsize > BINE_REDUCE_NOSYNC_THRESHOLD){
                     // Do a 0-byte recv to check if the peer is ready to recv
-                    swing_utofu_wait_recv(utofu_descriptor, port, step, 0);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step, 0);
                 }
 
                 size_t remaining = count_port;
@@ -514,8 +514,8 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
                 while(remaining){
                     size_t seg_count = remaining < max_count ? remaining : max_count;
                     bytes_to_send = seg_count*dtsize;
-                    issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
-                    //issued_sends += swing_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, (char*) lcl_buf + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
+                    issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
+                    //issued_sends += bine_utofu_isend_piggyback(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, (char*) lcl_buf + offset_segment, bytes_to_send, rmt_addr + offset_segment, step);
                     offset_segment += bytes_to_send;
                     remaining -= seg_count;
                 }
@@ -525,8 +525,8 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
         }
 
         if(issued_sends){
-            timer.reset("= swing_reduce_utofu (waiting all sends)");
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+            timer.reset("= bine_reduce_utofu (waiting all sends)");
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
         }        
 
         if(peers[port]){
@@ -534,14 +534,14 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
         }
         destroy_tree(tree);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }        
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_utofu (writing profile data to file)");
+    timer.reset("= bine_reduce_utofu (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -549,11 +549,11 @@ int SwingCommon::swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int 
 #endif    
 }
 
-int SwingCommon::swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
     if(env.num_ports == 1){
-        return swing_reduce_utofu_noomp(sendbuf, recvbuf, count, datatype, op, root, comm);
+        return bine_reduce_utofu_noomp(sendbuf, recvbuf, count, datatype, op, root, comm);
     }else{
-        return swing_reduce_utofu_omp(sendbuf, recvbuf, count, datatype, op, root, comm);
+        return bine_reduce_utofu_omp(sendbuf, recvbuf, count, datatype, op, root, comm);
     }
 
 }
@@ -572,12 +572,12 @@ static int32_t nbtob(uint32_t neg) {
     return (mask ^ neg) - mask;
 }
 
-int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_BINOMIAL_TREE);
 #endif
   int size, rank, dtsize;
   MPI_Comm_size(comm, &size);
@@ -614,30 +614,30 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
   return MPI_SUCCESS;
 }
 #else
-int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_BINOMIAL_TREE);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_BINOMIAL_TREE);
 #endif
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_mpi (init)");
-    Timer timer("swing_reduce_mpi (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_mpi (init)");
+    Timer timer("bine_reduce_mpi (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since non root ranks might not specify a recvbuf
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     size_t tmpbuf_size = count*dtsize*this->num_steps; // A bit overkill, needed for uTofu to avoid overwriting the same buffer in different steps // TODO: Fix
     
-    timer.reset("= swing_reduce_mpi (utofu buf reg)"); 
+    timer.reset("= bine_reduce_mpi (utofu buf reg)"); 
 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;           
     }else{
         tmpbuf = env.prealloc_buf;
@@ -663,7 +663,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_mpi (computing trees)");
+        timer.reset("= bine_reduce_mpi (computing trees)");
         // If I construct a tree with increasing distance, then I can use it is a gather tree with decreasing distance (i.e., the last peer will be the first).
         // and vice-versa. Thus, I always need to use the opposite distance when building the tree.
         // e.g., for 4 nodes I have an increasing distance tree as follows:
@@ -674,7 +674,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
         //           2
         // Thus, if I want to gather the data, I should gather first from 3 and then from 1.
         // I.e., to construct a 'reduce/gather' we should construct a  'broadcast/scatter' tree with opposite distances.
-        swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == SWING_DISTANCE_DECREASING ? SWING_DISTANCE_INCREASING : SWING_DISTANCE_DECREASING, this->scc_real);        
+        bine_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type == BINE_DISTANCE_DECREASING ? BINE_DISTANCE_INCREASING : BINE_DISTANCE_DECREASING, this->scc_real);        
 
         // I do a bunch of receives (unless I am a leaf), and then I send the data to the parent
         // To understand at which step I must send the data, I need to check at which step I am 
@@ -689,13 +689,13 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
         }
 
         DPRINTF("[%d] Sending step: %d\n", this->rank, sending_step);
-        timer.reset("= swing_reduce_mpi (waiting recv)");
+        timer.reset("= bine_reduce_mpi (waiting recv)");
         char copied = 0;
         for(size_t step = 0; step < (uint) this->num_steps; step++){        
             if(step < sending_step){
                 // Receive from peer
                 uint peer;
-                if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][this->num_steps - step - 1];         
                 }else{  
                     peer = peers[port][step];                      
@@ -703,7 +703,7 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
 
                 if(tree.parent[peer] == this->rank){ // Needed to avoid trees which are actually graphs in non-p2 cases.
                     DPRINTF("[%d] Receiving from %d at step %d\n", this->rank, peer, step);
-                    MPI_Recv(tmpbuf + offset_port_tmpbuf + step*count_port*dtsize, count_port, datatype, peer, TAG_SWING_REDUCE, comm, MPI_STATUS_IGNORE);                    
+                    MPI_Recv(tmpbuf + offset_port_tmpbuf + step*count_port*dtsize, count_port, datatype, peer, TAG_BINE_REDUCE, comm, MPI_STATUS_IGNORE);                    
                     if(!copied){
                         // This instead of MPI_Reduce_local to avoid doing a memcpy form sendbuf to recvbuf at the beginning.
                         reduce_local(((char*) sendbuf) + offset_port, tmpbuf + offset_port_tmpbuf + step*count_port*dtsize, ((char*) recvbuf) + offset_port, count_port, datatype, op);
@@ -717,14 +717,14 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
                 uint peer = tree.parent[this->rank];            
                 DPRINTF("[%d] Sending to %d at step %d\n", this->rank, peer, step);
                 if(!copied){
-                    MPI_Send(((char*) sendbuf) + offset_port, count_port, datatype, peer, TAG_SWING_REDUCE, comm);
+                    MPI_Send(((char*) sendbuf) + offset_port, count_port, datatype, peer, TAG_BINE_REDUCE, comm);
                     copied = 1;
                 }else{
-                    MPI_Send(((char*) recvbuf) + offset_port, count_port, datatype, peer, TAG_SWING_REDUCE, comm);
+                    MPI_Send(((char*) recvbuf) + offset_port, count_port, datatype, peer, TAG_BINE_REDUCE, comm);
                 }
             }
             // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_reduce_mpi (waiting all sends)");
+            timer.reset("= bine_reduce_mpi (waiting all sends)");
         }
         
         free(peers[port]);
@@ -734,21 +734,21 @@ int SwingCommon::swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count,
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_mpi (writing profile data to file)");
+    timer.reset("= bine_reduce_mpi (writing profile data to file)");
     return res;
 }
 #endif
 
-int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info){
+int BineCommon::bine_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
 #endif
 #ifdef FUGAKU
     assert(this->size > 2); // To work for two nodes we need to fix the tmpbuf/recvbuf in reduce_local below
-    assert(env.reduce_config.distance_type == SWING_DISTANCE_INCREASING); // For now, we only support decreasing distance
+    assert(env.reduce_config.distance_type == BINE_DISTANCE_INCREASING); // For now, we only support decreasing distance
 
     if(!is_power_of_two(this->size)){
         return MPI_ERR_OTHER;
@@ -760,15 +760,15 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
         }
     }
 
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_redscat_gather_utofu (init)");
-    Timer timer("swing_reduce_redscat_gather_utofu (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_redscat_gather_utofu (init)");
+    Timer timer("bine_reduce_redscat_gather_utofu (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since recvbuf is only large enough to accomodate the final block
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     
     // We can't write in the actual blocks positions since writes
@@ -792,36 +792,36 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
     // Because each rank does a put at a different offset, I need to consider the worst case where the last block is always sent/recvd.
     tmpbuf_size += tmpbuf2_size;
     
-    timer.reset("= swing_reduce_redscat_gather_utofu (utofu buf reg)"); 
+    timer.reset("= bine_reduce_redscat_gather_utofu (utofu buf reg)"); 
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        assert(posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size) == 0);
+        assert(posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size) == 0);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, tmpbuf, tmpbuf_size, env.num_ports); 
     }else{
         tmpbuf = env.prealloc_buf;
-        swing_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports);         
+        bine_utofu_reg_buf(this->utofu_descriptor, sendbuf, count*dtsize, recvbuf, count*dtsize, NULL, 0, env.num_ports);         
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].lcl_temp_stadd = lcl_temp_stadd[i];
         }
     }
-    timer.reset("= swing_reduce_redscat_gather_utofu (utofu buf exch)");           
+    timer.reset("= bine_reduce_redscat_gather_utofu (utofu buf exch)");           
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
     }else{
         // TODO: Probably need to do this for all the ports for torus with different dimensions size
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
         compute_peers(this->rank, 0, env.reduce_config.algo_family, this->scc_real, peers[0]);
-        swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+        bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
         
         // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
         int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
         if(mp != -1 && mp != 0){
             peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, mp, env.reduce_config.algo_family, this->scc_real, peers[mp]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
         }
     }
 
@@ -836,8 +836,8 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_redscat_gather_utofu (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
+        timer.reset("= bine_reduce_redscat_gather_utofu (computing trees)");
+        bine_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
 
         size_t min_block_s, max_block_s;
         size_t min_block_r, max_block_r;
@@ -850,7 +850,7 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
         size_t offset_tmpbuf2_step = (tmpbuf2_size / env.num_ports) * port; // At each step we write at a diffent offset so that different ranks writing to the same destination rank do not overwrite each other
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -885,10 +885,10 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
             }
             rmt_addr = utofu_descriptor->port_info[port].rmt_temp_stadd[peer] + offset_tmpbuf2 + offset_tmpbuf2_step; 
 
-            size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_send*dtsize, rmt_addr, step); 
+            size_t issued_sends = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_send*dtsize, rmt_addr, step); 
             size_t segments_max_put_size = ceil((float) (count_to_recv*dtsize) / ((float) MAX_PUTGET_SIZE));
-            swing_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+            bine_utofu_wait_recv(utofu_descriptor, port, step, segments_max_put_size - 1);
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
 
 #pragma omp critical
 {            
@@ -922,7 +922,7 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
                 // Receive from peer
                 uint peer;                
                 // We need to do the opposite -- see the comment in gather code with the tree drawing
-                if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][step];                      
                 }else{                      
                     peer = peers[port][this->num_steps - step - 1];                             
@@ -937,7 +937,7 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
                     }
                     size_t segments_max_put_size = ceil((float) (count_to_recv*dtsize) / ((float) MAX_PUTGET_SIZE));
                     // + this->num_steps since we did already num_steps in the reduce-scatter phase
-                    swing_utofu_wait_recv(utofu_descriptor, port, step + this->num_steps, segments_max_put_size - 1);
+                    bine_utofu_wait_recv(utofu_descriptor, port, step + this->num_steps, segments_max_put_size - 1);
                 }
             }else if(step == sending_step){
                 // Send to parent
@@ -959,14 +959,14 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
                 }
                 DPRINTF("[%d] Sending [%d, %d] to %d at step %d\n", this->rank, min_block_s, max_block_s, peer, step);
                 // + this->num_steps since we did already num_steps in the reduce-scatter phase
-                size_t issued_sends = swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_send*dtsize, rmt_addr, step + this->num_steps); 
-                swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);                
+                size_t issued_sends = bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_send*dtsize, rmt_addr, step + this->num_steps); 
+                bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);                
             }
             // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_reduce_redscat_gather_utofu (waiting all sends)");
+            timer.reset("= bine_reduce_redscat_gather_utofu (waiting all sends)");
         }
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }
         free(peers[port]);
         destroy_tree(&tree);
@@ -975,7 +975,7 @@ int SwingCommon::swing_reduce_redscat_gather_utofu(const void *sendbuf, void *re
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_redscat_gather_utofu (writing profile data to file)");
+    timer.reset("= bine_reduce_redscat_gather_utofu (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -1039,12 +1039,12 @@ static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
     return remap_rank;
 }
 
-int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype dt, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
 #endif
   assert(root == 0); // TODO: Generalize
   int size, rank, dtsize;
@@ -1152,24 +1152,24 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
 }
 
 #else
-int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
+int BineCommon::bine_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_config.algo == SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
+    assert(env.reduce_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_config.algo == BINE_REDUCE_ALGO_REDUCE_SCATTER_GATHER);
 #endif
-    assert(env.reduce_config.distance_type == SWING_DISTANCE_INCREASING); // For now, we only support decreasing distance
+    assert(env.reduce_config.distance_type == BINE_DISTANCE_INCREASING); // For now, we only support decreasing distance
     assert(this->size > 2); // To work for two nodes we need to fix the tmpbuf/recvbuf in reduce_local below
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_redscat_gather_mpi (init)");
-    Timer timer("swing_reduce_redscat_gather_mpi (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_redscat_gather_mpi (init)");
+    Timer timer("bine_reduce_redscat_gather_mpi (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since recvbuf is only large enough to accomodate the final block
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     
     // How big should the buffer be? I should consider the largest count possible
@@ -1178,11 +1178,11 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
     // TODO: This work for reduce_block, generalize it to reduce
     size_t tmpbuf_size = count * dtsize * 2; // I need two buffers since the non-root ranks do not have the recvbuf
     
-    timer.reset("= swing_reduce_redscat_gather_mpi (utofu buf reg)"); 
+    timer.reset("= bine_reduce_redscat_gather_mpi (utofu buf reg)"); 
 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;           
     }else{
         tmpbuf = env.prealloc_buf;
@@ -1196,8 +1196,8 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_redscat_gather_mpi (computing trees)");
-        swing_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
+        timer.reset("= bine_reduce_redscat_gather_mpi (computing trees)");
+        bine_tree_t tree = get_tree(root, port, env.reduce_config.algo_family, env.reduce_config.distance_type, this->scc_real);
 
         size_t count_per_rank_per_port = count / (env.num_ports * this->size);
         size_t offset_port = count_per_rank_per_port * this->size * port * dtsize;
@@ -1211,7 +1211,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
         /******************/
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -1247,8 +1247,8 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
             size_t offset_s = offset_port + min_block_s*count_per_rank_per_port*dtsize;
             size_t offset_r = offset_port + min_block_r*count_per_rank_per_port*dtsize;
 
-            MPI_Sendrecv(sbuf    + offset_s, count_to_send, datatype, peer, TAG_SWING_REDUCE, 
-                         tmpbuf2 + offset_r, count_to_recv, datatype, peer, TAG_SWING_REDUCE, comm, MPI_STATUS_IGNORE);
+            MPI_Sendrecv(sbuf    + offset_s, count_to_send, datatype, peer, TAG_BINE_REDUCE, 
+                         tmpbuf2 + offset_r, count_to_recv, datatype, peer, TAG_BINE_REDUCE, comm, MPI_STATUS_IGNORE);
             
             if(step == 0){
                 reduce_local(sbuf + offset_r, tmpbuf2 + offset_r, tmpbuf + offset_r, count_to_recv, datatype, op);
@@ -1278,7 +1278,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
                 // Receive from peer
                 uint peer;                
                 // We need to do the opposite -- see the comment in gather code with the tree drawing
-                if(env.reduce_config.distance_type == SWING_DISTANCE_DECREASING){
+                if(env.reduce_config.distance_type == BINE_DISTANCE_DECREASING){
                     peer = peers[port][step];                      
                 }else{                      
                     peer = peers[port][this->num_steps - step - 1];                             
@@ -1295,9 +1295,9 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
                     size_t offset_r = offset_port + min_block_r*count_per_rank_per_port*dtsize;
                     DPRINTF("[%d] Receiving [%d, %d] from %d at step %d at offset %d (count=%d)\n", this->rank, min_block_r, max_block_r, peer, step, offset_r, count_to_recv);
                     if(this->rank == root){
-                        MPI_Recv((char*) recvbuf + offset_r, count_to_recv, datatype, peer, TAG_SWING_REDUCE, comm, MPI_STATUS_IGNORE);
+                        MPI_Recv((char*) recvbuf + offset_r, count_to_recv, datatype, peer, TAG_BINE_REDUCE, comm, MPI_STATUS_IGNORE);
                     }else{
-                        MPI_Recv(tmpbuf + offset_r, count_to_recv, datatype, peer, TAG_SWING_REDUCE, comm, MPI_STATUS_IGNORE);
+                        MPI_Recv(tmpbuf + offset_r, count_to_recv, datatype, peer, TAG_BINE_REDUCE, comm, MPI_STATUS_IGNORE);
                     }
                 }
             }else if(step == sending_step){
@@ -1312,10 +1312,10 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
                     count_to_send += (count % (env.num_ports * this->size));
                 }                
                 DPRINTF("[%d] Sending [%d, %d] to %d at step %d\n", this->rank, min_block_s, max_block_s, peer, step);
-                MPI_Send(tmpbuf + offset_s, count_to_send, datatype, peer, TAG_SWING_REDUCE, comm);
+                MPI_Send(tmpbuf + offset_s, count_to_send, datatype, peer, TAG_BINE_REDUCE, comm);
             }
             // Wait all the sends for this segment before moving to the next one
-            timer.reset("= swing_reduce_redscat_gather_mpi (waiting all sends)");
+            timer.reset("= bine_reduce_redscat_gather_mpi (waiting all sends)");
         }
         free(peers[port]);
         destroy_tree(&tree);
@@ -1324,7 +1324,7 @@ int SwingCommon::swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recv
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_redscat_gather_mpi (writing profile data to file)");
+    timer.reset("= bine_reduce_redscat_gather_mpi (writing profile data to file)");
     return res;
 }
 #endif

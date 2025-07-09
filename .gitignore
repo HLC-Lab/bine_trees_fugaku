@@ -129,19 +129,19 @@ dmypy.json
 
 # My files
 lib/*.o
-lib/libswing.o
-lib/libswing_profile.o
-lib/libswing.so
+lib/libbine.o
+lib/libbine_profile.o
+lib/libbine.so
 lib/test
 lib/test_profile
 bench/bench
 bench/get_coord_daint
 data/
 gmon.out
-lib/libswing_common.o
+lib/libbine_common.o
 .gitignore
 .gitignore
-lib/libswing_common_profile.o
+lib/libbine_common_profile.o
 .vscode/settings.json
 simulation/*.png
 simulation/remap_rank
@@ -157,3 +157,4 @@ bench/memcpy*
 out.*
 lib/fugaku/*.o
 lib/*.o
+bench/get_coord_fugaku

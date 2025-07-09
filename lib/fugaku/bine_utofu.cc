@@ -1,14 +1,14 @@
-#include "swing_utofu.h"
+#include "bine_utofu.h"
 
 
 // setup send/recv communication
-swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num_ports, uint size){
+bine_utofu_comm_descriptor* bine_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num_ports, uint size){
     // Safety checks
     assert(sizeof(utofu_stadd_t) == sizeof(uint64_t));  // Since we send both as 2 64-bit values
     assert(sizeof(utofu_vcq_id_t) == sizeof(uint64_t)); // Since we send both as 2 64-bit values
     
-    swing_utofu_comm_descriptor* desc = (swing_utofu_comm_descriptor*) malloc(sizeof(swing_utofu_comm_descriptor));
-    memset(desc, 0, sizeof(swing_utofu_comm_descriptor));
+    bine_utofu_comm_descriptor* desc = (bine_utofu_comm_descriptor*) malloc(sizeof(bine_utofu_comm_descriptor));
+    memset(desc, 0, sizeof(bine_utofu_comm_descriptor));
     desc->num_ports = num_ports;
     desc->size = size;
 
@@ -30,7 +30,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num
         utofu_tni_id_t tni_id = tni_ids[p];
         // query the capabilities of one-sided communication of the TNI
         // create a VCQ and get its VCQ ID
-        assert(utofu_create_vcq(tni_id, SWING_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
+        assert(utofu_create_vcq(tni_id, BINE_UTOFU_VCQ_FLAGS, &(desc->port_info[p].vcq_hdl)) == UTOFU_SUCCESS);
         assert(utofu_query_vcq_id(desc->port_info[p].vcq_hdl, &(vcq_ids[p])) == UTOFU_SUCCESS);
         desc->port_info[p].rmt_recv_stadd = (utofu_stadd_t*) malloc(sizeof(utofu_stadd_t)*size);
         desc->port_info[p].rmt_temp_stadd = (utofu_stadd_t*) malloc(sizeof(utofu_stadd_t)*size);
@@ -40,7 +40,7 @@ swing_utofu_comm_descriptor* swing_utofu_setup(utofu_vcq_id_t* vcq_ids, uint num
     return desc;
 }
 
-void swing_utofu_teardown(swing_utofu_comm_descriptor* desc, uint num_ports){
+void bine_utofu_teardown(bine_utofu_comm_descriptor* desc, uint num_ports){
     for(size_t p = 0; p < num_ports; p++){
         // Deregister all STADD in cache
         for(auto it = desc->port_info[p].registration_cache->begin(); it != desc->port_info[p].registration_cache->end(); it++){
@@ -54,7 +54,7 @@ void swing_utofu_teardown(swing_utofu_comm_descriptor* desc, uint num_ports){
     free(desc);
 }
 
-void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
+void bine_utofu_reg_buf(bine_utofu_comm_descriptor* desc,
                          const void* send_buffer, size_t length_s, 
                          void* recv_buffer, size_t length_r, 
                          void* temp_buffer, size_t length_t,
@@ -101,7 +101,7 @@ void swing_utofu_reg_buf(swing_utofu_comm_descriptor* desc,
     }
 }
 
-void swing_utofu_dereg_buf(swing_utofu_comm_descriptor* desc, void* buffer, int port){
+void bine_utofu_dereg_buf(bine_utofu_comm_descriptor* desc, void* buffer, int port){
     auto it = desc->port_info[port].registration_cache->find(buffer);
     if(it != desc->port_info[port].registration_cache->end()){
         assert(utofu_dereg_mem(desc->port_info[port].vcq_hdl, it->second, 0) == UTOFU_SUCCESS);
@@ -111,9 +111,9 @@ void swing_utofu_dereg_buf(swing_utofu_comm_descriptor* desc, void* buffer, int 
     }
 }
 
-void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_steps, uint* peers){
+void bine_utofu_exchange_buf_info(bine_utofu_comm_descriptor* desc, uint num_steps, uint* peers){
     uint64_t* sbuffer = (uint64_t*) malloc(2*sizeof(uint64_t)*desc->num_ports);
-    MPI_Request reqs[LIBSWING_MAX_STEPS];
+    MPI_Request reqs[LIBBINE_MAX_STEPS];
     for(size_t i = 0; i < desc->num_ports; i++){
         sbuffer[2*i] = desc->port_info[i].lcl_recv_stadd;
         sbuffer[2*i+1] = desc->port_info[i].lcl_temp_stadd;
@@ -141,7 +141,7 @@ void swing_utofu_exchange_buf_info(swing_utofu_comm_descriptor* desc, uint num_s
     free(rbuffer);
 }
 
-void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, uint num_steps){   
+void bine_utofu_exchange_buf_info_allgather(bine_utofu_comm_descriptor* desc, uint num_steps){   
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     // Receive the remote info for all the ports, from all the nodes
@@ -153,7 +153,7 @@ void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, 
 
     int r = PMPI_Allgather(MPI_IN_PLACE, 0, MPI_UINT64_T, rbuffer, 2*desc->num_ports, MPI_UINT64_T, MPI_COMM_WORLD);
     if(r != MPI_SUCCESS){
-        fprintf(stderr, "swing_utofu_exchange_buf_info_allgather: PMPI Allgather failed.\n");
+        fprintf(stderr, "bine_utofu_exchange_buf_info_allgather: PMPI Allgather failed.\n");
         exit(-1);
     }
     for(size_t r = 0; r < desc->size; r++){
@@ -166,7 +166,7 @@ void swing_utofu_exchange_buf_info_allgather(swing_utofu_comm_descriptor* desc, 
     free(rbuffer);
 }
 
-static inline void swing_utofu_wait_send(swing_utofu_comm_descriptor* desc, uint port){
+static inline void bine_utofu_wait_send(bine_utofu_comm_descriptor* desc, uint port){
     int rc;    
     // confirm the TCQ notification
     void *cbdata;
@@ -179,7 +179,7 @@ static inline void swing_utofu_wait_send(swing_utofu_comm_descriptor* desc, uint
 
 // send data and confirm its completion
 // returns the number of issued sends
-size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+size_t bine_utofu_isend(bine_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
                        uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length, 
                        utofu_stadd_t rmt_addr, uint64_t edata){    
@@ -199,8 +199,8 @@ size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_
         // ones to be over.
         while(utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
                         lcl_addr + offset, rmt_addr + offset, bytes_to_send,
-                        edata, SWING_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
-            swing_utofu_wait_send(desc, port);
+                        edata, BINE_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
+            bine_utofu_wait_send(desc, port);
             desc->port_info[port].completed_send += 1;
         }
         ++issued_sends;
@@ -213,7 +213,7 @@ size_t swing_utofu_isend(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_
 
 // send data and confirm its completion
 // returns the number of issued sends
-size_t swing_utofu_isend_piggyback(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+size_t bine_utofu_isend_piggyback(bine_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
                                    uint port, size_t peer,
                                    void* lcl_data, size_t length, 
                                    utofu_stadd_t rmt_addr, uint64_t edata){    
@@ -233,8 +233,8 @@ size_t swing_utofu_isend_piggyback(swing_utofu_comm_descriptor* desc, utofu_vcq_
         // ones to be over.
         while(utofu_put_piggyback(desc->port_info[port].vcq_hdl, *vcq_id,
                                   (char*) lcl_data + offset, rmt_addr + offset, bytes_to_send,
-                                   edata, SWING_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
-                                   swing_utofu_wait_send(desc, port);
+                                   edata, BINE_UTOFU_POST_FLAGS, (void*) cbvalue) == UTOFU_ERR_BUSY){
+                                   bine_utofu_wait_send(desc, port);
             desc->port_info[port].completed_send += 1;
         }
         ++issued_sends;
@@ -246,7 +246,7 @@ size_t swing_utofu_isend_piggyback(swing_utofu_comm_descriptor* desc, utofu_vcq_
 
 // send data and confirm its completion
 // returns the number of issued sends
-size_t swing_utofu_isend_delayed(swing_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
+size_t bine_utofu_isend_delayed(bine_utofu_comm_descriptor* desc, utofu_vcq_id_t* vcq_id, 
                        uint port, size_t peer,
                        utofu_stadd_t lcl_addr, size_t length, 
                        utofu_stadd_t rmt_addr, uint64_t edata){    
@@ -266,8 +266,8 @@ size_t swing_utofu_isend_delayed(swing_utofu_comm_descriptor* desc, utofu_vcq_id
         // ones to be over.
         while(utofu_put(desc->port_info[port].vcq_hdl, *vcq_id, 
                         lcl_addr + offset, rmt_addr + offset, bytes_to_send,
-                        edata, SWING_UTOFU_POST_FLAGS | UTOFU_ONESIDED_FLAG_DELAY_START, (void*) cbvalue) == UTOFU_ERR_BUSY){
-            swing_utofu_wait_send(desc, port);
+                        edata, BINE_UTOFU_POST_FLAGS | UTOFU_ONESIDED_FLAG_DELAY_START, (void*) cbvalue) == UTOFU_ERR_BUSY){
+            bine_utofu_wait_send(desc, port);
             desc->port_info[port].completed_send += 1;
         }
         ++issued_sends;
@@ -277,13 +277,13 @@ size_t swing_utofu_isend_delayed(swing_utofu_comm_descriptor* desc, utofu_vcq_id
     return issued_sends;
 }
 
-void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t expected_count){    
+void bine_utofu_wait_sends(bine_utofu_comm_descriptor* desc, uint port, size_t expected_count){    
     // For the sends it is enough to wait for the completion of expected_count sends, since we never issue
     // the sends to the next peer if the sends to the previous peer are not completed.
     // i.e., we do not need to match the exact send addresses but just count how many of those completed
     // Some send completions might have been checked during isend (if UTOFU_ERR_BUSY in utofu_put)
     for(size_t i = desc->port_info[port].completed_send; i < expected_count; i++){
-        swing_utofu_wait_send(desc, port);
+        bine_utofu_wait_send(desc, port);
     }    
     desc->port_info[port].completed_send = 0;
 }
@@ -310,7 +310,7 @@ void swing_utofu_wait_sends(swing_utofu_comm_descriptor* desc, uint port, size_t
 // i.e., if completed_recv[2] == 3, then 3 segments have been received at step 2.
 // This works under the assumption that the segments from a given source are received in order 
 // (which holds for utofu since we specified the UTOFU_ONESIDED_FLAG_STRONG_ORDER flag).
-void swing_utofu_wait_recv(swing_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
+void bine_utofu_wait_recv(bine_utofu_comm_descriptor* desc, uint port, size_t expected_step, size_t expected_segment){
     // If it was already received, return
     if(desc->port_info[port].completed_recv[expected_step] > expected_segment){
         return;

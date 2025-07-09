@@ -24,9 +24,9 @@ do
     esac
 done
 
-OUT_PREFIX="swing_out_${TIMESTAMP}"
-ERR_PREFIX="swing_err_${TIMESTAMP}"
-MPIEXEC_OUT="-stdout-proc /vol0004/mdt1/home/u12936/swing-allreduce/bench/${OUT_PREFIX} -stderr-proc /vol0004/mdt1/home/u12936/swing-allreduce/bench/${ERR_PREFIX}"
+OUT_PREFIX="bine_out_${TIMESTAMP}"
+ERR_PREFIX="bine_err_${TIMESTAMP}"
+MPIEXEC_OUT="-stdout-proc /vol0004/mdt1/home/u12936/bine-allreduce/bench/${OUT_PREFIX} -stderr-proc /vol0004/mdt1/home/u12936/bine-allreduce/bench/${ERR_PREFIX}"
 
 DATATYPE="INT32"
 SIZEOF_DATATYPE=4
@@ -68,8 +68,8 @@ do
     #########################
     # Run the default algos #
     #########################
-    export LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" 
-    export LIBSWING_REDUCE_ALGO_LAYER="MPI" 
+    export LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" 
+    export LIBBINE_REDUCE_ALGO_LAYER="MPI" 
 
     coll_tuned_prealloc_size=1539 # This is in MiB (1.5 GiB + 3MiB)
     PREALLOC_SIZE=1610612736 # 1.5 GiB
@@ -80,7 +80,7 @@ do
 
     # Do a run just to print the decision process
     DEFAULT_ALGO="default"
-    LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} -mca coll_select_show_decision_process 2 -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} 1
+    LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} -mca coll_select_show_decision_process 2 -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} 1
     ALGO_FNAME=default-${DEFAULT_ALGO}
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.decision; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.decision.err; rm -f ${ERR_PREFIX}*; fi
@@ -88,7 +88,7 @@ do
     ## Run the actual benchmark
     start_time=$(date +%s)
     DEFAULT_ALGO="default"    
-    LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
+    LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" ${MPIRUN} ${EXTRA_MCAS} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
     ALGO_FNAME=default-${DEFAULT_ALGO}
     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
@@ -110,7 +110,7 @@ do
     # Always slower than the others
     #for DEFAULT_ALGO in "linear" "chain" "pipeline"
     #do        
-    #    export LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" 
+    #    export LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" 
     #    ${MPIRUN} ${EXTRA_MCAS}  -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
     #    ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
     #    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -136,7 +136,7 @@ do
             coll_select_reduce_algorithm_segmentsize=65536
         fi
 
-        export LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" 
+        export LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" 
         ${MPIRUN} ${EXTRA_MCAS}  -mca coll_select_reduce_algorithm_segmentsize ${coll_select_reduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -148,7 +148,7 @@ do
         # Same rules as in the fjmpirules file
         coll_select_reduce_algorithm_segmentsize=65536
 
-        export LIBSWING_REDUCE_ALGO_FAMILY="DEFAULT" 
+        export LIBBINE_REDUCE_ALGO_FAMILY="DEFAULT" 
         ${MPIRUN} ${EXTRA_MCAS}  -mca coll_select_reduce_algorithm_segmentsize ${coll_select_reduce_algorithm_segmentsize} -mca coll_tuned_prealloc_size ${coll_tuned_prealloc_size} -mca coll_select_reduce_algorithm ${DEFAULT_ALGO} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
         ALGO_FNAME=default-$(echo ${DEFAULT_ALGO} | tr '_' '-')
         mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
@@ -157,36 +157,36 @@ do
 
 
     #######################
-    # Run the Swing algos #
+    # Run the Bine algos #
     #######################
-    export LIBSWING_DIMENSIONS=${DIMENSIONS} 
-    export LIBSWING_PREALLOC_SIZE=${PREALLOC_SIZE} 
-    export LIBSWING_UTOFU_ADD_AG=1
+    export LIBBINE_DIMENSIONS=${DIMENSIONS} 
+    export LIBBINE_PREALLOC_SIZE=${PREALLOC_SIZE} 
+    export LIBBINE_UTOFU_ADD_AG=1
     for PORTS in ${PORTS_LIST//,/ }
     do
-        export LIBSWING_NUM_PORTS=${PORTS}
+        export LIBBINE_NUM_PORTS=${PORTS}
         if [ $n -ge $PORTS ]; then        
-            # Run swing binomial tree
-            export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
-            export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
-            export LIBSWING_REDUCE_ALGO="BINOMIAL_TREE"    
+            # Run bine binomial tree
+            export LIBBINE_REDUCE_ALGO_FAMILY="BINE" 
+            export LIBBINE_REDUCE_ALGO_LAYER="UTOFU" 
+            export LIBBINE_REDUCE_ALGO="BINOMIAL_TREE"    
             for SEGMENT_SIZE in 0 4096 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    LIBBINE_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                    ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
 
             if [ $PORTS -eq 1 ]; then
-                export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
-                export LIBSWING_REDUCE_ALGO_LAYER="MPI" 
-                export LIBSWING_REDUCE_ALGO="BINOMIAL_TREE"
+                export LIBBINE_REDUCE_ALGO_FAMILY="BINE" 
+                export LIBBINE_REDUCE_ALGO_LAYER="MPI" 
+                export LIBBINE_REDUCE_ALGO="BINOMIAL_TREE"
                 timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
                 sleep 2 # To avoid running the next job to early in the case we killed this one
-                ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                 mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                 if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
             fi
@@ -194,30 +194,30 @@ do
 
         actual_count=$((n / p))
         if [ $actual_count -ge $PORTS ]; then
-            # Run swing redscat gather
-            export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
-            export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
-            export LIBSWING_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
-            export LIBSWING_REDUCE_DISTANCE="INCREASING"
+            # Run bine redscat gather
+            export LIBBINE_REDUCE_ALGO_FAMILY="BINE" 
+            export LIBBINE_REDUCE_ALGO_LAYER="UTOFU" 
+            export LIBBINE_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
+            export LIBBINE_REDUCE_DISTANCE="INCREASING"
             for SEGMENT_SIZE in 0 #16384 65536 1048576
             do                
                 if [ $SEGMENT_SIZE -lt $msg_size ]; then
-                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-                    ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    LIBBINE_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+                    ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                     mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                     if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
                 fi
             done
-            unset LIBSWING_REDUCE_DISTANCE
+            unset LIBBINE_REDUCE_DISTANCE
 
 
             if [ $PORTS -eq 1 ]; then
-                export LIBSWING_REDUCE_ALGO_FAMILY="SWING" 
-                export LIBSWING_REDUCE_ALGO_LAYER="MPI" 
-                export LIBSWING_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
+                export LIBBINE_REDUCE_ALGO_FAMILY="BINE" 
+                export LIBBINE_REDUCE_ALGO_LAYER="MPI" 
+                export LIBBINE_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
                 timeout ${max_duration} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}
                 sleep 2 # To avoid running the next job to early in the case we killed this one
-                ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
                 mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
                 if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
             fi
@@ -225,16 +225,16 @@ do
     done
 
     #PORTS=1
-    #export LIBSWING_NUM_PORTS=${PORTS}
+    #export LIBBINE_NUM_PORTS=${PORTS}
     ## Run recdoub binomial tree
-    #export LIBSWING_REDUCE_ALGO_FAMILY="RECDOUB" 
-    #export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
-    #export LIBSWING_REDUCE_ALGO="BINOMIAL_TREE"    
+    #export LIBBINE_REDUCE_ALGO_FAMILY="RECDOUB" 
+    #export LIBBINE_REDUCE_ALGO_LAYER="UTOFU" 
+    #export LIBBINE_REDUCE_ALGO="BINOMIAL_TREE"    
     #for SEGMENT_SIZE in 0 4096 65536 1048576
     #do                
     #    if [ $SEGMENT_SIZE -lt $msg_size ]; then
-    #        LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-    #        ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+    #        LIBBINE_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+    #        ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
     #        mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
     #        if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
     #    fi
@@ -244,20 +244,20 @@ do
 #    # Run recdoub redscat gather
 #    actual_count=$((n / p))
 #    if [ $actual_count -ge $PORTS ]; then
-#        export LIBSWING_REDUCE_ALGO_FAMILY="RECDOUB" 
-#        export LIBSWING_REDUCE_ALGO_LAYER="UTOFU" 
-#        export LIBSWING_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
-#        export LIBSWING_REDUCE_DISTANCE="INCREASING"
+#        export LIBBINE_REDUCE_ALGO_FAMILY="RECDOUB" 
+#        export LIBBINE_REDUCE_ALGO_LAYER="UTOFU" 
+#        export LIBBINE_REDUCE_ALGO="REDUCE_SCATTER_GATHER"
+#        export LIBBINE_REDUCE_DISTANCE="INCREASING"
 #        for SEGMENT_SIZE in 0 #4096 65536 1048576
 #        do                
 #            if [ $SEGMENT_SIZE -lt $msg_size ]; then
-#                LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
-#                ALGO_FNAME=${LIBSWING_REDUCE_ALGO_FAMILY}-${LIBSWING_REDUCE_ALGO}-${LIBSWING_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+#                LIBBINE_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations}                    
+#                ALGO_FNAME=${LIBBINE_REDUCE_ALGO_FAMILY}-${LIBBINE_REDUCE_ALGO}-${LIBBINE_REDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
 #                mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
 #                if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
 #            fi
 #        done
-#        unset LIBSWING_REDUCE_DISTANCE
+#        unset LIBBINE_REDUCE_DISTANCE
 #    fi    
     
     echo " ${GREEN}[Done]${NC}"

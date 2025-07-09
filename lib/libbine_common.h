@@ -1,5 +1,5 @@
-#ifndef LIBSWING_COMMON_H
-#define LIBSWING_COMMON_H
+#ifndef LIBBINE_COMMON_H
+#define LIBBINE_COMMON_H
 
 #include <chrono>
 #include <stdint.h>
@@ -14,28 +14,28 @@
 #include <utofu.h>
 #endif
 
-typedef struct swing_utofu_comm_d swing_utofu_comm_descriptor;
+typedef struct bine_utofu_comm_d bine_utofu_comm_descriptor;
 
-#define LIBSWING_MAX_SUPPORTED_DIMENSIONS 3 // We support up to 3D torus
-#define LIBSWING_MAX_SUPPORTED_PORTS (LIBSWING_MAX_SUPPORTED_DIMENSIONS*2)
-#define LIBSWING_MAX_STEPS 40 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
-#define LIBSWING_MAX_COLLECTIVE_SEQUENCE 2
-#define LIBSWING_TMPBUF_ALIGNMENT 256 // uTofu STag alignment
+#define LIBBINE_MAX_SUPPORTED_DIMENSIONS 3 // We support up to 3D torus
+#define LIBBINE_MAX_SUPPORTED_PORTS (LIBBINE_MAX_SUPPORTED_DIMENSIONS*2)
+#define LIBBINE_MAX_STEPS 40 // With this we are ok up to 2^20 nodes, add other terms to the following arrays if needed.
+#define LIBBINE_MAX_COLLECTIVE_SEQUENCE 2
+#define LIBBINE_TMPBUF_ALIGNMENT 256 // uTofu STag alignment
 
 #define CACHE_LINE_SIZE 256
 
-static int rhos[LIBSWING_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
-static int smallest_negabinary[LIBSWING_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
-static int largest_negabinary[LIBSWING_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
+static int rhos[LIBBINE_MAX_STEPS] = {1, -1, 3, -5, 11, -21, 43, -85, 171, -341, 683, -1365, 2731, -5461, 10923, -21845, 43691, -87381, 174763, -349525};
+static int smallest_negabinary[LIBBINE_MAX_STEPS] = {0, 0, -2, -2, -10, -10, -42, -42, -170, -170, -682, -682, -2730, -2730, -10922, -10922, -43690, -43690, -174762, -174762};
+static int largest_negabinary[LIBBINE_MAX_STEPS] = {0, 1, 1, 5, 5, 21, 21, 85, 85, 341, 341, 1365, 1365, 5461, 5461, 21845, 21845, 87381, 87381, 349525};
 
-#define TAG_SWING_REDUCESCATTER (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*1)
-#define TAG_SWING_ALLGATHER     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*2)
-#define TAG_SWING_ALLREDUCE     (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*3)
-#define TAG_SWING_BCAST         (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*4)
-#define TAG_SWING_ALLTOALL      (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*5)
-#define TAG_SWING_SCATTER       (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*6)
-#define TAG_SWING_GATHER        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*7)
-#define TAG_SWING_REDUCE        (0x7FFF - LIBSWING_MAX_SUPPORTED_PORTS*8)
+#define TAG_BINE_REDUCESCATTER (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*1)
+#define TAG_BINE_ALLGATHER     (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*2)
+#define TAG_BINE_ALLREDUCE     (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*3)
+#define TAG_BINE_BCAST         (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*4)
+#define TAG_BINE_ALLTOALL      (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*5)
+#define TAG_BINE_SCATTER       (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*6)
+#define TAG_BINE_GATHER        (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*7)
+#define TAG_BINE_REDUCE        (0x7FFF - LIBBINE_MAX_SUPPORTED_PORTS*8)
 
 typedef struct {
     uint* parent; // For each node in the tree, its parent.
@@ -45,17 +45,17 @@ typedef struct {
     uint* subtree_roots; // subtree_roots[i] is the rank of the root of the subtree to which i belongs
     // We do not need to store the min because it is the remapped rank itself (the node is the last in the subtree to be numbered)
     //uint* remapped_ranks_min; // remapped_ranks_min[i] is the minimum remapped rank in the subtree rooted at i
-} swing_tree_t;
+} bine_tree_t;
 
 typedef struct{
     uint d; // In which dimension is this global step performed
     uint step_in_d; // What's the relative step in this specific dimension
-} swing_step_info_t;
+} bine_step_info_t;
 
 typedef enum{
-    SWING_REDUCE_SCATTER = 0,
-    SWING_ALLGATHER,
-    SWING_ALLREDUCE
+    BINE_REDUCE_SCATTER = 0,
+    BINE_ALLGATHER,
+    BINE_ALLREDUCE
 }CollType;
 
 /**
@@ -63,9 +63,9 @@ typedef enum{
  * nodes increasing or decreasing at each step.
  */
 typedef enum {
-    SWING_DISTANCE_INCREASING = 0,
-    SWING_DISTANCE_DECREASING = 1
-} swing_distance_type_t;
+    BINE_DISTANCE_INCREASING = 0,
+    BINE_DISTANCE_DECREASING = 1
+} bine_distance_type_t;
 
 typedef struct{
     size_t offset;
@@ -74,147 +74,147 @@ typedef struct{
 
 typedef enum {
     // Default
-    SWING_ALGO_FAMILY_DEFAULT = 0,
-    // Swing
-    SWING_ALGO_FAMILY_SWING,
+    BINE_ALGO_FAMILY_DEFAULT = 0,
+    // Bine
+    BINE_ALGO_FAMILY_BINE,
     // Recdoub
-    SWING_ALGO_FAMILY_RECDOUB,
+    BINE_ALGO_FAMILY_RECDOUB,
     // Bruck
-    SWING_ALGO_FAMILY_BRUCK,
+    BINE_ALGO_FAMILY_BRUCK,
     // Ring/Bucket
-    SWING_ALGO_FAMILY_RING,
-} swing_algo_family_t;
+    BINE_ALGO_FAMILY_RING,
+} bine_algo_family_t;
 
 typedef enum {
-    SWING_ALGO_LAYER_MPI = 0,
-    SWING_ALGO_LAYER_UTOFU,
-} swing_algo_layer_t;
+    BINE_ALGO_LAYER_MPI = 0,
+    BINE_ALGO_LAYER_UTOFU,
+} bine_algo_layer_t;
 
 typedef enum {
-    SWING_ALLREDUCE_ALGO_L = 0,
-    SWING_ALLREDUCE_ALGO_B,
-    SWING_ALLREDUCE_ALGO_REDUCE_BCAST,
-    SWING_ALLREDUCE_ALGO_B_CONT,
-    SWING_ALLREDUCE_ALGO_B_COALESCE,
-} swing_allreduce_algo_t;
+    BINE_ALLREDUCE_ALGO_L = 0,
+    BINE_ALLREDUCE_ALGO_B,
+    BINE_ALLREDUCE_ALGO_REDUCE_BCAST,
+    BINE_ALLREDUCE_ALGO_B_CONT,
+    BINE_ALLREDUCE_ALGO_B_COALESCE,
+} bine_allreduce_algo_t;
 
 typedef enum {
-    SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE = 0, // Permutation at the end
-    SWING_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND, // Sendrecv at the beginning
-    SWING_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS, // Block-by-block
-    SWING_ALLGATHER_ALGO_GATHER_BCAST, // Gather + bcast
-} swing_allgather_algo_t;
+    BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_PERMUTE = 0, // Permutation at the end
+    BINE_ALLGATHER_ALGO_VEC_DOUBLING_CONT_SEND, // Sendrecv at the beginning
+    BINE_ALLGATHER_ALGO_VEC_DOUBLING_BLOCKS, // Block-by-block
+    BINE_ALLGATHER_ALGO_GATHER_BCAST, // Gather + bcast
+} bine_allgather_algo_t;
 
 typedef enum {
-    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE = 0, // Permutation at the beginning
-    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_SEND, // Sendrecv at the end
-    SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_BLOCKS, // Block-by-block
-    SWING_REDUCE_SCATTER_ALGO_REDUCE_SCATTER, // Reduce + scatter
-} swing_reduce_scatter_algo_t;
+    BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE = 0, // Permutation at the beginning
+    BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_SEND, // Sendrecv at the end
+    BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_BLOCKS, // Block-by-block
+    BINE_REDUCE_SCATTER_ALGO_REDUCE_SCATTER, // Reduce + scatter
+} bine_reduce_scatter_algo_t;
 
 typedef enum {
-    SWING_BCAST_ALGO_BINOMIAL_TREE = 0, // Binomial tree
-    SWING_BCAST_ALGO_BINOMIAL_TREE_TMPBUF, // Binomial tree with tmpbuf (avoids sending the rmtaddr of the recvbuf but needs a final memcpy)
-    SWING_BCAST_ALGO_SCATTER_ALLGATHER, // Scatter + allgather
-} swing_bcast_algo_t;
+    BINE_BCAST_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+    BINE_BCAST_ALGO_BINOMIAL_TREE_TMPBUF, // Binomial tree with tmpbuf (avoids sending the rmtaddr of the recvbuf but needs a final memcpy)
+    BINE_BCAST_ALGO_SCATTER_ALLGATHER, // Scatter + allgather
+} bine_bcast_algo_t;
 
 typedef enum {
-    SWING_ALLTOALL_ALGO_LOG = 0,
-} swing_alltoall_algo_t;
+    BINE_ALLTOALL_ALGO_LOG = 0,
+} bine_alltoall_algo_t;
 
 typedef enum {
-    SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the beginning
-    SWING_SCATTER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the end
-    SWING_SCATTER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
-} swing_scatter_algo_t;
+    BINE_SCATTER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the beginning
+    BINE_SCATTER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the end
+    BINE_SCATTER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
+} bine_scatter_algo_t;
 
 typedef enum {
-    SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the end
-    SWING_GATHER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the beginning
-    SWING_GATHER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
-} swing_gather_algo_t;
+    BINE_GATHER_ALGO_BINOMIAL_TREE_CONT_PERMUTE = 0, // Permutation at the end
+    BINE_GATHER_ALGO_BINOMIAL_TREE_CONT_SEND, // Sendrecv at the beginning
+    BINE_GATHER_ALGO_BINOMIAL_TREE_BLOCKS, // Block-by-block
+} bine_gather_algo_t;
 
 typedef enum {
-    SWING_REDUCE_ALGO_BINOMIAL_TREE = 0, // Binomial tree
-    SWING_REDUCE_ALGO_REDUCE_SCATTER_GATHER, // Reduce-scatter + gather
-} swing_reduce_algo_t;
+    BINE_REDUCE_ALGO_BINOMIAL_TREE = 0, // Binomial tree
+    BINE_REDUCE_ALGO_REDUCE_SCATTER_GATHER, // Reduce-scatter + gather
+} bine_reduce_algo_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_allreduce_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_allreduce_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_allreduce_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_allreduce_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_allgather_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_allgather_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_allgather_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_allgather_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_reduce_scatter_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_reduce_scatter_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_reduce_scatter_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_reduce_scatter_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_bcast_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_bcast_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_bcast_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_bcast_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_alltoall_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_alltoall_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_alltoall_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_alltoall_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_scatter_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_scatter_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_scatter_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_scatter_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_gather_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_gather_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_gather_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_gather_config_t;
 
 typedef struct {
-    swing_algo_family_t algo_family;
-    swing_algo_layer_t algo_layer;
-    swing_reduce_algo_t algo;
-    swing_distance_type_t distance_type;
-} swing_reduce_config_t;
+    bine_algo_family_t algo_family;
+    bine_algo_layer_t algo_layer;
+    bine_reduce_algo_t algo;
+    bine_distance_type_t distance_type;
+} bine_reduce_config_t;
 
-typedef struct swing_comm_info_key {
+typedef struct bine_comm_info_key {
     uint root;
     uint port;
-    swing_algo_family_t algo;
-    swing_distance_type_t dist_type;
+    bine_algo_family_t algo;
+    bine_distance_type_t dist_type;
     MPI_Comm comm;  
 
-    bool operator==(const swing_comm_info_key &other) const
+    bool operator==(const bine_comm_info_key &other) const
     { return (root == other.root &&
               port == other.port &&
               algo == other.algo &&
               dist_type == other.dist_type &&
               comm == other.comm);
     }
-} swing_comm_info_key_t;
+} bine_comm_info_key_t;
 
 template <>
-struct std::hash<swing_comm_info_key_t>
+struct std::hash<bine_comm_info_key_t>
 {
-  std::size_t operator()(const swing_comm_info_key_t& k) const
+  std::size_t operator()(const bine_comm_info_key_t& k) const
   {
     using std::size_t;
     using std::hash;
@@ -238,13 +238,13 @@ struct std::hash<swing_comm_info_key_t>
 };
 
 typedef struct {
-    swing_tree_t tree;
-} swing_comm_info_t;
+    bine_tree_t tree;
+} bine_comm_info_t;
 
-extern std::unordered_map<swing_comm_info_key_t, swing_comm_info_t> comm_info;
+extern std::unordered_map<bine_comm_info_key_t, bine_comm_info_t> comm_info;
 
 typedef struct {
-    uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     uint dimensions_num;
     uint num_ports;
     uint segment_size;
@@ -252,15 +252,15 @@ typedef struct {
     char* prealloc_buf;
     char utofu_add_ag;
     char use_threads;
-    swing_allreduce_config_t allreduce_config;
-    swing_allgather_config_t allgather_config;
-    swing_reduce_scatter_config_t reduce_scatter_config;
-    swing_bcast_config_t bcast_config;
-    swing_alltoall_config_t alltoall_config;
-    swing_scatter_config_t scatter_config;
-    swing_gather_config_t gather_config;
-    swing_reduce_config_t reduce_config;    
-} swing_env_t;
+    bine_allreduce_config_t allreduce_config;
+    bine_allgather_config_t allgather_config;
+    bine_reduce_scatter_config_t reduce_scatter_config;
+    bine_bcast_config_t bcast_config;
+    bine_alltoall_config_t alltoall_config;
+    bine_scatter_config_t scatter_config;
+    bine_gather_config_t gather_config;
+    bine_reduce_config_t reduce_config;    
+} bine_env_t;
 
 
 //#define PERF_DEBUGGING 
@@ -295,18 +295,18 @@ private:
 
 int is_odd(int x);
 
-class SwingCoordConverter {
+class BineCoordConverter {
     public:
-        uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         uint dimensions_num; 
         int* coordinates;
         uint size;
-        uint num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        uint num_steps_per_dim[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         uint num_steps;
     
-        SwingCoordConverter(uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num);
+        BineCoordConverter(uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num);
         
-        ~SwingCoordConverter();
+        ~BineCoordConverter();
 
         // Convert a rank id into a list of d-dimensional coordinates
         // Row-major order, i.e., row coordinates change the slowest 
@@ -335,17 +335,17 @@ typedef struct{
     size_t recv_count; // In number of elements
 }ChunkParams;
 
-class SwingBitmapCalculator {
+class BineBitmapCalculator {
     private:
         volatile char padding1[CACHE_LINE_SIZE];
-        uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         uint dimensions_num; 
         uint port;
         BlockInfo** blocks_info;
         uint size;
-        size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        size_t num_steps_per_dim[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         uint num_steps;
-        swing_step_info_t* step_info;
+        bine_step_info_t* step_info;
 
         // I use either bitmaps or chunk params
         // depending on whether I can send contiguous blocks or not
@@ -357,11 +357,11 @@ class SwingBitmapCalculator {
         int rank;
         uint32_t remapped_rank;
         size_t min_block_s, min_block_r, max_block_s, max_block_r;
-        SwingCoordConverter scc;
+        BineCoordConverter scc;
         bool remap_blocks;
-        int coord_mine[LIBSWING_MAX_SUPPORTED_DIMENSIONS];    
+        int coord_mine[LIBBINE_MAX_SUPPORTED_DIMENSIONS];    
         uint32_t* block_step;
-        swing_algo_family_t algo;
+        bine_algo_family_t algo;
         size_t next_step; 
         volatile char padding2[CACHE_LINE_SIZE];
 
@@ -391,10 +391,10 @@ class SwingBitmapCalculator {
         // @param port (IN): the port the collective starts from
         // @param blocks_info (IN): the blocks info
         // @param remap_blocks (IN): if true, the blocks are remapped to be contiguous
-        SwingBitmapCalculator(uint rank, uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, swing_algo_family_t algo);
+        BineBitmapCalculator(uint rank, uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS], uint dimensions_num, uint port, BlockInfo** blocks_info, bool remap_blocks, bine_algo_family_t algo);
 
         // Destructor
-        ~SwingBitmapCalculator();
+        ~BineBitmapCalculator();
 
         // Computes the peer of this node, considering it started for a given port and it is at a specific step.
         // @param port (IN): the port
@@ -434,25 +434,25 @@ class SwingBitmapCalculator {
         uint* get_peers(){return peers;}
 };
 
-class SwingCommon {
+class BineCommon {
     private:
-        swing_env_t env;
+        bine_env_t env;
         uint size;
         int rank;        
         bool all_p2_dimensions; // True if all the dimensions are power of 2
-        size_t num_steps_per_dim[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+        size_t num_steps_per_dim[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
         size_t num_steps;
-        uint dimensions_virtual[LIBSWING_MAX_SUPPORTED_DIMENSIONS]; // Used when we shrink torus with non-power of 2 size // TODO: Rename as dimensions_lower_p2
-        uint* virtual_peers[LIBSWING_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
+        uint dimensions_virtual[LIBBINE_MAX_SUPPORTED_DIMENSIONS]; // Used when we shrink torus with non-power of 2 size // TODO: Rename as dimensions_lower_p2
+        uint* virtual_peers[LIBBINE_MAX_SUPPORTED_PORTS]; // For latency optimal, one per port
         size_t num_steps_virtual;
-        SwingCoordConverter* scc_real;
-        SwingCoordConverter* scc_virtual;
-        SwingBitmapCalculator *sbc[LIBSWING_MAX_SUPPORTED_PORTS]; 
+        BineCoordConverter* scc_real;
+        BineCoordConverter* scc_virtual;
+        BineBitmapCalculator *sbc[LIBBINE_MAX_SUPPORTED_PORTS]; 
 #ifdef FUGAKU
-        swing_utofu_comm_descriptor* utofu_descriptor;
-        utofu_vcq_id_t* vcq_ids[LIBSWING_MAX_SUPPORTED_PORTS];
-        utofu_stadd_t lcl_temp_stadd[LIBSWING_MAX_SUPPORTED_PORTS];
-        utofu_stadd_t* temp_buffers[LIBSWING_MAX_SUPPORTED_PORTS]; // temp_buffers[p][r] contains the address of the buffer for the rank r on port p
+        bine_utofu_comm_descriptor* utofu_descriptor;
+        utofu_vcq_id_t* vcq_ids[LIBBINE_MAX_SUPPORTED_PORTS];
+        utofu_stadd_t lcl_temp_stadd[LIBBINE_MAX_SUPPORTED_PORTS];
+        utofu_stadd_t* temp_buffers[LIBBINE_MAX_SUPPORTED_PORTS]; // temp_buffers[p][r] contains the address of the buffer for the rank r on port p
 #endif
 
         // Sends the data from nodes outside of the power-of-two boundary to nodes within the boundary.
@@ -483,7 +483,7 @@ class SwingCommon {
         int enlarge_non_power_of_two(void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
 
 
-        // Bandwidth-optimal Swing collective
+        // Bandwidth-optimal Bine collective
         // @param buf (IN): the sendbuf
         // @param rbuf (OUT): the recvbuf
         // @param blocks_info (IN): the blocks info
@@ -495,11 +495,11 @@ class SwingCommon {
         // @param coll_type (IN): the collective type
         // @param bitmap_send (IN): the bitmap of the send
         // @param bitmap_recv (IN): the bitmap of the recv
-        int swing_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                             
+        int bine_coll_step_b(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                             
                               MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                               CollType coll_type);
 
-                                      // Bandwidth-optimal Swing collective with contiguous blocks
+                                      // Bandwidth-optimal Bine collective with contiguous blocks
         // @param buf (IN): the sendbuf
         // @param rbuf (OUT): the recvbuf
         // @param blocks_info (IN): the blocks info
@@ -511,11 +511,11 @@ class SwingCommon {
         // @param coll_type (IN): the collective type
         // @param bitmap_send (IN): the bitmap of the send
         // @param bitmap_recv (IN): the bitmap of the recv
-        int swing_coll_step_coalesce(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+        int bine_coll_step_coalesce(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
             MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
             CollType coll_type);
 
-        // Bandwidth-optimal Swing collective with contiguous blocks
+        // Bandwidth-optimal Bine collective with contiguous blocks
         // @param buf (IN): the sendbuf
         // @param rbuf (OUT): the recvbuf
         // @param blocks_info (IN): the blocks info
@@ -527,17 +527,17 @@ class SwingCommon {
         // @param coll_type (IN): the collective type
         // @param bitmap_send (IN): the bitmap of the send
         // @param bitmap_recv (IN): the bitmap of the recv
-        int swing_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+        int bine_coll_step_cont(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                                  MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                  CollType coll_type);
 
 
         // Wrapper for step_b/step_cont
-        int swing_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
+        int bine_coll_step(void *buf, void* rbuf, BlockInfo** blocks_info, size_t step,                                 
                            MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                            CollType coll_type);
 
-        // Bandwidth-optimal Swing collective with UTOFU
+        // Bandwidth-optimal Bine collective with UTOFU
         // @param port (IN): the port
         // @param utofu_descriptor (IN): the UTOFU descriptor
         // @param sbuf (IN): the user_sbuf
@@ -551,23 +551,23 @@ class SwingCommon {
         // @param sendtype (IN): the send datatype
         // @param recvtype (IN): the recv datatype
         // @param coll_type (IN): the collective type
-        int swing_coll_step_utofu(size_t port, swing_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, const BlockInfo *const *const, size_t step, 
+        int bine_coll_step_utofu(size_t port, bine_utofu_comm_descriptor* utofu_descriptor, const void* sbuf, void *buf, void* rbuf, size_t rbuf_size, const BlockInfo *const *const, size_t step, 
                                   MPI_Op op, MPI_Comm comm, MPI_Datatype sendtype, MPI_Datatype recvtype,  
                                   CollType coll_type, bool is_first_coll);
 
         
-        int swing_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
-        int swing_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
-        int swing_coll_l_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
-        int swing_coll_l_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_coll_l_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_coll_l_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_coll_l_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_coll_l_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
     public:
         // Constructor
         // @param comm (IN): the communicator
         // @param env (IN): the environment
-        SwingCommon(MPI_Comm comm, swing_env_t env);
+        BineCommon(MPI_Comm comm, bine_env_t env);
 
         // Destructor
-        ~SwingCommon();
+        ~BineCommon();
 
         uint get_num_ports(){return env.num_ports;}
         uint get_size(){return size;}
@@ -581,11 +581,11 @@ class SwingCommon {
         // @param op (IN): the operation to perform
         // @param comm (IN): the communicator
         // @return MPI_SUCCESS or an error code
-        int swing_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_coll_l(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
         
         // TODO: Document
-        int swing_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
-        int swing_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
+        int bine_coll_b(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);
+        int bine_coll_b_cont_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm, BlockInfo** blocks_info, CollType coll_type);   
 
 
         /*******************************/
@@ -597,66 +597,66 @@ class SwingCommon {
         /*******************************/
         /************ BCAST ************/
         /*******************************/                
-        int swing_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_tmpbuf(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_tmpbuf_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_tmpbuf_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_scatter_allgather(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
-        int swing_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_tmpbuf(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_tmpbuf_omp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_tmpbuf_noomp(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_b(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_l_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_b_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_scatter_allgather(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+        int bine_bcast_scatter_allgather_mpi(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
 
         /**********************************/
         /************ ALLTOALL ************/
         /**********************************/        
         int bruck_alltoall(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
-        int swing_alltoall_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
-        int swing_alltoall_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
+        int bine_alltoall_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
+        int bine_alltoall_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Comm comm);
 
         /*********************************/
         /************ SCATTER ************/
         /*********************************/                
-        int swing_scatter_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_scatter_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_scatter_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
 
         /********************************/
         /************ GATHER ************/
         /********************************/        
-        int swing_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_gather_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_gather_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, BlockInfo** blocks_info, MPI_Comm comm);
         
         /********************************/
         /************ REDUCE ************/
         /********************************/        
-        int swing_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
-        int swing_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
-        int swing_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
-        int swing_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
-        int swing_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info);
-        int swing_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int bine_reduce_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int bine_reduce_utofu_omp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int bine_reduce_utofu_noomp(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int bine_reduce_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
+        int bine_reduce_redscat_gather_utofu(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm, BlockInfo** blocks_info);
+        int bine_reduce_redscat_gather_mpi(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm);
         
 
         /***********************************/
         /************ ALLGATHER ************/
         /***********************************/    
         /****** CONT_SEND ******/
-        int swing_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
-        int swing_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+        int bine_allgather_send_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+        int bine_allgather_send_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
 
         /****** CONT_PERMUTE ******/
-        int swing_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_utofu_contiguous_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_utofu_contiguous_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_utofu_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_utofu_contiguous_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_utofu_contiguous_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_mpi_contiguous(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
 
         /****** BLOCKS ******/
-        int swing_allgather_blocks_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_blocks_utofu_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
+        int bine_allgather_blocks_utofu(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_blocks_utofu_threads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_blocks_utofu_nothreads(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_allgather_blocks_mpi(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
 
         /****** BUCKET ******/
         int bucket_allgather(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
@@ -666,16 +666,16 @@ class SwingCommon {
         /************ REDUCE-SCATTER ************/
         /****************************************/
         /****** CONT_PERMUTE ******/
-        int swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
 
         /****** BLOCKS ******/
-        int swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
         
-        int swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);    
-        int swing_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
-        int swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
+        int bine_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);    
+        int bine_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm);
+        int bine_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
 
         /***** BUCKET */
         int bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm);
@@ -687,4 +687,4 @@ class SwingCommon {
 };
 
 
-#endif // LIBSWING_COMMON_H
+#endif // LIBBINE_COMMON_H

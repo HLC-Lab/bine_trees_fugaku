@@ -5,8 +5,8 @@
 #include <unistd.h>
 #include <assert.h>
 #include <cinttypes>
-#include "../lib/libswing_coll.h"
-#include "../lib/libswing_common.h"
+#include "../lib/libbine_coll.h"
+#include "../lib/libbine_common.h"
 
 int main(int argc, char** argv){
     if(argc != 3){
@@ -16,7 +16,7 @@ int main(int argc, char** argv){
     int num_ranks = atoi(argv[1]);
     int iter = atoi(argv[2]);
 
-    SwingCoordConverter* scc = new SwingCoordConverter((uint*) &num_ranks, 1);
+    BineCoordConverter* scc = new BineCoordConverter((uint*) &num_ranks, 1);
     int accumul_parent = 0, accumul_reached = 0, accumul_remap = 0, accumul_remap_max = 0, accumul_peers = 0;
     uint64_t elapsed_total = 0, elapsed_total_compute = 0;
     uint* peers = (uint*) malloc(num_ranks * sizeof(uint));
@@ -25,13 +25,13 @@ int main(int argc, char** argv){
         // Get current timestamp
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
-        swing_tree_t t = get_tree(i % num_ranks, 0, SWING_ALGO_FAMILY_SWING, SWING_DISTANCE_DECREASING, scc);
+        bine_tree_t t = get_tree(i % num_ranks, 0, BINE_ALGO_FAMILY_BINE, BINE_DISTANCE_DECREASING, scc);
         clock_gettime(CLOCK_MONOTONIC, &end);
         uint64_t elapsed = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
         elapsed_total += elapsed;      
 
         clock_gettime(CLOCK_MONOTONIC, &start);
-        compute_peers((i % num_ranks), 0, SWING_ALGO_FAMILY_SWING, scc, peers);
+        compute_peers((i % num_ranks), 0, BINE_ALGO_FAMILY_BINE, scc, peers);
         clock_gettime(CLOCK_MONOTONIC, &end);
         elapsed = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
         elapsed_total_compute += elapsed;      

@@ -8,7 +8,7 @@ RESULTS_DIR = "../results/"
 # Update or create metadata CSV
 def update_metadata(system_name: str, timestamp: str, test_id: int, number_of_nodes: int,
                     collective_type: str, mpi_lib: str, mpi_lib_version : str,
-                    libswing_version: str, cuda: str, output_level: str, mpi_op: Optional[str], notes: Optional[str]):
+                    libbine_version: str, cuda: str, output_level: str, mpi_op: Optional[str], notes: Optional[str]):
     output_file = os.path.join(RESULTS_DIR, f"{system_name}_metadata.csv")
 
     # Check if file exists to determine whether to write the header
@@ -22,7 +22,7 @@ def update_metadata(system_name: str, timestamp: str, test_id: int, number_of_no
             "collective_type",
             "mpi_lib",
             "mpi_lib_version",
-            "libswing_version",
+            "libbine_version",
             "CUDA",
             "output_level",
             "MPI_Op",
@@ -42,7 +42,7 @@ def update_metadata(system_name: str, timestamp: str, test_id: int, number_of_no
             "collective_type": collective_type,
             "mpi_lib": mpi_lib,
             "mpi_lib_version": mpi_lib_version,
-            "libswing_version": libswing_version,
+            "libbine_version": libbine_version,
             "gpu_awareness": "no",
             "gpu_lib": "null",
             "gpu_lib_version": "null",
@@ -67,17 +67,17 @@ if __name__ == "__main__":
     collective_type = os.getenv('COLLECTIVE_TYPE')
     mpi_lib = os.getenv('MPI_LIB')
     mpi_lib_version = os.getenv('MPI_LIB_VERSION')
-    libswing_version = os.getenv('LIBSWING_VERSION')
+    libbine_version = os.getenv('LIBBINE_VERSION')
     cuda = os.getenv('CUDA')
     output_level = os.getenv('OUTPUT_LEVEL')
     mpi_op = os.getenv('MPI_OP')
     notes = os.getenv('NOTES') or "null"
-    if not (system_name and timestamp and number_of_nodes and number_of_nodes and collective_type and mpi_lib and mpi_lib_version and libswing_version and cuda and output_level):
+    if not (system_name and timestamp and number_of_nodes and number_of_nodes and collective_type and mpi_lib and mpi_lib_version and libbine_version and cuda and output_level):
         print (f"{__file__}: Environment variables not set.", file=sys.stderr)
-        print (f"LOCATION={system_name}\nTIMESTAMP={timestamp}\nN_NODES={number_of_nodes}\nCOLLECTIVE_TYPE={collective_type}\nMPI_LIB={mpi_lib}\nMPI_LIB_VERSION={mpi_lib_version}\nLIBSWING_VERSION={libswing_version}\nCUDA={cuda}", file=sys.stderr)
+        print (f"LOCATION={system_name}\nTIMESTAMP={timestamp}\nN_NODES={number_of_nodes}\nCOLLECTIVE_TYPE={collective_type}\nMPI_LIB={mpi_lib}\nMPI_LIB_VERSION={mpi_lib_version}\nLIBBINE_VERSION={libbine_version}\nCUDA={cuda}", file=sys.stderr)
         sys.exit(1)
 
     update_metadata(system_name, timestamp, test_id, number_of_nodes, \
                     collective_type, mpi_lib, mpi_lib_version, \
-                    libswing_version, cuda, output_level, mpi_op = mpi_op, notes = notes)
+                    libbine_version, cuda, output_level, mpi_op = mpi_op, notes = notes)
     print(f"Metadata updated for {system_name} at {timestamp}.")

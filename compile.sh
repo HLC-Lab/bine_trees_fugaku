@@ -12,14 +12,14 @@ EXTRA_LIBS=""
 if [ ${SYSTEM} = "fugaku" ]; then
     ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} ./bench/get_coord_fugaku.c -o ./bench/get_coord_fugaku
     # Compile uTofu helpers
-    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC ./lib/fugaku/swing_utofu.cc -o ./lib/fugaku/swing_utofu.o
-    EXTRA_LIBS="-ltofucom ./lib/fugaku/swing_utofu.o"
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -c -fPIC ./lib/fugaku/bine_utofu.cc -o ./lib/fugaku/bine_utofu.o
+    EXTRA_LIBS="-ltofucom ./lib/fugaku/bine_utofu.o"
 fi
 
 # Collective impls
 # Bash list of collectives to compile
 # Define a list of collectives
-collectives=("libswing_coll_bcast" "libswing" "libswing_common" "libswing_coll" "libswing_coll_reduce" "libswing_coll_reduce_scatter" "libswing_coll_allgather" "libswing_coll_gather" "libswing_coll_scatter" "libswing_coll_alltoall")
+collectives=("libbine_coll_bcast" "libbine" "libbine_common" "libbine_coll" "libbine_coll_reduce" "libbine_coll_reduce_scatter" "libbine_coll_allgather" "libbine_coll_gather" "libbine_coll_scatter" "libbine_coll_alltoall")
 collective_objects=""
 # Compile each collective
 for collective in "${collectives[@]}"; do
@@ -50,36 +50,43 @@ else
     done
 fi
 
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -shared -pthread -pthread -o ./lib/libswing.so ${collective_objects} ${EXTRA_LIBS} ${MPI_COMPILER_FLAGS}
-if [ ! -f "./lib/libswing.so" ]; then
-    echo "${RED}[Error] libswing.so compilation failed, please check error messages above.${NC}"
+${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -D${SYSTEM^^} -shared -pthread -pthread -o ./lib/libbine.so ${collective_objects} ${EXTRA_LIBS} ${MPI_COMPILER_FLAGS}
+if [ ! -f "./lib/libbine.so" ]; then
+    echo "${RED}[Error] libbine.so compilation failed, please check error messages above.${NC}"
     exit 1
 fi
 
 # Profiling compilation
 #if [ ${SYSTEM} != "fugaku" ]; then
 #    FLAGS_PROFILE="-O0 -g -pg -DPROFILE" # To profile
-#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libswing.cc -o ./lib/libswing_profile.o ${FLAGS_PROFILE}
-#    if [ ! -f "./lib/libswing_profile.o" ]; then
-#        echo "${RED}[Error] swing_profile.o compilation failed, please check error messages above.${NC}"
+#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libbine.cc -o ./lib/libbine_profile.o ${FLAGS_PROFILE}
+#    if [ ! -f "./lib/libbine_profile.o" ]; then
+#        echo "${RED}[Error] bine_profile.o compilation failed, please check error messages above.${NC}"
 #        exit 1
 #    fi
-#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libswing_common.cc -o ./lib/libswing_common_profile.o ${FLAGS_PROFILE}
-#    if [ ! -f "./lib/libswing_profile.o" ]; then
-#        echo "${RED}[Error] swing_profile.o compilation failed, please check error messages above.${NC}"
+#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -c -fPIC -pthread ./lib/libbine_common.cc -o ./lib/libbine_common_profile.o ${FLAGS_PROFILE}
+#    if [ ! -f "./lib/libbine_profile.o" ]; then
+#        echo "${RED}[Error] bine_profile.o compilation failed, please check error messages above.${NC}"
 #        exit 1
 #    fi
-#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -pthread ./bench/bench.cc ./lib/libswing_common_profile.o ./lib/libswing_profile.o -o ./bench/bench_profile ${FLAGS_PROFILE}
+#    ${MPI_COMPILER} ${FLAGS_PROFILE} -D${SYSTEM^^} -pthread ./bench/bench.cc ./lib/libbine_common_profile.o ./lib/libbine_profile.o -o ./bench/bench_profile ${FLAGS_PROFILE}
 #fi
 
 
 # Bench
-#${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/bench.cc ./lib/libswing.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
-echo ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${EXTRA_LIBS}
+#${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/bench.cc ./lib/libbine.o -o ./bench/bench ${MPI_COMPILER_FLAGS}
+#echo ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${EXTRA_LIBS}
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread -D${SYSTEM^^} ./bench/bench.cc ${collective_objects} -o ./bench/bench ${EXTRA_LIBS}
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread -D${SYSTEM^^} ./bench/bench.cc ${collective_objects_validate} -o ./bench/bench_validate ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
-${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread ./bench/get_coord_daint.c -o ./bench/get_coord_daint
+
+#mpiFCCpx -Kfast,openmp,parallel -DBINE_USE_UTOFU -pthread -DFUGAKU ./bench/bench.cc ./lib/libbine_coll_bcast.o ./lib/libbine.o ./lib/libbine_common.o ./lib/libbine_coll.o ./lib/libbine_coll_reduce.o ./lib/libbine_coll_reduce_scatter.o ./lib/libbine_coll_allgather.o ./lib/libbine_coll_gather.o ./lib/libbine_coll_scatter.o ./lib/libbine_coll_alltoall.o -o ./bench/bench -ltofucom ./lib/fugaku/bine_utofu.o
+
+if [ ${SYSTEM} = "fugaku" ]; then
+    echo "Skipping validation compilation for Fugaku"
+else
+    ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread -D${SYSTEM^^} ./bench/bench.cc ${collective_objects_validate} -o ./bench/bench_validate ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+fi
 #${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_dummy_utofu.c -o ./bench/bench_dummy_utofu ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}
+  
 
 # Tree benchmark
 ${MPI_COMPILER} ${MPI_COMPILER_FLAGS} -pthread  -D${SYSTEM^^} ./bench/bench_tree.cc ${collective_objects} -o ./bench/bench_tree ${MPI_COMPILER_FLAGS} ${EXTRA_LIBS}

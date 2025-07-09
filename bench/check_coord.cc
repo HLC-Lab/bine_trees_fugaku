@@ -5,9 +5,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <cinttypes>
-#include "../lib/libswing_coll.h"
-#include "../lib/libswing_common.h"
-#include "../lib/fugaku/swing_utofu.h"
+#include "../lib/libbine_coll.h"
+#include "../lib/libbine_common.h"
+#include "../lib/fugaku/bine_utofu.h"
 #include <mpi-ext.h>
 
 int main(int argc, char** argv){
@@ -17,8 +17,8 @@ int main(int argc, char** argv){
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     char* env_str;
-    env_str = getenv("LIBSWING_DIMENSIONS");
-    uint dimensions[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    env_str = getenv("LIBBINE_DIMENSIONS");
+    uint dimensions[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     uint dimensions_num = 0;
     if(env_str){
         char* copy = (char*) malloc(sizeof(char)*(strlen(env_str) + 1));
@@ -35,10 +35,10 @@ int main(int argc, char** argv){
         free(copy);
         dimensions_num = i;       
     }
-    assert(dimensions_num <= LIBSWING_MAX_SUPPORTED_DIMENSIONS);
+    assert(dimensions_num <= LIBBINE_MAX_SUPPORTED_DIMENSIONS);
 
     int dimensions_num_fj;
-    int dimensions_fj[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    int dimensions_fj[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     FJMPI_Topology_get_dimension(&dimensions_num_fj);
     FJMPI_Topology_get_shape(&(dimensions_fj[0]), &(dimensions_fj[1]), &(dimensions_fj[2]));
 
@@ -47,9 +47,9 @@ int main(int argc, char** argv){
         printf("dimensions[%d] (me): %d (fj): %d \n", i, dimensions[i], dimensions_fj[i]);
     }
 
-    SwingCoordConverter* scc = new SwingCoordConverter(dimensions, dimensions_num);
-    int coord[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
-    int coord_fj[LIBSWING_MAX_SUPPORTED_DIMENSIONS];
+    BineCoordConverter* scc = new BineCoordConverter(dimensions, dimensions_num);
+    int coord[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
+    int coord_fj[LIBBINE_MAX_SUPPORTED_DIMENSIONS];
     scc->getCoordFromId(rank, coord);
 
     FJMPI_Topology_get_coords(MPI_COMM_WORLD, rank, FJMPI_LOGICAL, dimensions_num_fj, coord_fj);

@@ -5,36 +5,36 @@
 #include <omp.h>
 #include <unistd.h>
 
-#include "libswing_common.h"
-#include "libswing_coll.h"
+#include "libbine_common.h"
+#include "libbine_coll.h"
 #include <climits>
 #ifdef FUGAKU
-#include "fugaku/swing_utofu.h"
+#include "fugaku/bine_utofu.h"
 #include <mpi-ext.h> 
 #endif
 
 
-int SwingCommon::swing_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_utofu_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     return MPI_ERR_OTHER;
 }
 
-int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_utofu_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_UTOFU);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_UTOFU);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
 #ifdef FUGAKU
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_scatter_utofu_contiguous (init)");
-    Timer timer("swing_reduce_scatter_utofu_contiguous (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_scatter_utofu_contiguous (init)");
+    Timer timer("bine_reduce_scatter_utofu_contiguous (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since recvbuf is only large enough to accomodate the final block
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
     
     // sendbuf is read-only, and recvbuf has space only for one (final) block.
@@ -54,33 +54,33 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
     size_t tmpbuf_recv_size = tmpbuf_send_size;
     
     size_t tmpbuf_size = tmpbuf_send_size + tmpbuf_recv_size;    
-    timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf reg)"); 
+    timer.reset("= bine_reduce_scatter_utofu_contiguous (utofu buf reg)"); 
     // Also the root sends from tmpbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        assert(posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size) == 0);
+        assert(posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size) == 0);
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
-        timer.reset("= swing_reduce_scatter_utofu_contiguous (utofu buf exch)");           
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, tmpbuf, tmpbuf_size, env.num_ports); 
+        timer.reset("= bine_reduce_scatter_utofu_contiguous (utofu buf exch)");           
         if(env.utofu_add_ag){
-            swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
+            bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, this->num_steps);
         }else{
             // TODO: Probably need to do this for all the ports for torus with different dimensions size
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             peers[0] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, 0, env.reduce_scatter_config.algo_family, this->scc_real, peers[0]);
-            swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
+            bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[0]); 
             
             // We need to exchange buffer info both for a normal port and for a mirrored one (peers are different)
             int mp = get_mirroring_port(env.num_ports, env.dimensions_num);
             if(mp != -1 && mp != 0){
                 peers[mp] = (uint*) malloc(sizeof(uint)*this->num_steps);
                 compute_peers(this->rank, mp, env.reduce_scatter_config.algo_family, this->scc_real, peers[mp]);
-                swing_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
+                bine_utofu_exchange_buf_info(this->utofu_descriptor, num_steps, peers[mp]); 
             }
         }            
     }else{
         // Everything to 0/NULL just to initialize the internal status.
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, NULL, 0, NULL, 0, env.num_ports); 
         tmpbuf = env.prealloc_buf;
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
@@ -99,8 +99,8 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_scatter_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_scatter_utofu_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.reduce_scatter_config.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
+        timer.reset("= bine_reduce_scatter_utofu_contiguous (computing trees)");
+        bine_tree_t tree = get_tree(this->rank, port, env.reduce_scatter_config.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
 
         size_t offset_port = tmpbuf_send_size / env.num_ports * port;
         size_t offset_port_recv = tmpbuf_recv_size / env.num_ports * port;
@@ -111,7 +111,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         char* tmpbuf_send_port = tmpbuf_send + offset_port;
         char* tmpbuf_recv_port = tmpbuf_recv + offset_port_recv;
 
-        timer.reset("= swing_reduce_scatter_utofu_contiguous (permute)");    
+        timer.reset("= bine_reduce_scatter_utofu_contiguous (permute)");    
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving %d bytes from %d to %d\n", this->rank, blocks_info[port][i].count*dtsize, blocks_info[port][i].offset, offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -126,7 +126,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         size_t offset_step_recv = 0; // This is used so that each step writes at a different location in tmpbuf_recv
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.reduce_scatter_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.reduce_scatter_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -134,7 +134,7 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 
             // Always send from the end of the buffer
             // and receive in the beginning of the buffer
-            timer.reset("= swing_reduce_scatter_utofu_contiguous (sendrecv)");            
+            timer.reset("= bine_reduce_scatter_utofu_contiguous (sendrecv)");            
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
             
@@ -145,9 +145,9 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
             DPRINTF("tmpbuf[0] (port %d) at step %d before send: %d \n", port, step, ((char*) tmpbuf_send_port)[0]);
 
             size_t issued_sends = 0;
-            issued_sends += swing_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step); 
-            swing_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
-            swing_utofu_wait_sends(utofu_descriptor, port, issued_sends);
+            issued_sends += bine_utofu_isend(utofu_descriptor, &(this->vcq_ids[port][peer]), port, peer, lcl_addr, count_to_sendrecv*dtsize, rmt_addr, step); 
+            bine_utofu_wait_recv(utofu_descriptor, port, step, issued_sends - 1);
+            bine_utofu_wait_sends(utofu_descriptor, port, issued_sends);
 
             DPRINTF("tmpbuf_recv[0] (port %d) at step %d after send: %d \n", port, step, ((char*) tmpbuf_recv_port)[0]);
 
@@ -167,14 +167,14 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
         free(peers[port]);
         destroy_tree(&tree);
         if(free_tmpbuf){
-            swing_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
+            bine_utofu_dereg_buf(this->utofu_descriptor, tmpbuf, port);
         }        
     }
 
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_scatter_utofu_contiguous (writing profile data to file)");
+    timer.reset("= bine_reduce_scatter_utofu_contiguous (writing profile data to file)");
     return res;
 #else
     assert("uTofu not supported");
@@ -182,11 +182,11 @@ int SwingCommon::swing_reduce_scatter_utofu_contiguous(const void *sendbuf, void
 #endif 
 }
 
-int SwingCommon::swing_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_utofu(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     if(is_power_of_two(this->size)){
-        return swing_reduce_scatter_utofu_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+        return bine_reduce_scatter_utofu_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }else{
-        return swing_reduce_scatter_utofu_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+        return bine_reduce_scatter_utofu_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }
 }
 
@@ -261,12 +261,12 @@ static inline uint32_t remap_rank(uint32_t rank, uint32_t size){
 }
 
 // Version with send at the end
-int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
   int size, rank, dtsize;
   MPI_Comm_size(comm, &size);
@@ -331,12 +331,12 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 
 #if 0
 // Version with permute at the beginning
-int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
   int size, rank, dtsize;
   MPI_Comm_size(comm, &size);
@@ -404,12 +404,12 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 
 #if 0
 // Version with send block-by-block
-int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
   int size, rank, dtsize;
   MPI_Comm_size(comm, &size);
@@ -541,12 +541,12 @@ static inline uint32_t get_nu(uint32_t rank, uint32_t size){
 }
 
 // Version with send block-by-block that also works for non-power of two
-int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf, const int recvcounts[], MPI_Datatype dt, MPI_Op op, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
   int size, rank, dtsize;
   MPI_Comm_size(comm, &size);
@@ -657,22 +657,22 @@ int SwingCommon::swing_reduce_scatter_mpi_new(const void *sendbuf, void *recvbuf
 }
 #endif
 
-int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_contiguous(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
 #ifdef VALIDATE
     printf("func_called: %s\n", __func__);
-    assert(env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_SWING || env.reduce_scatter_config.algo_family == SWING_ALGO_FAMILY_RECDOUB);
-    assert(env.reduce_scatter_config.algo_layer == SWING_ALGO_LAYER_MPI);
-    assert(env.reduce_scatter_config.algo == SWING_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
+    assert(env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_BINE || env.reduce_scatter_config.algo_family == BINE_ALGO_FAMILY_RECDOUB);
+    assert(env.reduce_scatter_config.algo_layer == BINE_ALGO_LAYER_MPI);
+    assert(env.reduce_scatter_config.algo == BINE_REDUCE_SCATTER_ALGO_VEC_HALVING_CONT_PERMUTE); 
 #endif    
-    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= swing_reduce_scatter_mpi_contiguous (init)");
-    Timer timer("swing_reduce_scatter_mpi_contiguous (init)");
+    //Timer timer("profile_" + std::to_string(count) + "_" + std::to_string(env.num_ports) + "/master.profile", "= bine_reduce_scatter_mpi_contiguous (init)");
+    Timer timer("bine_reduce_scatter_mpi_contiguous (init)");
     int dtsize;
     MPI_Type_size(datatype, &dtsize);    
 
     // We always need a tempbuf since recvbuf is only large enough to accomodate the final block
     char* tmpbuf;
     bool free_tmpbuf = false;
-    uint* peers[LIBSWING_MAX_SUPPORTED_PORTS];
+    uint* peers[LIBBINE_MAX_SUPPORTED_PORTS];
     memset(peers, 0, sizeof(uint*)*env.num_ports);
 
     
@@ -682,11 +682,11 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
     // TODO: This work for reduce_scatter_block, generalize it to reduce_scatter
     size_t tmpbuf_size = blocks_info[0][0].count * dtsize * env.num_ports * this->size;
     
-    timer.reset("= swing_reduce_scatter_mpi_contiguous (utofu buf reg)"); 
+    timer.reset("= bine_reduce_scatter_mpi_contiguous (utofu buf reg)"); 
 
     // Also the root sends from tmbuf because it needs to permute the sendbuf
     if(tmpbuf_size > env.prealloc_size){
-        posix_memalign((void**) &tmpbuf, LIBSWING_TMPBUF_ALIGNMENT, tmpbuf_size);
+        posix_memalign((void**) &tmpbuf, LIBBINE_TMPBUF_ALIGNMENT, tmpbuf_size);
         free_tmpbuf = true;           
     }else{
         tmpbuf = env.prealloc_buf;
@@ -701,14 +701,14 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
             peers[port] = (uint*) malloc(sizeof(uint)*this->num_steps);
             compute_peers(this->rank, port, env.reduce_scatter_config.algo_family, this->scc_real, peers[port]);
         }        
-        timer.reset("= swing_reduce_scatter_mpi_contiguous (computing trees)");
-        swing_tree_t tree = get_tree(this->rank, port, env.reduce_scatter_config.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
+        timer.reset("= bine_reduce_scatter_mpi_contiguous (computing trees)");
+        bine_tree_t tree = get_tree(this->rank, port, env.reduce_scatter_config.algo_family, env.reduce_scatter_config.distance_type, this->scc_real);
 
         size_t offset_port = tmpbuf_size / env.num_ports * port;
         DPRINTF("Offset_port %d: %d\n", port, offset_port);
         char* tmpbuf_send_port = tmpbuf_send + offset_port;
 
-        timer.reset("= swing_reduce_scatter_mpi_contiguous (permute)");    
+        timer.reset("= bine_reduce_scatter_mpi_contiguous (permute)");    
         for(size_t i = 0; i < size; i++){      
             DPRINTF("[%d] Moving %d bytes from %d to %d\n", this->rank, blocks_info[port][i].count*dtsize, blocks_info[port][i].offset, offset_port + blocks_info[port][0].count*tree.remapped_ranks[i]*dtsize);          
             // We need to pay attention here. Each port will work on non-contiguous sub-blocks of the buffer. So we need to copy the data in a contiguous buffer.
@@ -722,7 +722,7 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
         // Now perform all the subsequent steps            
         for(size_t step = 0; step < (uint) this->num_steps; step++){
             uint peer;
-            if(env.reduce_scatter_config.distance_type == SWING_DISTANCE_DECREASING){
+            if(env.reduce_scatter_config.distance_type == BINE_DISTANCE_DECREASING){
                 peer = peers[port][this->num_steps - step - 1];
             }else{
                 peer = peers[port][step];
@@ -730,13 +730,13 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
 
             // Always send from the end of the buffer
             // and receive in the beginning of the buffer
-            timer.reset("= swing_reduce_scatter_mpi_contiguous (sendrecv)");
+            timer.reset("= bine_reduce_scatter_mpi_contiguous (sendrecv)");
             size_t num_blocks = this->size / (pow(2, step + 1));                        
             size_t count_to_sendrecv = num_blocks*blocks_info[port][0].count;
 
             MPI_Sendrecv_replace(tmpbuf_send_port + count_to_sendrecv*dtsize, count_to_sendrecv, datatype, 
-                                 peer, TAG_SWING_REDUCESCATTER, 
-                                 peer, TAG_SWING_REDUCESCATTER, comm, MPI_STATUS_IGNORE); 
+                                 peer, TAG_BINE_REDUCESCATTER, 
+                                 peer, TAG_BINE_REDUCESCATTER, comm, MPI_STATUS_IGNORE); 
 
             if(step == this->num_steps - 1){
                 // To avoid doing a memcpy at the end
@@ -753,26 +753,26 @@ int SwingCommon::swing_reduce_scatter_mpi_contiguous(const void *sendbuf, void *
     if(free_tmpbuf){
         free(tmpbuf);
     }    
-    timer.reset("= swing_reduce_scatter_mpi_contiguous (writing profile data to file)");
+    timer.reset("= bine_reduce_scatter_mpi_contiguous (writing profile data to file)");
     return res;
 }
 
-int SwingCommon::swing_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi_blocks(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     return MPI_ERR_OTHER;
 }
 
-int SwingCommon::swing_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
+int BineCommon::bine_reduce_scatter_mpi(const void *sendbuf, void *recvbuf, MPI_Datatype datatype, MPI_Op op, BlockInfo** blocks_info, MPI_Comm comm){
     if(is_power_of_two(this->size)){
-        return swing_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+        return bine_reduce_scatter_mpi_contiguous(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }else{
-        return swing_reduce_scatter_mpi_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
+        return bine_reduce_scatter_mpi_blocks(sendbuf, recvbuf, datatype, op, blocks_info, comm);
     }
 }
 
 
 #define LDIM 3
 #define TDIM 6
-int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
+int BineCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, MPI_Comm comm){
     int size, myrank, x, y, z;
     int dimensions, dimensions_sizes[3];
     int relcoord[LDIM];
@@ -825,12 +825,12 @@ int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int c
         data = (char*) malloc(tmpbuf_size);
         recvbuf = data + 2*count*dtsize;
         free_tmpbuf = true;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, data, tmpbuf_size, env.num_ports); 
     }else{
         // Still done to reset everythin
         data = env.prealloc_buf;
         recvbuf = data + 2*count*dtsize;
-        swing_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports);         
+        bine_utofu_reg_buf(this->utofu_descriptor, NULL, 0, recvbuf, real_count*dtsize, NULL, 0, env.num_ports);         
         // Store the rmt_temp_stadd of all the other ranks
         for(size_t i = 0; i < env.num_ports; i++){
             this->utofu_descriptor->port_info[i].rmt_temp_stadd = temp_buffers[i];
@@ -839,7 +839,7 @@ int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int c
     }
     assert(env.utofu_add_ag);
     if(env.utofu_add_ag){
-        swing_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
+        bine_utofu_exchange_buf_info_allgather(this->utofu_descriptor, 0 /* unused*/);
     }
     segment_buf = data + count*dtsize;
 
@@ -936,7 +936,7 @@ int SwingCommon::bucket_reduce_scatter(const void *sendbuf, void *recvbuf, int c
     memcpy((void*) recvbuf, (void*) data + offset_to_copy, bytes_to_copy);
     if(free_tmpbuf){
         for(int s = 0; s < dimensions*2; s++){
-            swing_utofu_dereg_buf(this->utofu_descriptor, data, s);
+            bine_utofu_dereg_buf(this->utofu_descriptor, data, s);
         }
         free(data);
     }

@@ -10,8 +10,8 @@ AllreduceRing from mpich and baidu github:
 https://github.com/pmodels/mpich/blob/bb7f0a9f61dbee66c67073f9c68fa28b6f443e0a/src/mpi/coll/allreduce
 https://github.com/baidu-research/baidu-allreduce/blob/master/collectives.cu
 
-Bucket allreduce based on the one used for swing-allreduce-sim:
-https://github.com/HLC-Lab/swing-allreduce-sim/blob/98ad4ebd58b54d4de55291d9d8fc1731a4a49bd3/sst-elements-library-11.1.0/src/sst/elements/ember/mpi/motifs/emberhxmesh.cc#L975
+Bucket allreduce based on the one used for bine-allreduce-sim:
+https://github.com/HLC-Lab/bine-allreduce-sim/blob/98ad4ebd58b54d4de55291d9d8fc1731a4a49bd3/sst-elements-library-11.1.0/src/sst/elements/ember/mpi/motifs/emberhxmesh.cc#L975
 
  ***************************************************************************/
 
