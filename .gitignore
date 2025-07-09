@@ -147,8 +147,6 @@ simulation/*.png
 simulation/remap_rank
 plots/out
 bench/bench_profile
-job.sh.3D.512.*err
-job.sh.3D.512.*out
 STDIN.*
 bench/agg_bw*
 bench/bench_tree*
@@ -157,3 +155,5 @@ check_coord
 err.*
 bench/memcpy*
 out.*
+lib/fugaku/*.o
+lib/*.o

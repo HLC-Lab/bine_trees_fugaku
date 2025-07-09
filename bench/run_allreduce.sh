@@ -239,6 +239,25 @@ do
             done
         fi
 
+        # Run bucket
+        export LIBSWING_SKIP_VALIDATION=1
+        export LIBSWING_ALLREDUCE_ALGO_FAMILY="RING" 
+        export LIBSWING_ALLREDUCE_ALGO_LAYER="UTOFU" 
+        export LIBSWING_ALLREDUCE_ALGO="B_CONT"    
+        MIN_ELEMS=$((PORTS * p))
+        if [ "$n" -ge "$MIN_ELEMS" ]; then
+            for SEGMENT_SIZE in 0 
+            do                
+                if [ $SEGMENT_SIZE -lt $msg_size ]; then
+                    LIBSWING_SEGMENT_SIZE=${SEGMENT_SIZE} ${MPIRUN} ${MPIRUN_MAP_BY_NODE_FLAG} ${MPIEXEC_OUT} -n ${p} ${MPIRUN_ADDITIONAL_FLAGS} ./bench ${COLLECTIVE} ${DATATYPE} ${n} ${iterations} 
+                    ALGO_FNAME=${LIBSWING_ALLREDUCE_ALGO_FAMILY}-${LIBSWING_ALLREDUCE_ALGO}-${LIBSWING_ALLREDUCE_ALGO_LAYER}-${SEGMENT_SIZE}-${PORTS}
+                    mv ${OUT_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.csv; rm -f ${OUT_PREFIX}* 
+                    if [ -f ${ERR_PREFIX}*.0 ]; then mv ${ERR_PREFIX}*.0 ${OUTPUT_DIR}/${EXP_ID}/${n}_${ALGO_FNAME}_${DATATYPE_lc}.err; rm -f ${ERR_PREFIX}*; fi
+                fi
+            done
+        fi  
+        unset LIBSWING_SKIP_VALIDATION      
+
         #########################
         # Run the Recdoub algos #
         #########################
