@@ -1,8 +1,0 @@
---------------------------------------------------------------------------
-[mpi::mca-var::invalid-value-enum]
-An invalid value was supplied for an enum variable.
-
-  Variable     : coll_select_bcast_algorithm
-  Value        : basic-linear
-  Valid values : 1:"basic_linear", 2:"chain", 3:"pipeline", 4:"split_binary_tree", 5:"binary_tree", 6:"binomial", 100:"trinaryx6", 100:"trix6", 101:"bintree3d", 101:"bin3d", 102:"trinaryx3", 102:"trix3", 103:"bintree6d", 103:"bin6d"
---------------------------------------------------------------------------
