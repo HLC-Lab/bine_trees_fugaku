@@ -1,2 +1,0 @@
-#!/bin/bash
-cat /sys/devices/system/node/ 

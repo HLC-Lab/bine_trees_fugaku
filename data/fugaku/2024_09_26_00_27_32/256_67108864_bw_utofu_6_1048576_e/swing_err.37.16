@@ -1,7 +1,0 @@
-bench: ./lib/fugaku/swing_utofu.cc:136: void swing_utofu_wait_rmq(swing_utofu_comm_d *, unsigned int): Assertion `rc == UTOFU_SUCCESS' failed.
-[c01-7200c:00390] *** Process received signal ***
-[c01-7200c:00390] Signal: Aborted (6)
-[c01-7200c:00390] Signal code:  (-6)
-bench: ./lib/fugaku/swing_utofu.cc:136: void swing_utofu_wait_rmq(swing_utofu_comm_d *, unsigned int): Assertion `rc == UTOFU_SUCCESS' failed.
-[c01-7200c:00390] [ 0] linux-vdso.so.1(__kernel_rt_sigreturn+0x0)[0x4000000707a0]
-[c01-7200c:00390] [ 1] 
